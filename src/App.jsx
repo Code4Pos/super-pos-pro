@@ -1,0 +1,89 @@
+import React, { useState } from 'react';
+import { CheckCircle2, AlertCircle, Info } from 'lucide-react';
+import { POSProvider, usePOS } from './context/POSContext';
+import Sidebar from './components/layout/Sidebar';
+import Header from './components/layout/Header';
+import MobileNav from './components/layout/MobileNav';
+import POSPage from './pages/POSPage';
+import InventoryPage from './pages/InventoryPage';
+import OrdersPage from './pages/OrdersPage';
+import CustomersPage from './pages/CustomersPage';
+import DashboardPage from './pages/DashboardPage';
+
+function MainAppContent() {
+  const [activeTab, setActiveTab] = useState('pos');
+  // ซ่อน/ย่อ Sidebar เป็นค่าเริ่มต้น (false = โหมดย่อแสดงเฉพาะไอคอน, true = โหมดแสดงเต็ม)
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const { toast } = usePOS();
+
+  return (
+    <div className="h-[100dvh] w-screen overflow-hidden flex bg-slate-50 text-slate-900">
+      {/* แถบเมนูด้านซ้าย (Desktop Sidebar - สามารถกดซ่อน/แสดงได้) */}
+      <Sidebar
+        activeTab={activeTab}
+        setActiveTab={setActiveTab}
+        isOpen={isSidebarOpen}
+        onToggleSidebar={() => setIsSidebarOpen((prev) => !prev)}
+      />
+
+      {/* พื้นที่หลักของแอป ความสูงพอดีกับจอ (100dvh) */}
+      <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden">
+        <Header
+          activeTab={activeTab}
+          setActiveTab={setActiveTab}
+          isSidebarOpen={isSidebarOpen}
+          onToggleSidebar={() => setIsSidebarOpen((prev) => !prev)}
+        />
+
+        <main className="flex-1 flex overflow-hidden relative">
+          {activeTab === 'pos' && <POSPage />}
+          {activeTab === 'inventory' && <InventoryPage />}
+          {activeTab === 'orders' && <OrdersPage />}
+          {activeTab === 'customers' && (
+            <CustomersPage onNavigateToPOS={() => setActiveTab('pos')} />
+          )}
+          {activeTab === 'dashboard' && (
+            <DashboardPage onNavigate={(tab) => setActiveTab(tab)} />
+          )}
+        </main>
+
+        {/* แถบเมนูด้านล่าง (Smartphone & Tablet Bottom Nav) */}
+        <MobileNav activeTab={activeTab} setActiveTab={setActiveTab} />
+      </div>
+
+      {/* ระบบแจ้งเตือน Toast ลอยมุมขวาบน (ตัดแอนิเมชันหนักๆ ออกเพื่อให้ลื่นบน Sunmi T2) */}
+      {toast && (
+        <div className="fixed top-3 right-3 z-[80] max-w-sm pointer-events-none">
+          <div
+            className={`px-4 py-2.5 rounded-2xl shadow-lg border flex items-center gap-2 text-xs sm:text-sm font-bold ${
+              toast.type === 'error'
+                ? 'bg-rose-600 text-white border-rose-500'
+                : toast.type === 'warning'
+                ? 'bg-amber-500 text-slate-950 border-amber-400'
+                : toast.type === 'info'
+                ? 'bg-slate-900 text-white border-slate-700'
+                : 'bg-emerald-600 text-white border-emerald-500'
+            }`}
+          >
+            {toast.type === 'error' || toast.type === 'warning' ? (
+              <AlertCircle className="w-4 h-4 shrink-0" />
+            ) : toast.type === 'info' ? (
+              <Info className="w-4 h-4 shrink-0" />
+            ) : (
+              <CheckCircle2 className="w-4 h-4 shrink-0" />
+            )}
+            <span>{toast.message}</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default function App() {
+  return (
+    <POSProvider>
+      <MainAppContent />
+    </POSProvider>
+  );
+}
