@@ -1,7 +1,10 @@
 import { createClient } from '@supabase/supabase-js';
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL?.trim();
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY?.trim();
+const supabaseAnonKey = (
+  import.meta.env.VITE_SUPABASE_ANON_KEY ||
+  import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY
+)?.trim();
 
 // ตรวจสอบว่ามีการตั้งค่า Supabase จริงหรือยัง (ไม่ใช่ค่าว่างหรือค่าตัวอย่าง)
 export const isSupabaseConfigured = Boolean(
