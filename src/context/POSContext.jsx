@@ -3,7 +3,7 @@ import { posService, normalizeAndSyncProducts } from '../services/posService';
 import { printerService } from '../services/printerService';
 import { calculateEffectiveUnitPrice } from '../utils/formatters';
 
-export const APP_VERSION = 'version beta 0.1.6';
+export const APP_VERSION = 'version beta 0.1.7';
 const HELD_BILLS_STORAGE_KEY = 'siampos_held_bills_v1';
 
 const POSContext = createContext(null);
@@ -497,10 +497,25 @@ export function POSProvider({ children }) {
     async (productData) => {
       const saved = await posService.upsertProduct(productData, dbMode === 'supabase');
       setProducts((prev) => {
-        const exists = prev.some((p) => p.id === saved.id);
+        let baseList = prev;
+        if (productData.sync_master_stock && productData.linked_product_id) {
+          const masterId = productData.linked_product_id;
+          const deductQty = Math.max(1, Number(productData.linked_deduct_qty) || 1);
+          baseList = baseList.map((p) => {
+            if (p.id !== masterId) return p;
+            const currentMasterStock = Number(p.stock) || 0;
+            const remainder = currentMasterStock % deductQty;
+            const nextMasterStock = Math.max(
+              0,
+              (Number(productData.stock) || 0) * deductQty + remainder
+            );
+            return { ...p, stock: nextMasterStock };
+          });
+        }
+        const exists = baseList.some((p) => p.id === saved.id);
         const nextList = exists
-          ? prev.map((p) => (p.id === saved.id ? saved : p))
-          : [saved, ...prev];
+          ? baseList.map((p) => (p.id === saved.id ? saved : p))
+          : [saved, ...baseList];
         return normalizeAndSyncProducts(nextList);
       });
       showToast(

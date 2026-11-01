@@ -122,11 +122,11 @@ export default function Header({
         <div className="min-w-0 ml-1">
           <div className="flex items-center gap-1.5 flex-wrap">
             <h2 className="font-bold text-slate-800 text-xs sm:text-sm md:text-base leading-tight truncate">
-              {activeTab === 'pos' && 'จุดขายหน้าร้าน (POS ปลีก/ส่ง)'}
-              {activeTab === 'inventory' && 'คลังสินค้า & ราคาปลีก-ส่ง'}
-              {activeTab === 'orders' && 'ประวัติบิลขาย & ใบเสร็จ'}
-              {activeTab === 'customers' && 'ฐานข้อมูลลูกค้า & ยี่ปั๊ว'}
-              {activeTab === 'dashboard' && 'แดชบอร์ดสรุปยอดขาย'}
+              {activeTab === 'pos' && 'ขายหน้าร้าน (POS)'}
+              {activeTab === 'inventory' && 'คลังสินค้า › จัดการสินค้า'}
+              {activeTab === 'orders' && 'รายงาน › ประวัติบิล'}
+              {activeTab === 'dashboard' && 'รายงาน › แดชบอร์ด'}
+              {activeTab === 'customers' && 'ลูกค้า › จัดการลูกค้า'}
             </h2>
 
             {/* ป้าย Version Beta 0.1.3 */}

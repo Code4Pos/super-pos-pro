@@ -453,9 +453,8 @@ export default function ProductModal({ isOpen, onClose, editingProduct }) {
         wholesale_min_qty: isWholesaleEnabled
           ? Math.max(1, Number(form.wholesale_min_qty) || 6)
           : 6,
-        stock: selectedMasterProduct
-          ? syncedSecondaryStock
-          : Number(form.stock) || 0,
+        stock: Number(form.stock) || 0,
+        sync_master_stock: Boolean(activeLinkedMasterId),
         image_url: isImageSessionEnabled ? form.image_url : '',
         selling_units: isMultiUnitSessionEnabled ? form.selling_units : [],
         linked_product_id: activeLinkedMasterId,
@@ -770,28 +769,21 @@ export default function ProductModal({ isOpen, onClose, editingProduct }) {
               <label className="block text-xs font-bold text-slate-700 mb-1 flex items-center justify-between">
                 <span>สต็อกคงเหลือ ({form.unit || 'หน่วย'})</span>
                 {selectedMasterProduct && (
-                  <Lock
+                  <GitBranch
                     className="w-3 h-3 text-violet-600"
-                    title="ล็อกตามจำนวนสต็อกของสินค้าหลัก"
+                    title="สต็อกเชื่อมกับสินค้าหลัก (แก้ไขแล้วจะอัปเดตเชื่อมกันอัตโนมัติ)"
                   />
                 )}
               </label>
               <input
                 type="number"
                 min="0"
-                disabled={Boolean(selectedMasterProduct)}
-                readOnly={Boolean(selectedMasterProduct)}
                 data-allow-scanner="false"
-                value={
-                  selectedMasterProduct ? syncedSecondaryStock : form.stock
-                }
-                onChange={(e) => {
-                  if (selectedMasterProduct) return;
-                  setForm({ ...form, stock: e.target.value });
-                }}
+                value={form.stock}
+                onChange={(e) => setForm({ ...form, stock: e.target.value })}
                 className={`w-full px-3 py-2 rounded-xl border text-xs font-bold ${
                   selectedMasterProduct
-                    ? 'border-violet-200 bg-violet-100/60 text-violet-900 cursor-not-allowed select-none'
+                    ? 'border-violet-300 bg-violet-50/40 text-violet-950 focus:ring-2 focus:ring-violet-500'
                     : 'border-slate-300 bg-white text-slate-900'
                 }`}
               />
@@ -935,9 +927,23 @@ export default function ProductModal({ isOpen, onClose, editingProduct }) {
                         </label>
                         <SearchableDropdown
                           value={form.linked_product_id}
-                          onChange={(val) =>
-                            setForm({ ...form, linked_product_id: val })
-                          }
+                          onChange={(val) => {
+                            const master = products.find((p) => p.id === val);
+                            const mult = Math.max(
+                              1,
+                              Number(form.linked_deduct_qty) || 1
+                            );
+                            const nextStock = master
+                              ? Math.floor(
+                                  (Number(master.stock) || 0) / mult
+                                )
+                              : form.stock;
+                            setForm({
+                              ...form,
+                              linked_product_id: val,
+                              stock: nextStock,
+                            });
+                          }}
                           options={linkedProductOptions}
                           icon={GitBranch}
                           allowClear={true}
@@ -956,12 +962,21 @@ export default function ProductModal({ isOpen, onClose, editingProduct }) {
                             min="1"
                             data-allow-scanner="false"
                             value={form.linked_deduct_qty}
-                            onChange={(e) =>
+                            onChange={(e) => {
+                              const newDeduct = e.target.value;
+                              const mult = Math.max(1, Number(newDeduct) || 1);
+                              const nextStock = selectedMasterProduct
+                                ? Math.floor(
+                                    (Number(selectedMasterProduct.stock) || 0) /
+                                      mult
+                                  )
+                                : form.stock;
                               setForm({
                                 ...form,
-                                linked_deduct_qty: e.target.value,
-                              })
-                            }
+                                linked_deduct_qty: newDeduct,
+                                stock: nextStock,
+                              });
+                            }}
                             className="w-full px-3 py-2 rounded-xl border border-violet-300 bg-violet-50/40 text-xs font-extrabold text-violet-950 text-center focus:outline-none focus:ring-2 focus:ring-violet-500"
                             placeholder="เช่น 6 หรือ 12"
                           />
@@ -972,14 +987,14 @@ export default function ProductModal({ isOpen, onClose, editingProduct }) {
                       </div>
                     </div>
 
-                    {/* แสดงราคาต้นทุนและสต็อกของสินค้ารองที่สัมพันธ์กับสินค้าหลัก (ล็อกไม่ให้แก้ไขที่สินค้ารอง) */}
+                    {/* แสดงราคาต้นทุนและสต็อกของสินค้ารองที่สัมพันธ์กับสินค้าหลัก */}
                     {selectedMasterProduct && (
                       <div className="p-3 rounded-2xl bg-violet-100/70 border border-violet-200 space-y-2">
                         <div className="flex items-center justify-between text-xs font-bold text-violet-950">
                           <span className="flex items-center gap-1.5">
-                            <Lock className="w-3.5 h-3.5 text-violet-700" />
+                            <GitBranch className="w-3.5 h-3.5 text-violet-700" />
                             <span>
-                              ข้อมูลต้นทุนและสต็อกสัมพันธ์กับ &ldquo;{selectedMasterProduct.name}&rdquo; (ไม่สามารถแก้ไขที่สินค้ารองได้)
+                              ข้อมูลต้นทุนและสต็อกเชื่อมกับ &ldquo;{selectedMasterProduct.name}&rdquo; (ปรับสต็อกแล้วจะเชื่อมกันอัตโนมัติ)
                             </span>
                           </span>
                         </div>
@@ -1003,16 +1018,16 @@ export default function ProductModal({ isOpen, onClose, editingProduct }) {
                           <div className="p-2.5 rounded-xl bg-white/90 border border-violet-200 flex items-center justify-between">
                             <div>
                               <div className="text-[11px] font-semibold text-slate-500">
-                                สต็อกสินค้ารองคงเหลือ (คำนวณอัตโนมัติ)
+                                สต็อกสินค้ารองเชื่อมกับสินค้าหลัก
                               </div>
                               <div className="text-[10px] text-slate-400">
-                                สต็อกหลัก {selectedMasterProduct.stock} {selectedMasterProduct.unit} ÷ {linkedDeductMultiplier}
+                                เต็ม {Number(form.stock) || 0} {form.unit || 'หน่วย'} • เศษ {(Number(selectedMasterProduct.stock) || 0) % linkedDeductMultiplier} {selectedMasterProduct.unit}
                               </div>
                             </div>
                             <div className="text-sm font-extrabold text-violet-800 flex items-center gap-1">
-                              <Lock className="w-3 h-3 opacity-70" />
+                              <GitBranch className="w-3 h-3 opacity-70" />
                               <span>
-                                {syncedSecondaryStock} {form.unit || 'หน่วย'}
+                                เต็ม {Number(form.stock) || 0} {form.unit || 'หน่วย'}
                               </span>
                             </div>
                           </div>

@@ -73,8 +73,12 @@ export function normalizeAndSyncProducts(list = []) {
     const masterProd = linkedId ? activeMap.get(linkedId) : null;
 
     // ถ้ามีการเชื่อมสินค้าสัมพันธ์ ราคาต้นทุนและสต็อกของสินค้ารองต้องสัมพันธ์กับสินค้าหลักเสมอ
+    const masterStock = masterProd ? Number(masterProd.stock) || 0 : 0;
     const syncedStock = masterProd
-      ? Math.floor((Number(masterProd.stock) || 0) / linkedQty)
+      ? Math.floor(masterStock / linkedQty)
+      : Number(p.stock) || 0;
+    const remainderStock = masterProd
+      ? masterStock % linkedQty
       : Number(p.stock) || 0;
 
     const syncedCostPrice = masterProd
@@ -95,6 +99,8 @@ export function normalizeAndSyncProducts(list = []) {
       wholesale_price: isWholesaleEnabled ? rawWholesalePrice : retailPrice,
       is_wholesale_enabled: isWholesaleEnabled,
       stock: syncedStock,
+      remainder_stock: remainderStock,
+      master_unit: masterProd ? masterProd.unit || 'ชิ้น' : p.unit || 'ชิ้น',
       selling_units: Array.isArray(p.selling_units) ? p.selling_units : [],
       linked_product_id: linkedId,
       linked_deduct_qty: linkedId ? linkedQty : 1,
@@ -254,11 +260,40 @@ export const posService = {
 
     // โหมด Demo (LocalStorage)
     const products = getLocal(STORAGE_KEYS.PRODUCTS, INITIAL_PRODUCTS);
-    let updatedList;
+    let updatedList = products;
+
+    // กรณีบันทึกสินค้ารองที่มีการเชื่อมสินค้าสัมพันธ์ และมีการปรับแก้จำนวนสต็อกของสินค้ารอง ให้ซิงค์กลับไปที่สินค้าตัวหลักด้วย
+    if (linkedProductId && productData.sync_master_stock) {
+      const masterTarget = products.find((p) => p.id === linkedProductId);
+      if (masterTarget) {
+        const currentMasterStock = Number(masterTarget.stock) || 0;
+        const remainder = currentMasterStock % linkedDeductQty;
+        const nextMasterStock = Math.max(
+          0,
+          (Number(productData.stock) || 0) * linkedDeductQty + remainder
+        );
+        if (isSupabaseActive && supabase && !String(linkedProductId).startsWith('prod-')) {
+          try {
+            await supabase
+              .from('products')
+              .update({ stock: nextMasterStock, updated_at: nowIso })
+              .eq('id', linkedProductId);
+          } catch {
+            // fallback local
+          }
+        }
+        updatedList = updatedList.map((p) =>
+          p.id === linkedProductId
+            ? { ...p, stock: nextMasterStock, updated_at: nowIso }
+            : p
+        );
+      }
+    }
+
     let targetId = productData.id;
 
     if (productData.id) {
-      updatedList = products.map((p) =>
+      updatedList = updatedList.map((p) =>
         p.id === productData.id ? { ...p, ...cleanPayload, id: productData.id } : p
       );
     } else {
@@ -268,7 +303,7 @@ export const posService = {
         id: targetId,
         created_at: nowIso,
       };
-      updatedList = [newProduct, ...products];
+      updatedList = [newProduct, ...updatedList];
     }
 
     const syncedList = normalizeAndSyncProducts(updatedList);
