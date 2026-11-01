@@ -1130,14 +1130,14 @@ export default function InventoryPage() {
                                         : 'bg-violet-100 text-violet-800'
                                     }`}
                                   >
-                                    เต็ม {fullUnits} {product.unit}
+                                    {fullUnits} {product.unit}
                                   </span>
                                 </div>
 
                                 {/* ช่องที่ 2: เศษ */}
                                 <div className="px-2 text-center">
                                   <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold bg-slate-200/80 text-slate-700">
-                                    เศษ {remainderUnits}{' '}
+                                    {remainderUnits}{' '}
                                     {masterLinkedProd.unit || 'ชิ้น'}
                                   </span>
                                 </div>

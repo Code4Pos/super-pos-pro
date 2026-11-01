@@ -358,7 +358,7 @@ export default function CartPanel({ onOpenCheckout, onCloseMobileDrawer }) {
                     {item.is_wholesale_applied && (
                       <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
                         <Sparkles className="w-2.5 h-2.5" />
-                        ราคาส่ง
+                        {item.tier_label || 'ราคาส่ง'}
                       </span>
                     )}
                   </div>

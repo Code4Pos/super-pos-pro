@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { CheckCircle2, AlertCircle, Info } from 'lucide-react';
 import { POSProvider, usePOS } from './context/POSContext';
 import Sidebar from './components/layout/Sidebar';
@@ -6,12 +6,44 @@ import Header from './components/layout/Header';
 import MobileNav from './components/layout/MobileNav';
 import POSPage from './pages/POSPage';
 import InventoryPage from './pages/InventoryPage';
+import PricingTierPage from './pages/PricingTierPage';
 import OrdersPage from './pages/OrdersPage';
 import CustomersPage from './pages/CustomersPage';
 import DashboardPage from './pages/DashboardPage';
 
+const ACTIVE_TAB_STORAGE_KEY = 'siampos_active_tab_v1';
+const VALID_TABS = new Set([
+  'pos',
+  'inventory',
+  'wholesale-pricing',
+  'special-pricing',
+  'orders',
+  'customers',
+  'dashboard',
+]);
+
 function MainAppContent() {
-  const [activeTab, setActiveTab] = useState('pos');
+  // จดจำหน้าปัจจุบันไว้ใน localStorage เพื่อให้กด Refresh แล้วอยู่หน้าเดิม ไม่เด้งกลับไปหน้าขาย
+  const [activeTab, setActiveTab] = useState(() => {
+    try {
+      const savedTab = localStorage.getItem(ACTIVE_TAB_STORAGE_KEY);
+      if (savedTab && VALID_TABS.has(savedTab)) {
+        return savedTab;
+      }
+    } catch {
+      // ignore storage errors
+    }
+    return 'pos';
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(ACTIVE_TAB_STORAGE_KEY, activeTab);
+    } catch {
+      // ignore storage errors
+    }
+  }, [activeTab]);
+
   // ซ่อน/ย่อ Sidebar เป็นค่าเริ่มต้น (false = โหมดย่อแสดงเฉพาะไอคอน, true = โหมดแสดงเต็ม)
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const { toast } = usePOS();
@@ -38,6 +70,12 @@ function MainAppContent() {
         <main className="flex-1 flex overflow-hidden relative">
           {activeTab === 'pos' && <POSPage />}
           {activeTab === 'inventory' && <InventoryPage />}
+          {activeTab === 'wholesale-pricing' && (
+            <PricingTierPage key="wholesale" mode="wholesale" />
+          )}
+          {activeTab === 'special-pricing' && (
+            <PricingTierPage key="special" mode="special" />
+          )}
           {activeTab === 'orders' && <OrdersPage />}
           {activeTab === 'customers' && (
             <CustomersPage onNavigateToPOS={() => setActiveTab('pos')} />

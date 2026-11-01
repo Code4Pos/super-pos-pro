@@ -15,6 +15,8 @@ import {
   Boxes,
   FileBarChart,
   UserCog,
+  Tags,
+  Sparkles,
 } from 'lucide-react';
 import { usePOS } from '../../context/POSContext';
 
@@ -87,6 +89,18 @@ export const SIDEBAR_MENU_GROUPS = [
         label: 'จัดการสินค้า',
         description: 'เพิ่ม/แก้ไขสินค้า ปรับสต็อก',
         icon: Boxes,
+      },
+      {
+        id: 'wholesale-pricing',
+        label: 'ราคาขายส่ง',
+        description: 'ตั้งราคาส่งหลายระดับ (สูงสุด 10 ขั้น)',
+        icon: Tags,
+      },
+      {
+        id: 'special-pricing',
+        label: 'ราคาพิเศษ',
+        description: 'ตั้งราคาพิเศษหลายระดับ (สูงสุด 10 ขั้น)',
+        icon: Sparkles,
       },
     ],
   },

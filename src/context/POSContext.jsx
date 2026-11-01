@@ -3,7 +3,7 @@ import { posService, normalizeAndSyncProducts } from '../services/posService';
 import { printerService } from '../services/printerService';
 import { calculateEffectiveUnitPrice } from '../utils/formatters';
 
-export const APP_VERSION = 'version beta 0.1.7';
+export const APP_VERSION = 'version beta 0.1.8';
 const HELD_BILLS_STORAGE_KEY = 'siampos_held_bills_v1';
 
 const POSContext = createContext(null);
@@ -18,6 +18,8 @@ export function POSProvider({ children }) {
   const [trashedProducts, setTrashedProducts] = useState([]);
   const [customers, setCustomers] = useState([]);
   const [orders, setOrders] = useState([]);
+  const [wholesaleRules, setWholesaleRules] = useState([]);
+  const [specialRules, setSpecialRules] = useState([]);
 
   // สถานะตะกร้าสินค้าและการคิดเงิน
   const [cart, setCart] = useState([]);
@@ -96,6 +98,8 @@ export function POSProvider({ children }) {
       setTrashedProducts(data.trashedProducts || []);
       setCustomers(data.customers);
       setOrders(data.orders);
+      setWholesaleRules(data.wholesaleRules || []);
+      setSpecialRules(data.specialRules || []);
     } catch (err) {
       console.error('Error loading POS data:', err);
       showToast('เกิดข้อผิดพลาดในการโหลดข้อมูล', 'error');
@@ -234,11 +238,20 @@ export function POSProvider({ children }) {
 
     const enrichedItems = cart.map(({ product, quantity, customPrice }) => {
       const latestProd = productMap.get(product.id) || product;
-      const priceCalc = calculateEffectiveUnitPrice(latestProd, quantity, pricingMode);
+      const priceCalc = calculateEffectiveUnitPrice(
+        latestProd,
+        quantity,
+        pricingMode,
+        wholesaleRules,
+        specialRules,
+        cart
+      );
 
       const hasCustomPrice = customPrice !== null && customPrice !== undefined;
       const effectiveUnitPrice = hasCustomPrice ? Number(customPrice) : priceCalc.unitPrice;
       const isWholesaleApplied = !hasCustomPrice && priceCalc.isWholesale;
+      const priceSource = hasCustomPrice ? 'custom' : priceCalc.priceSource;
+      const priceLabel = hasCustomPrice ? 'กำหนดราคาเอง' : priceCalc.priceLabel;
 
       const itemSubtotal = effectiveUnitPrice * quantity;
       const itemRetailTotal = (Number(latestProd.retail_price) || 0) * quantity;
@@ -270,6 +283,8 @@ export function POSProvider({ children }) {
         original_retail_price: Number(latestProd.retail_price) || 0,
         cost_price: Number(latestProd.cost_price) || 0,
         is_wholesale_applied: isWholesaleApplied,
+        price_source: priceSource,
+        price_label: priceLabel,
         savings_per_unit: isWholesaleApplied
           ? priceCalc.savingsPerUnit
           : Math.max(0, (Number(latestProd.retail_price) || 0) - effectiveUnitPrice),
@@ -312,7 +327,7 @@ export function POSProvider({ children }) {
       grandTotal,
       totalCost,
     };
-  }, [cart, products, pricingMode, billDiscount, vatMode]);
+  }, [cart, products, pricingMode, billDiscount, vatMode, wholesaleRules, specialRules]);
 
   // ฟังก์ชันพักบิลอัตโนมัติทันทีที่กดปุ่ม "พักบิล"
   const holdCurrentBill = useCallback(
@@ -495,7 +510,11 @@ export function POSProvider({ children }) {
   // เพิ่ม/แก้ไขสินค้า (ซิงค์สต็อกสินค้าสัมพันธ์อัตโนมัติ)
   const saveProduct = useCallback(
     async (productData) => {
-      const saved = await posService.upsertProduct(productData, dbMode === 'supabase');
+      const saved = await posService.upsertProduct(
+        productData,
+        dbMode === 'supabase',
+        products
+      );
       setProducts((prev) => {
         let baseList = prev;
         if (productData.sync_master_stock && productData.linked_product_id) {
@@ -526,7 +545,7 @@ export function POSProvider({ children }) {
       );
       return saved;
     },
-    [dbMode, showToast]
+    [dbMode, products, showToast]
   );
 
   // ลบสินค้า -> ย้ายไปไว้ในถังขยะ (Trash) และยกเลิกการเชื่อมสินค้าสัมพันธ์ในสินค้ารองที่เชื่อมกับสินค้านี้
@@ -534,7 +553,8 @@ export function POSProvider({ children }) {
     async (productId) => {
       const result = await posService.moveProductToTrash(
         productId,
-        dbMode === 'supabase'
+        dbMode === 'supabase',
+        products
       );
       if (result.updatedProducts) {
         setProducts(result.updatedProducts);
@@ -556,7 +576,7 @@ export function POSProvider({ children }) {
         showToast('ย้ายรายการสินค้าไปยังถังขยะเรียบร้อยแล้ว', 'info');
       }
     },
-    [dbMode, showToast]
+    [dbMode, products, showToast]
   );
 
   // กู้คืนสินค้าจากถังขยะ
@@ -596,26 +616,93 @@ export function POSProvider({ children }) {
     showToast('ล้างถังขยะทั้งหมดอย่างถาวรเรียบร้อยแล้ว', 'info');
   }, [dbMode, showToast]);
 
-  // ปรับสต็อกด่วน (ซิงค์สต็อกและราคาต้นทุนไปยังสินค้ารองที่เชื่อมสินค้าสัมพันธ์)
+  // ปรับสต็อกด่วน (ซิงค์สต็อกและราคาต้นทุนไปยังสินค้ารองที่เชื่อมสินค้าสัมพันธ์ โดยใช้รายการสินค้าปัจจุบันเสมอเพื่อป้องกันสินค้าหาย)
   const updateProductStock = useCallback(
     async (productId, newStock, newCostPrice = undefined) => {
+      const safeStock = Math.max(0, Number(newStock) || 0);
+      const hasNewCost =
+        newCostPrice !== undefined && newCostPrice !== null && newCostPrice !== '';
+      const safeCostPrice = hasNewCost
+        ? Math.max(0, Number(newCostPrice) || 0)
+        : undefined;
+      const nowIso = new Date().toISOString();
+
+      let updatedTarget = null;
+      setProducts((prev) => {
+        const mapped = prev.map((p) => {
+          if (p.id !== productId) return p;
+          return {
+            ...p,
+            stock: safeStock,
+            cost_price: hasNewCost ? safeCostPrice : p.cost_price,
+            updated_at: nowIso,
+          };
+        });
+        const synced = normalizeAndSyncProducts(mapped);
+        updatedTarget = synced.find((p) => p.id === productId);
+        return synced;
+      });
+
       const syncedList = await posService.updateStock(
         productId,
-        newStock,
+        safeStock,
         dbMode === 'supabase',
-        newCostPrice
+        safeCostPrice,
+        products
       );
-      setProducts(syncedList);
-      const updated = syncedList.find((p) => p.id === productId);
-      if (updated) {
+      const finalTarget =
+        syncedList.find((p) => p.id === productId) || updatedTarget;
+      if (finalTarget) {
         showToast(
-          `อัปเดตสต็อก "${updated.name}" เป็น ${updated.stock} ${updated.unit} เรียบร้อย`,
+          `อัปเดตสต็อก "${finalTarget.name}" เป็น ${finalTarget.stock} ${finalTarget.unit} เรียบร้อย`,
           'success'
         );
       }
-      return updated;
+      return finalTarget;
     },
-    [dbMode, showToast]
+    [dbMode, products, showToast]
+  );
+
+  // บันทึก/ลบ ราคาขายส่งหลายระดับ (สูงสุด 10 ขั้น)
+  const saveWholesaleRule = useCallback(
+    async (ruleData) => {
+      const { savedRule, updatedRules } =
+        await posService.upsertWholesaleRule(ruleData);
+      setWholesaleRules(updatedRules);
+      showToast(`บันทึกราคาขายส่ง "${savedRule.name}" เรียบร้อย`, 'success');
+      return savedRule;
+    },
+    [showToast]
+  );
+
+  const deleteWholesaleRule = useCallback(
+    async (ruleId) => {
+      const updatedRules = await posService.deleteWholesaleRule(ruleId);
+      setWholesaleRules(updatedRules);
+      showToast('ลบรายการราคาขายส่งเรียบร้อยแล้ว', 'info');
+    },
+    [showToast]
+  );
+
+  // บันทึก/ลบ ราคาพิเศษ (สูงสุด 10 ขั้น)
+  const saveSpecialRule = useCallback(
+    async (ruleData) => {
+      const { savedRule, updatedRules } =
+        await posService.upsertSpecialRule(ruleData);
+      setSpecialRules(updatedRules);
+      showToast(`บันทึกราคาพิเศษ "${savedRule.name}" เรียบร้อย`, 'success');
+      return savedRule;
+    },
+    [showToast]
+  );
+
+  const deleteSpecialRule = useCallback(
+    async (ruleId) => {
+      const updatedRules = await posService.deleteSpecialRule(ruleId);
+      setSpecialRules(updatedRules);
+      showToast('ลบรายการราคาพิเศษเรียบร้อยแล้ว', 'info');
+    },
+    [showToast]
   );
 
   // เพิ่มหมวดหมู่สินค้า
@@ -760,6 +847,8 @@ export function POSProvider({ children }) {
     trashedProducts,
     customers,
     orders,
+    wholesaleRules,
+    specialRules,
     cart,
     pricingMode,
     setPricingMode,
@@ -792,6 +881,10 @@ export function POSProvider({ children }) {
     permanentDeleteProduct,
     emptyTrash,
     updateProductStock,
+    saveWholesaleRule,
+    deleteWholesaleRule,
+    saveSpecialRule,
+    deleteSpecialRule,
     addCategory,
     updateCategory,
     deleteCategory,

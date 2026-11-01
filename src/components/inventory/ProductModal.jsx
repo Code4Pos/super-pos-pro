@@ -19,10 +19,13 @@ import {
   AlertCircle,
   Unlink,
   Lock,
+  Tags,
+  Sparkles,
 } from 'lucide-react';
 import { usePOS } from '../../context/POSContext';
 import SearchableDropdown from '../common/SearchableDropdown';
 import MobileBarcodeModal from '../common/MobileBarcodeModal';
+import { formatCurrency } from '../../utils/formatters';
 
 const DEFAULT_FORM = {
   id: null,
@@ -84,6 +87,8 @@ export default function ProductModal({ isOpen, onClose, editingProduct }) {
     products,
     categories,
     units,
+    wholesaleRules = [],
+    specialRules = [],
     saveProduct,
     addUnit,
     showToast,
@@ -123,6 +128,32 @@ export default function ProductModal({ isOpen, onClose, editingProduct }) {
   }, [products, editingProduct]);
 
   const isMasterProductLocked = linkedChildProducts.length > 0;
+
+  // ค้นหารายการตั้งราคาขายส่งหลายระดับ (สูงสุด 10 ขั้น) ของสินค้าตัวนี้
+  const matchedWholesaleRules = useMemo(() => {
+    const pid = editingProduct?.id || form.id;
+    if (!pid || !Array.isArray(wholesaleRules)) return [];
+    return wholesaleRules.filter((r) => {
+      if (r.is_active === false) return false;
+      if (r.target_type === 'group') {
+        return Array.isArray(r.product_ids) && r.product_ids.includes(pid);
+      }
+      return r.product_id === pid;
+    });
+  }, [wholesaleRules, editingProduct, form.id]);
+
+  // ค้นหารายการตั้งราคาพิเศษ (สูงสุด 10 ขั้น) ของสินค้าตัวนี้
+  const matchedSpecialRules = useMemo(() => {
+    const pid = editingProduct?.id || form.id;
+    if (!pid || !Array.isArray(specialRules)) return [];
+    return specialRules.filter((r) => {
+      if (r.is_active === false) return false;
+      if (r.target_type === 'group') {
+        return Array.isArray(r.product_ids) && r.product_ids.includes(pid);
+      }
+      return r.product_id === pid;
+    });
+  }, [specialRules, editingProduct, form.id]);
 
   useEffect(() => {
     if (editingProduct) {
@@ -749,6 +780,116 @@ export default function ProductModal({ isOpen, onClose, editingProduct }) {
             </div>
           </div>
 
+          {/* Section แสดงราคาขายส่งหลายระดับ (แสดงเฉพาะเมื่อสินค้าตัวนี้มีการตั้งค่าไว้) */}
+          {matchedWholesaleRules.length > 0 && (
+            <div className="p-3.5 rounded-2xl bg-emerald-50/50 border border-emerald-200/80 space-y-2.5">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 text-xs font-bold text-emerald-900">
+                  <Tags className="w-4 h-4 text-emerald-600" />
+                  <span>ราคาขายส่งหลายระดับ</span>
+                </div>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800">
+                  {matchedWholesaleRules.length} รายการ
+                </span>
+              </div>
+
+              <div className="space-y-2">
+                {matchedWholesaleRules.map((rule) => (
+                  <div
+                    key={rule.id}
+                    className="p-2.5 rounded-xl bg-white border border-emerald-100 space-y-2"
+                  >
+                    <div className="flex items-center justify-between gap-2 text-xs">
+                      <span className="font-bold text-slate-800 truncate">
+                        {rule.name || 'ราคาขายส่งหลายระดับ'}
+                      </span>
+                      <span
+                        className={`px-2 py-0.5 rounded-full text-[10px] font-bold shrink-0 ${
+                          rule.target_type === 'group'
+                            ? 'bg-violet-100 text-violet-700'
+                            : 'bg-emerald-100 text-emerald-700'
+                        }`}
+                      >
+                        {rule.target_type === 'group' ? 'แบบกลุ่ม' : 'แบบเดี่ยว'}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-2 sm:grid-cols-5 gap-1.5">
+                      {(rule.tiers || []).slice(0, 10).map((tier, idx) => (
+                        <div
+                          key={idx}
+                          className="px-2.5 py-1.5 rounded-lg bg-emerald-50/60 border border-emerald-100 flex items-center justify-between text-[11px]"
+                        >
+                          <span className="font-semibold text-slate-600">
+                            ≥ {tier.min_qty} {form.unit || 'ชิ้น'}
+                          </span>
+                          <span className="font-extrabold text-emerald-700">
+                            {formatCurrency(tier.price)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Section แสดงราคาพิเศษ (แสดงเฉพาะเมื่อสินค้าตัวนี้มีการตั้งค่าไว้) */}
+          {matchedSpecialRules.length > 0 && (
+            <div className="p-3.5 rounded-2xl bg-amber-50/50 border border-amber-200/80 space-y-2.5">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 text-xs font-bold text-amber-900">
+                  <Sparkles className="w-4 h-4 text-amber-600" />
+                  <span>ราคาพิเศษ</span>
+                </div>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800">
+                  {matchedSpecialRules.length} รายการ
+                </span>
+              </div>
+
+              <div className="space-y-2">
+                {matchedSpecialRules.map((rule) => (
+                  <div
+                    key={rule.id}
+                    className="p-2.5 rounded-xl bg-white border border-amber-100 space-y-2"
+                  >
+                    <div className="flex items-center justify-between gap-2 text-xs">
+                      <span className="font-bold text-slate-800 truncate">
+                        {rule.name || 'ราคาพิเศษ'}
+                      </span>
+                      <span
+                        className={`px-2 py-0.5 rounded-full text-[10px] font-bold shrink-0 ${
+                          rule.target_type === 'group'
+                            ? 'bg-violet-100 text-violet-700'
+                            : 'bg-amber-100 text-amber-700'
+                        }`}
+                      >
+                        {rule.target_type === 'group' ? 'แบบกลุ่ม' : 'แบบเดี่ยว'}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-2 sm:grid-cols-5 gap-1.5">
+                      {(rule.tiers || []).slice(0, 10).map((tier, idx) => (
+                        <div
+                          key={idx}
+                          className="px-2.5 py-1.5 rounded-lg bg-amber-50/60 border border-amber-100 flex items-center justify-between text-[11px]"
+                        >
+                          <span className="font-semibold text-slate-600">
+                            ≥ {tier.min_qty} {form.unit || 'ชิ้น'}
+                          </span>
+                          <span className="font-extrabold text-amber-700">
+                            {formatCurrency(tier.price)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* 4. หน่วยนับหลัก (Searchable Dropdown) และสต็อกคงเหลือ (เริ่มต้น = 0, ล็อกอัตโนมัติถ้าเป็นสินค้ารอง) */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3.5">
             <div>
@@ -1021,13 +1162,13 @@ export default function ProductModal({ isOpen, onClose, editingProduct }) {
                                 สต็อกสินค้ารองเชื่อมกับสินค้าหลัก
                               </div>
                               <div className="text-[10px] text-slate-400">
-                                เต็ม {Number(form.stock) || 0} {form.unit || 'หน่วย'} • เศษ {(Number(selectedMasterProduct.stock) || 0) % linkedDeductMultiplier} {selectedMasterProduct.unit}
+                                {Number(form.stock) || 0} {form.unit || 'หน่วย'} • {(Number(selectedMasterProduct.stock) || 0) % linkedDeductMultiplier} {selectedMasterProduct.unit}
                               </div>
                             </div>
                             <div className="text-sm font-extrabold text-violet-800 flex items-center gap-1">
                               <GitBranch className="w-3 h-3 opacity-70" />
                               <span>
-                                เต็ม {Number(form.stock) || 0} {form.unit || 'หน่วย'}
+                                {Number(form.stock) || 0} {form.unit || 'หน่วย'}
                               </span>
                             </div>
                           </div>

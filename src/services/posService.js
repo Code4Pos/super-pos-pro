@@ -9,11 +9,14 @@ import {
 
 const STORAGE_KEYS = {
   PRODUCTS: 'siampos_products_v1',
+  PRODUCT_META: 'siampos_product_meta_v1',
   TRASH_PRODUCTS: 'siampos_trash_products_v1',
   CATEGORIES: 'siampos_categories_v1',
   UNITS: 'siampos_units_v1',
   CUSTOMERS: 'siampos_customers_v1',
   ORDERS: 'siampos_orders_v1',
+  WHOLESALE_RULES: 'siampos_wholesale_rules_v1',
+  SPECIAL_RULES: 'siampos_special_rules_v1',
 };
 
 function getLocal(key, fallback) {
@@ -120,6 +123,9 @@ export const posService = {
   async fetchAllData() {
     const localUnits = getLocal(STORAGE_KEYS.UNITS, INITIAL_UNITS);
     const localTrash = getLocal(STORAGE_KEYS.TRASH_PRODUCTS, []);
+    const localMeta = getLocal(STORAGE_KEYS.PRODUCT_META, {});
+    const wholesaleRules = getLocal(STORAGE_KEYS.WHOLESALE_RULES, []);
+    const specialRules = getLocal(STORAGE_KEYS.SPECIAL_RULES, []);
 
     if (isSupabaseConfigured && supabase) {
       try {
@@ -141,16 +147,55 @@ export const posService = {
         ];
 
         const trashIds = new Set(localTrash.map((t) => t.id));
-        const activeList = (prodRes.data || []).filter((p) => !trashIds.has(p.id));
+        const supaList = (prodRes.data || [])
+          .filter((p) => !trashIds.has(p.id))
+          .map((p) => {
+            const meta = localMeta[p.id] || localMeta[p.sku] || {};
+            return {
+              ...p,
+              is_wholesale_enabled:
+                p.is_wholesale_enabled !== undefined
+                  ? p.is_wholesale_enabled
+                  : meta.is_wholesale_enabled,
+              selling_units:
+                Array.isArray(p.selling_units) && p.selling_units.length > 0
+                  ? p.selling_units
+                  : meta.selling_units || [],
+              linked_product_id:
+                p.linked_product_id || meta.linked_product_id || null,
+              linked_deduct_qty:
+                p.linked_deduct_qty || meta.linked_deduct_qty || 1,
+            };
+          });
+
+        // รวมสินค้าที่อาจถูกสร้างใน Local ไว้ด้วยเพื่อไม่ให้สินค้าหาย
+        const existingLocalProds = getLocal(STORAGE_KEYS.PRODUCTS, []);
+        const supaIds = new Set(supaList.map((p) => p.id));
+        const supaSkus = new Set(supaList.map((p) => p.sku));
+        const extraLocalOnly = existingLocalProds.filter(
+          (lp) =>
+            String(lp.id).startsWith('prod-') &&
+            !trashIds.has(lp.id) &&
+            !supaIds.has(lp.id) &&
+            !supaSkus.has(lp.sku)
+        );
+
+        const syncedSupaProducts = normalizeAndSyncProducts([
+          ...extraLocalOnly,
+          ...supaList,
+        ]);
+        setLocal(STORAGE_KEYS.PRODUCTS, syncedSupaProducts);
 
         return {
           mode: 'supabase',
           categories: categories.length > 1 ? categories : INITIAL_CATEGORIES,
           units: localUnits,
-          products: normalizeAndSyncProducts(activeList),
+          products: syncedSupaProducts,
           trashedProducts: localTrash,
           customers: cusRes.data || [],
           orders: ordRes.data || [],
+          wholesaleRules,
+          specialRules,
         };
       } catch (err) {
         console.warn('Supabase connection error, falling back to Demo Mode:', err.message);
@@ -160,6 +205,7 @@ export const posService = {
     // Fallback: โหมดสาธิต (LocalStorage)
     const rawProducts = getLocal(STORAGE_KEYS.PRODUCTS, INITIAL_PRODUCTS);
     const normalized = normalizeAndSyncProducts(rawProducts);
+    setLocal(STORAGE_KEYS.PRODUCTS, normalized);
 
     return {
       mode: 'demo',
@@ -169,13 +215,15 @@ export const posService = {
       trashedProducts: localTrash,
       customers: getLocal(STORAGE_KEYS.CUSTOMERS, INITIAL_CUSTOMERS),
       orders: getLocal(STORAGE_KEYS.ORDERS, INITIAL_ORDERS),
+      wholesaleRules,
+      specialRules,
     };
   },
 
   /**
    * เพิ่มหรือแก้ไขสินค้า (รองรับ selling_units และระบบสินค้าสัมพันธ์ linked_product_id / linked_deduct_qty)
    */
-  async upsertProduct(productData, isSupabaseActive) {
+  async upsertProduct(productData, isSupabaseActive, currentProducts = null) {
     const nowIso = new Date().toISOString();
     const sanitizedSellingUnits = Array.isArray(productData.selling_units)
       ? productData.selling_units
@@ -221,50 +269,75 @@ export const posService = {
       is_active: productData.is_active !== false,
     };
 
+    const baseSupabasePayload = {
+      sku: cleanPayload.sku,
+      barcode: cleanPayload.barcode,
+      name: cleanPayload.name,
+      category_id: cleanPayload.category_id,
+      unit: cleanPayload.unit,
+      cost_price: cleanPayload.cost_price,
+      retail_price: cleanPayload.retail_price,
+      wholesale_price: cleanPayload.wholesale_price,
+      wholesale_min_qty: cleanPayload.wholesale_min_qty,
+      stock: cleanPayload.stock,
+      min_stock: cleanPayload.min_stock,
+      pack_size: cleanPayload.pack_size,
+      image_url: cleanPayload.image_url,
+      updated_at: cleanPayload.updated_at,
+      is_active: cleanPayload.is_active,
+    };
+
+    let savedSupaRow = null;
+
     if (isSupabaseActive && supabase) {
       try {
         if (productData.id && !String(productData.id).startsWith('prod-')) {
-          const { data, error } = await supabase
+          let { data, error } = await supabase
             .from('products')
             .update(cleanPayload)
             .eq('id', productData.id)
             .select()
             .single();
-          if (error) throw error;
-          return {
-            ...data,
-            selling_units: sanitizedSellingUnits,
-            linked_product_id: linkedProductId,
-            linked_deduct_qty: linkedDeductQty,
-            updated_at: nowIso,
-          };
+          if (error) {
+            const retry = await supabase
+              .from('products')
+              .update(baseSupabasePayload)
+              .eq('id', productData.id)
+              .select()
+              .single();
+            if (!retry.error) data = retry.data;
+          }
+          if (data) savedSupaRow = data;
         } else {
-          const { data, error } = await supabase
+          let { data, error } = await supabase
             .from('products')
             .insert([cleanPayload])
             .select()
             .single();
-          if (error) throw error;
-          return {
-            ...data,
-            selling_units: sanitizedSellingUnits,
-            linked_product_id: linkedProductId,
-            linked_deduct_qty: linkedDeductQty,
-            updated_at: nowIso,
-          };
+          if (error) {
+            const retry = await supabase
+              .from('products')
+              .insert([baseSupabasePayload])
+              .select()
+              .single();
+            if (!retry.error) data = retry.data;
+          }
+          if (data) savedSupaRow = data;
         }
       } catch (err) {
         console.warn('Supabase upsert fallback to local:', err.message);
       }
     }
 
-    // โหมด Demo (LocalStorage)
-    const products = getLocal(STORAGE_KEYS.PRODUCTS, INITIAL_PRODUCTS);
-    let updatedList = products;
+    const baseProducts =
+      Array.isArray(currentProducts) && currentProducts.length > 0
+        ? currentProducts
+        : getLocal(STORAGE_KEYS.PRODUCTS, INITIAL_PRODUCTS);
+    let updatedList = [...baseProducts];
 
     // กรณีบันทึกสินค้ารองที่มีการเชื่อมสินค้าสัมพันธ์ และมีการปรับแก้จำนวนสต็อกของสินค้ารอง ให้ซิงค์กลับไปที่สินค้าตัวหลักด้วย
     if (linkedProductId && productData.sync_master_stock) {
-      const masterTarget = products.find((p) => p.id === linkedProductId);
+      const masterTarget = updatedList.find((p) => p.id === linkedProductId);
       if (masterTarget) {
         const currentMasterStock = Number(masterTarget.stock) || 0;
         const remainder = currentMasterStock % linkedDeductQty;
@@ -290,34 +363,54 @@ export const posService = {
       }
     }
 
-    let targetId = productData.id;
+    const targetId = savedSupaRow?.id || productData.id || `prod-${Date.now()}`;
 
-    if (productData.id) {
+    // บันทึกข้อมูลเสริมลง PRODUCT_META เพื่อให้ไม่สูญหายแม้ตาราง Supabase ยังไม่ได้เพิ่มคอลัมน์ใหม่
+    const localMeta = getLocal(STORAGE_KEYS.PRODUCT_META, {});
+    const metaEntry = {
+      is_wholesale_enabled: isWholesaleEnabled,
+      selling_units: sanitizedSellingUnits,
+      linked_product_id: linkedProductId,
+      linked_deduct_qty: linkedDeductQty,
+    };
+    localMeta[targetId] = metaEntry;
+    localMeta[cleanPayload.sku] = metaEntry;
+    setLocal(STORAGE_KEYS.PRODUCT_META, localMeta);
+
+    const mergedProduct = {
+      ...(savedSupaRow || {}),
+      ...cleanPayload,
+      id: targetId,
+      created_at: savedSupaRow?.created_at || productData.created_at || nowIso,
+    };
+
+    if (productData.id && updatedList.some((p) => p.id === productData.id)) {
       updatedList = updatedList.map((p) =>
-        p.id === productData.id ? { ...p, ...cleanPayload, id: productData.id } : p
+        p.id === productData.id ? mergedProduct : p
+      );
+    } else if (updatedList.some((p) => p.id === targetId)) {
+      updatedList = updatedList.map((p) =>
+        p.id === targetId ? mergedProduct : p
       );
     } else {
-      targetId = `prod-${Date.now()}`;
-      const newProduct = {
-        ...cleanPayload,
-        id: targetId,
-        created_at: nowIso,
-      };
-      updatedList = [newProduct, ...updatedList];
+      updatedList = [mergedProduct, ...updatedList];
     }
 
     const syncedList = normalizeAndSyncProducts(updatedList);
     setLocal(STORAGE_KEYS.PRODUCTS, syncedList);
-    return syncedList.find((p) => p.id === targetId);
+    return syncedList.find((p) => p.id === targetId) || mergedProduct;
   },
 
   /**
    * ย้ายสินค้าไปไว้ในถังขยะ (Soft Delete)
    * พร้อมยกเลิกการเชื่อมสินค้าสัมพันธ์ในสินค้ารองทั้งหมดที่อ้างอิงถึงสินค้าตัวหลักนี้ทันที
    */
-  async moveProductToTrash(productId, isSupabaseActive) {
+  async moveProductToTrash(productId, isSupabaseActive, currentProducts = null) {
     const nowIso = new Date().toISOString();
-    const products = getLocal(STORAGE_KEYS.PRODUCTS, INITIAL_PRODUCTS);
+    const products =
+      Array.isArray(currentProducts) && currentProducts.length > 0
+        ? currentProducts
+        : getLocal(STORAGE_KEYS.PRODUCTS, INITIAL_PRODUCTS);
     const target = products.find((p) => p.id === productId);
 
     let unlinkedCount = 0;
@@ -448,7 +541,13 @@ export const posService = {
   /**
    * ปรับปรุงจำนวนสต็อกสินค้า (และราคาต้นทุนเมื่อระบุ) พร้อมซิงค์สต็อกและต้นทุนไปยังสินค้ารองที่เชื่อมสินค้าสัมพันธ์
    */
-  async updateStock(productId, newStock, isSupabaseActive, newCostPrice = undefined) {
+  async updateStock(
+    productId,
+    newStock,
+    isSupabaseActive,
+    newCostPrice = undefined,
+    currentProducts = null
+  ) {
     const safeStock = Math.max(0, Number(newStock) || 0);
     const hasNewCost =
       newCostPrice !== undefined && newCostPrice !== null && newCostPrice !== '';
@@ -467,8 +566,11 @@ export const posService = {
         // fallback local
       }
     }
-    const products = getLocal(STORAGE_KEYS.PRODUCTS, INITIAL_PRODUCTS);
-    const updated = products.map((p) => {
+    const baseProducts =
+      Array.isArray(currentProducts) && currentProducts.length > 0
+        ? currentProducts
+        : getLocal(STORAGE_KEYS.PRODUCTS, INITIAL_PRODUCTS);
+    const updated = baseProducts.map((p) => {
       if (p.id !== productId) return p;
       return {
         ...p,
@@ -840,6 +942,90 @@ export const posService = {
   },
 
   /**
+   * บันทึกรายการตั้งราคาขายส่งหลายระดับ (สูงสุด 10 ขั้น รองรับทั้งแบบเดี่ยวและแบบกลุ่ม)
+   */
+  async upsertWholesaleRule(ruleData) {
+    const nowIso = new Date().toISOString();
+    const rules = getLocal(STORAGE_KEYS.WHOLESALE_RULES, []);
+    const sanitizedTiers = (Array.isArray(ruleData.tiers) ? ruleData.tiers : [])
+      .slice(0, 10)
+      .filter((t) => Number(t.price) > 0 && Number(t.min_qty) >= 1)
+      .sort((a, b) => Number(a.min_qty) - Number(b.min_qty))
+      .map((t, idx) => ({
+        level: idx + 1,
+        min_qty: Math.max(1, Math.floor(Number(t.min_qty) || 1)),
+        price: Number(Number(t.price).toFixed(2)),
+      }));
+
+    const payload = {
+      id: ruleData.id || `ws-rule-${Date.now()}`,
+      name: String(ruleData.name || '').trim() || 'ราคาขายส่งหลายระดับ',
+      type: ruleData.type === 'group' ? 'group' : 'single',
+      product_ids: Array.isArray(ruleData.product_ids) ? ruleData.product_ids : [],
+      tiers: sanitizedTiers,
+      is_active: ruleData.is_active !== false,
+      updated_at: nowIso,
+      created_at: ruleData.created_at || nowIso,
+    };
+
+    const exists = rules.some((r) => r.id === payload.id);
+    const updated = exists
+      ? rules.map((r) => (r.id === payload.id ? payload : r))
+      : [payload, ...rules];
+    setLocal(STORAGE_KEYS.WHOLESALE_RULES, updated);
+    return { savedRule: payload, updatedRules: updated };
+  },
+
+  async deleteWholesaleRule(ruleId) {
+    const rules = getLocal(STORAGE_KEYS.WHOLESALE_RULES, []);
+    const updated = rules.filter((r) => r.id !== ruleId);
+    setLocal(STORAGE_KEYS.WHOLESALE_RULES, updated);
+    return updated;
+  },
+
+  /**
+   * บันทึกรายการราคาพิเศษ (สูงสุด 10 ขั้น รองรับทั้งแบบเดี่ยวและแบบกลุ่ม)
+   */
+  async upsertSpecialRule(ruleData) {
+    const nowIso = new Date().toISOString();
+    const rules = getLocal(STORAGE_KEYS.SPECIAL_RULES, []);
+    const sanitizedTiers = (Array.isArray(ruleData.tiers) ? ruleData.tiers : [])
+      .slice(0, 10)
+      .filter((t) => Number(t.price) > 0 && Number(t.min_qty) >= 1)
+      .sort((a, b) => Number(a.min_qty) - Number(b.min_qty))
+      .map((t, idx) => ({
+        level: idx + 1,
+        min_qty: Math.max(1, Math.floor(Number(t.min_qty) || 1)),
+        price: Number(Number(t.price).toFixed(2)),
+      }));
+
+    const payload = {
+      id: ruleData.id || `sp-rule-${Date.now()}`,
+      name: String(ruleData.name || '').trim() || 'ราคาพิเศษ',
+      type: ruleData.type === 'group' ? 'group' : 'single',
+      product_ids: Array.isArray(ruleData.product_ids) ? ruleData.product_ids : [],
+      tiers: sanitizedTiers,
+      is_active: ruleData.is_active !== false,
+      updated_at: nowIso,
+      created_at: ruleData.created_at || nowIso,
+    };
+
+    const exists = rules.some((r) => r.id === payload.id);
+    const updated = exists
+      ? rules.map((r) => (r.id === payload.id ? payload : r))
+      : [payload, ...rules];
+    setLocal(STORAGE_KEYS.SPECIAL_RULES, updated);
+    return { savedRule: payload, updatedRules: updated };
+  },
+
+  async deleteSpecialRule(ruleId) {
+    const rules = getLocal(STORAGE_KEYS.SPECIAL_RULES, []);
+    const updated = rules.filter((r) => r.id !== ruleId);
+    setLocal(STORAGE_KEYS.SPECIAL_RULES, updated);
+    return updated;
+  },
+
+  /**
    * รีเซ็ตข้อมูลสาธิตกลับเป็นค่าเริ่มต้น
    */
   resetDemoData() {
@@ -849,8 +1035,11 @@ export const posService = {
       STORAGE_KEYS.PRODUCTS,
       normalizeAndSyncProducts(INITIAL_PRODUCTS)
     );
+    setLocal(STORAGE_KEYS.PRODUCT_META, {});
     setLocal(STORAGE_KEYS.TRASH_PRODUCTS, []);
     setLocal(STORAGE_KEYS.CUSTOMERS, INITIAL_CUSTOMERS);
     setLocal(STORAGE_KEYS.ORDERS, INITIAL_ORDERS);
+    setLocal(STORAGE_KEYS.WHOLESALE_RULES, []);
+    setLocal(STORAGE_KEYS.SPECIAL_RULES, []);
   },
 };

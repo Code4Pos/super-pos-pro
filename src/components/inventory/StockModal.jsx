@@ -43,8 +43,12 @@ export default function StockModal({ product, onClose }) {
       const mProd = product.linked_product_id
         ? products.find((p) => p.id === product.linked_product_id)
         : null;
-      const mult = mProd ? Math.max(1, Number(product.linked_deduct_qty) || 1) : 1;
-      const mStock = mProd ? Number(mProd.stock) || 0 : Number(product.stock) || 0;
+      const mult = mProd
+        ? Math.max(1, Number(product.linked_deduct_qty) || 1)
+        : 1;
+      const mStock = mProd
+        ? Number(mProd.stock) || 0
+        : Number(product.stock) || 0;
       const rem = mProd ? mStock % mult : 0;
 
       setMode('add');
@@ -52,20 +56,25 @@ export default function StockModal({ product, onClose }) {
       setRemainderAmount(rem);
       setCostPrice(product.cost_price ?? 0);
     }
-  }, [product, products]);
+  }, [product?.id]);
 
   if (!product) return null;
 
   const numAmount = Math.max(0, Number(amount) || 0);
   const numRemainder = Math.max(0, Number(remainderAmount) || 0);
 
-  // คำนวณยอดสต็อกใหม่ที่จะบันทึก (กรณีเป็นสินค้ารองที่เชื่อมสัมพันธ์ จะคำนวณเชื่อมกับสต็อกของสินค้าตัวหลักโดยตรง)
   let nextMasterStock = currentMasterStock;
   if (isSecondaryLinked) {
     if (mode === 'add') {
-      nextMasterStock = Math.max(0, currentMasterStock + numAmount * multiplier);
+      nextMasterStock = Math.max(
+        0,
+        currentMasterStock + numAmount * multiplier
+      );
     } else if (mode === 'reduce') {
-      nextMasterStock = Math.max(0, currentMasterStock - numAmount * multiplier);
+      nextMasterStock = Math.max(
+        0,
+        currentMasterStock - numAmount * multiplier
+      );
     } else {
       nextMasterStock = Math.max(0, numAmount * multiplier + numRemainder);
     }
@@ -95,7 +104,11 @@ export default function StockModal({ product, onClose }) {
         const nextMasterCost = hasCostUpdate
           ? Number(((Number(costPrice) || 0) / multiplier).toFixed(2))
           : undefined;
-        await updateProductStock(masterProd.id, nextMasterStock, nextMasterCost);
+        await updateProductStock(
+          masterProd.id,
+          nextMasterStock,
+          nextMasterCost
+        );
       } else {
         const nextCost = hasCostUpdate ? Number(costPrice) || 0 : undefined;
         await updateProductStock(product.id, previewStock, nextCost);
@@ -109,14 +122,13 @@ export default function StockModal({ product, onClose }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
       <div className="bg-white w-full max-w-md rounded-3xl shadow-2xl border border-slate-200 overflow-hidden">
-        <div className="px-5 py-4 bg-slate-900 text-white flex items-center justify-between">
-          <div>
+        <div className="px-5 py-3.5 bg-slate-900 text-white flex items-center justify-between">
+          <div className="min-w-0">
             <h3 className="font-bold text-base">ปรับสต็อกสินค้า</h3>
-            <p className="text-xs text-slate-400 truncate max-w-[260px]">
-              {product.name}
-            </p>
+            <p className="text-xs text-slate-400 truncate">{product.name}</p>
           </div>
           <button
+            type="button"
             onClick={onClose}
             className="p-1.5 rounded-xl bg-slate-800 text-slate-300 hover:text-white"
           >
@@ -126,35 +138,14 @@ export default function StockModal({ product, onClose }) {
 
         <form onSubmit={handleSubmit} className="p-5 space-y-4">
           {isSecondaryLinked && masterProd && (
-            <div className="p-3.5 rounded-2xl bg-violet-50 border border-violet-200 text-xs text-violet-900 space-y-2">
-              <div className="flex items-start gap-2">
-                <GitBranch className="w-4 h-4 text-violet-600 shrink-0 mt-0.5" />
-                <div>
-                  <strong>สินค้าสัมพันธ์ (ซิงค์สต็อกอัตโนมัติ):</strong> เชื่อมกับ{' '}
-                  <span className="underline font-bold">{masterProd.name}</span>{' '}
-                  (1 {product.unit} = {multiplier} {masterProd.unit})
-                  เมื่อปรับสต็อกที่นี่ จำนวนสต็อกของสินค้าหลักจะเปลี่ยนเชื่อมกันทันที
-                </div>
+            <div className="px-3.5 py-2.5 rounded-2xl bg-violet-50/80 border border-violet-200/80 flex items-center justify-between gap-2 text-xs">
+              <div className="flex items-center gap-2 min-w-0 text-violet-900 font-semibold truncate">
+                <GitBranch className="w-4 h-4 text-violet-600 shrink-0" />
+                <span className="truncate">{masterProd.name}</span>
               </div>
-              <div className="grid grid-cols-2 gap-2 pt-1">
-                <div className="p-2 rounded-xl bg-white border border-violet-200">
-                  <div className="text-[10px] text-slate-500 font-bold">
-                    คงเหลือปัจจุบัน (เต็ม / เศษ)
-                  </div>
-                  <div className="text-xs font-extrabold text-violet-700">
-                    เต็ม {currentStock} {product.unit} • เศษ {currentRemainder}{' '}
-                    {masterProd.unit}
-                  </div>
-                </div>
-                <div className="p-2 rounded-xl bg-white border border-violet-200">
-                  <div className="text-[10px] text-slate-500 font-bold">
-                    สต็อกรวมที่สินค้าหลัก
-                  </div>
-                  <div className="text-xs font-extrabold text-emerald-700">
-                    {currentMasterStock} {masterProd.unit}
-                  </div>
-                </div>
-              </div>
+              <span className="px-2 py-0.5 rounded-lg bg-white border border-violet-200 text-[11px] font-bold text-violet-700 shrink-0">
+                1 {product.unit} = {multiplier} {masterProd.unit}
+              </span>
             </div>
           )}
 
@@ -215,10 +206,10 @@ export default function StockModal({ product, onClose }) {
           {/* ช่องกรอกจำนวนสต็อก */}
           <div className="space-y-2">
             {isSecondaryLinked && mode === 'set' && masterProd ? (
-              <div className="grid grid-cols-2 gap-2.5">
+              <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">
-                    จำนวนเต็ม ({product.unit})
+                    จำนวน ({product.unit})
                   </label>
                   <input
                     type="number"
@@ -230,7 +221,7 @@ export default function StockModal({ product, onClose }) {
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">
-                    เศษ ({masterProd.unit})
+                    จำนวน ({masterProd.unit})
                   </label>
                   <input
                     type="number"
@@ -245,10 +236,10 @@ export default function StockModal({ product, onClose }) {
               <>
                 <label className="block text-xs font-bold text-slate-700">
                   {mode === 'add'
-                    ? `จำนวนที่เพิ่มสต็อก (${product.unit})`
+                    ? `จำนวนที่เพิ่ม (${product.unit})`
                     : mode === 'reduce'
-                    ? `จำนวนที่ลดสต็อก (${product.unit})`
-                    : `กำหนดยอดสต็อกใหม่ (${product.unit})`}
+                    ? `จำนวนที่ลด (${product.unit})`
+                    : `ยอดสต็อกใหม่ (${product.unit})`}
                 </label>
                 <input
                   type="number"
@@ -280,7 +271,7 @@ export default function StockModal({ product, onClose }) {
             )}
           </div>
 
-          {/* ช่องราคาต้นทุน แสดงเฉพาะเมนู "เพิ่มสต็อก" และ "กำหนดยอดใหม่" (ค่าเริ่มต้นเป็นราคาต้นทุนปัจจุบัน) */}
+          {/* ช่องราคาต้นทุน แสดงเฉพาะเมนู "เพิ่มสต็อก" และ "กำหนดยอดใหม่" */}
           {(mode === 'add' || mode === 'set') && (
             <div className="space-y-1.5">
               <label className="flex items-center justify-between text-xs font-bold text-slate-700">
@@ -289,7 +280,7 @@ export default function StockModal({ product, onClose }) {
                   <span>ราคาต้นทุน (฿ / {product.unit})</span>
                 </span>
                 <span className="text-[11px] font-medium text-slate-400">
-                  ต้นทุนเดิม: {formatCurrency(currentCost)}
+                  เดิม: {formatCurrency(currentCost)}
                 </span>
               </label>
               <input
@@ -304,53 +295,31 @@ export default function StockModal({ product, onClose }) {
             </div>
           )}
 
-          {/* สรุปยอดสต็อกและต้นทุนก่อนบันทึก */}
-          <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 space-y-2 text-xs">
-            <div className="flex items-center justify-between">
-              <div>
-                <span className="text-slate-500">สต็อกเดิม: </span>
-                <strong className="text-slate-800">
-                  {isSecondaryLinked && masterProd
-                    ? `เต็ม ${currentStock} ${product.unit} เศษ ${currentRemainder} ${masterProd.unit}`
-                    : `${currentStock} ${product.unit}`}
-                </strong>
-              </div>
-              <div>
-                <span className="text-slate-500">สต็อกใหม่: </span>
-                <strong
-                  className={`text-sm sm:text-base ${
-                    mode === 'reduce' ? 'text-rose-600' : 'text-emerald-600'
-                  }`}
-                >
-                  {isSecondaryLinked && masterProd
-                    ? `เต็ม ${previewStock} ${product.unit} เศษ ${previewRemainder} ${masterProd.unit}`
-                    : `${previewStock} ${product.unit}`}
-                </strong>
-              </div>
+          {/* สรุปยอดสต็อกเดิม -> สต็อกใหม่ (ไม่แสดงคำว่า เต็ม/เศษ ด้านหน้าตัวเลข) */}
+          <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 flex items-center justify-between text-xs">
+            <div>
+              <span className="text-slate-500">สต็อกเดิม: </span>
+              <strong className="text-slate-800">
+                {isSecondaryLinked && masterProd
+                  ? `${currentStock} ${product.unit} (${currentRemainder} ${masterProd.unit})`
+                  : `${currentStock} ${product.unit}`}
+              </strong>
             </div>
-
-            {isSecondaryLinked && masterProd && (
-              <div className="flex items-center justify-between pt-1.5 border-t border-slate-200/70 text-[11px]">
-                <span className="text-slate-500">
-                  สต็อกใหม่ของสินค้าหลัก ({masterProd.name}):
-                </span>
-                <strong className="text-violet-700 font-bold">
-                  {nextMasterStock} {masterProd.unit}
-                </strong>
-              </div>
-            )}
-
-            {(mode === 'add' || mode === 'set') && (
-              <div className="flex items-center justify-between pt-1.5 border-t border-slate-200/70">
-                <span className="text-slate-500">ราคาต้นทุนที่จะบันทึก:</span>
-                <strong className="text-amber-700 font-bold">
-                  {formatCurrency(Number(costPrice) || 0)} / {product.unit}
-                </strong>
-              </div>
-            )}
+            <div>
+              <span className="text-slate-500">สต็อกใหม่: </span>
+              <strong
+                className={`text-sm sm:text-base ${
+                  mode === 'reduce' ? 'text-rose-600' : 'text-emerald-600'
+                }`}
+              >
+                {isSecondaryLinked && masterProd
+                  ? `${previewStock} ${product.unit} (${previewRemainder} ${masterProd.unit})`
+                  : `${previewStock} ${product.unit}`}
+              </strong>
+            </div>
           </div>
 
-          <div className="flex gap-2.5 pt-2">
+          <div className="flex gap-2.5 pt-1">
             <button
               type="button"
               onClick={onClose}
@@ -368,7 +337,7 @@ export default function StockModal({ product, onClose }) {
               }`}
             >
               <Check className="w-4 h-4" />
-              <span>ยืนยันอัปเดตสต็อก</span>
+              <span>ยืนยัน</span>
             </button>
           </div>
         </form>

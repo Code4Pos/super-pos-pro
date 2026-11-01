@@ -124,6 +124,8 @@ export default function Header({
             <h2 className="font-bold text-slate-800 text-xs sm:text-sm md:text-base leading-tight truncate">
               {activeTab === 'pos' && 'ขายหน้าร้าน (POS)'}
               {activeTab === 'inventory' && 'คลังสินค้า › จัดการสินค้า'}
+              {activeTab === 'wholesale-pricing' && 'คลังสินค้า › ราคาขายส่ง'}
+              {activeTab === 'special-pricing' && 'คลังสินค้า › ราคาพิเศษ'}
               {activeTab === 'orders' && 'รายงาน › ประวัติบิล'}
               {activeTab === 'dashboard' && 'รายงาน › แดชบอร์ด'}
               {activeTab === 'customers' && 'ลูกค้า › จัดการลูกค้า'}
