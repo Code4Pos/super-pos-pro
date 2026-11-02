@@ -135,10 +135,8 @@ export default function ProductModal({ isOpen, onClose, editingProduct }) {
     if (!pid || !Array.isArray(wholesaleRules)) return [];
     return wholesaleRules.filter((r) => {
       if (r.is_active === false) return false;
-      if (r.target_type === 'group') {
-        return Array.isArray(r.product_ids) && r.product_ids.includes(pid);
-      }
-      return r.product_id === pid;
+      if (r.product_id === pid) return true;
+      return Array.isArray(r.product_ids) && r.product_ids.includes(pid);
     });
   }, [wholesaleRules, editingProduct, form.id]);
 
@@ -148,10 +146,8 @@ export default function ProductModal({ isOpen, onClose, editingProduct }) {
     if (!pid || !Array.isArray(specialRules)) return [];
     return specialRules.filter((r) => {
       if (r.is_active === false) return false;
-      if (r.target_type === 'group') {
-        return Array.isArray(r.product_ids) && r.product_ids.includes(pid);
-      }
-      return r.product_id === pid;
+      if (r.product_id === pid) return true;
+      return Array.isArray(r.product_ids) && r.product_ids.includes(pid);
     });
   }, [specialRules, editingProduct, form.id]);
 
@@ -167,12 +163,31 @@ export default function ProductModal({ isOpen, onClose, editingProduct }) {
         (p) => p.linked_product_id === editingProduct.id
       );
 
-      const wholesaleActive =
-        editingProduct.is_wholesale_enabled !== undefined
-          ? Boolean(editingProduct.is_wholesale_enabled)
-          : Number(editingProduct.wholesale_price) > 0 &&
-            Number(editingProduct.wholesale_price) <
-              Number(editingProduct.retail_price);
+      // ซิงก์สถานะและราคาขายส่งขั้นที่ 1 จากระบบขายส่งหลายระดับ (แบบเดี่ยว) หากมีการตั้งค่าไว้
+      const singleWsRule = (wholesaleRules || []).find(
+        (r) =>
+          (r.target_type || r.type) !== 'group' &&
+          (r.product_id === editingProduct.id ||
+            (Array.isArray(r.product_ids) &&
+              r.product_ids.length === 1 &&
+              r.product_ids[0] === editingProduct.id))
+      );
+
+      const tier1FromRule =
+        singleWsRule &&
+        singleWsRule.is_active !== false &&
+        Array.isArray(singleWsRule.tiers) &&
+        singleWsRule.tiers.length > 0
+          ? singleWsRule.tiers[0]
+          : null;
+
+      const wholesaleActive = singleWsRule
+        ? singleWsRule.is_active !== false && Boolean(tier1FromRule)
+        : editingProduct.is_wholesale_enabled !== undefined
+        ? Boolean(editingProduct.is_wholesale_enabled)
+        : Number(editingProduct.wholesale_price) > 0 &&
+          Number(editingProduct.wholesale_price) <
+            Number(editingProduct.retail_price);
 
       setIsWholesaleEnabled(wholesaleActive);
       setIsImageSessionEnabled(hasImg);
@@ -189,8 +204,12 @@ export default function ProductModal({ isOpen, onClose, editingProduct }) {
         unit: editingProduct.unit || 'ชิ้น',
         cost_price: editingProduct.cost_price ?? '',
         retail_price: editingProduct.retail_price ?? '',
-        wholesale_price: editingProduct.wholesale_price ?? '',
-        wholesale_min_qty: editingProduct.wholesale_min_qty ?? 6,
+        wholesale_price: tier1FromRule
+          ? tier1FromRule.price
+          : editingProduct.wholesale_price ?? '',
+        wholesale_min_qty: tier1FromRule
+          ? tier1FromRule.min_qty
+          : editingProduct.wholesale_min_qty ?? 6,
         stock: editingProduct.stock ?? 0,
         min_stock: editingProduct.min_stock ?? 10,
         pack_size: editingProduct.pack_size || '',
@@ -780,115 +799,206 @@ export default function ProductModal({ isOpen, onClose, editingProduct }) {
             </div>
           </div>
 
-          {/* Section แสดงราคาขายส่งหลายระดับ (แสดงเฉพาะเมื่อสินค้าตัวนี้มีการตั้งค่าไว้) */}
-          {matchedWholesaleRules.length > 0 && (
-            <div className="p-3.5 rounded-2xl bg-emerald-50/50 border border-emerald-200/80 space-y-2.5">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2 text-xs font-bold text-emerald-900">
-                  <Tags className="w-4 h-4 text-emerald-600" />
+          {/* Section แสดงสถานะการตั้งราคาขายส่งหลายระดับ และราคาพิเศษ (ซิงก์ข้อมูลอัตโนมัติ) */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {/* 1. สถานะราคาขายส่งหลายระดับ */}
+            <div
+              className={`p-3.5 rounded-2xl border space-y-2.5 ${
+                isWholesaleEnabled || matchedWholesaleRules.length > 0
+                  ? 'bg-emerald-50/50 border-emerald-200/80'
+                  : 'bg-slate-50 border-slate-200'
+              }`}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 text-xs font-bold text-slate-900">
+                  <Tags
+                    className={`w-4 h-4 ${
+                      isWholesaleEnabled || matchedWholesaleRules.length > 0
+                        ? 'text-emerald-600'
+                        : 'text-slate-400'
+                    }`}
+                  />
                   <span>ราคาขายส่งหลายระดับ</span>
                 </div>
-                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800">
-                  {matchedWholesaleRules.length} รายการ
+                <span
+                  className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                    isWholesaleEnabled || matchedWholesaleRules.length > 0
+                      ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                      : 'bg-slate-200/80 text-slate-500'
+                  }`}
+                >
+                  {isWholesaleEnabled || matchedWholesaleRules.length > 0
+                    ? 'ตั้งค่าแล้ว (ซิงก์อัตโนมัติ)'
+                    : 'ยังไม่ได้ตั้งค่า'}
                 </span>
               </div>
 
-              <div className="space-y-2">
-                {matchedWholesaleRules.map((rule) => (
-                  <div
-                    key={rule.id}
-                    className="p-2.5 rounded-xl bg-white border border-emerald-100 space-y-2"
-                  >
-                    <div className="flex items-center justify-between gap-2 text-xs">
-                      <span className="font-bold text-slate-800 truncate">
-                        {rule.name || 'ราคาขายส่งหลายระดับ'}
-                      </span>
-                      <span
-                        className={`px-2 py-0.5 rounded-full text-[10px] font-bold shrink-0 ${
-                          rule.target_type === 'group'
-                            ? 'bg-violet-100 text-violet-700'
-                            : 'bg-emerald-100 text-emerald-700'
-                        }`}
+              {matchedWholesaleRules.length > 0 ? (
+                <div className="space-y-2">
+                  {matchedWholesaleRules.map((rule) => {
+                    const isGroup =
+                      (rule.target_type || rule.type) === 'group';
+                    return (
+                      <div
+                        key={rule.id}
+                        className="p-2.5 rounded-xl bg-white border border-emerald-100 space-y-1.5"
                       >
-                        {rule.target_type === 'group' ? 'แบบกลุ่ม' : 'แบบเดี่ยว'}
-                      </span>
-                    </div>
-
-                    <div className="grid grid-cols-2 sm:grid-cols-5 gap-1.5">
-                      {(rule.tiers || []).slice(0, 10).map((tier, idx) => (
-                        <div
-                          key={idx}
-                          className="px-2.5 py-1.5 rounded-lg bg-emerald-50/60 border border-emerald-100 flex items-center justify-between text-[11px]"
-                        >
-                          <span className="font-semibold text-slate-600">
-                            ≥ {tier.min_qty} {form.unit || 'ชิ้น'}
+                        <div className="flex items-center justify-between gap-2 text-[11px]">
+                          <span className="font-bold text-slate-700 truncate">
+                            {rule.name || 'ราคาขายส่ง'}
                           </span>
-                          <span className="font-extrabold text-emerald-700">
-                            {formatCurrency(tier.price)}
+                          <span
+                            className={`px-2 py-0.2 rounded-full text-[10px] font-bold shrink-0 ${
+                              isGroup
+                                ? 'bg-violet-100 text-violet-700'
+                                : 'bg-emerald-100 text-emerald-700'
+                            }`}
+                          >
+                            {isGroup ? 'แบบกลุ่ม' : 'แบบเดี่ยว'}
                           </span>
                         </div>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
 
-          {/* Section แสดงราคาพิเศษ (แสดงเฉพาะเมื่อสินค้าตัวนี้มีการตั้งค่าไว้) */}
-          {matchedSpecialRules.length > 0 && (
-            <div className="p-3.5 rounded-2xl bg-amber-50/50 border border-amber-200/80 space-y-2.5">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2 text-xs font-bold text-amber-900">
-                  <Sparkles className="w-4 h-4 text-amber-600" />
-                  <span>ราคาพิเศษ</span>
+                        <div className="grid grid-cols-2 gap-1.5">
+                          {(rule.tiers || []).slice(0, 10).map((tier, idx) => {
+                            const isTier1Single = !isGroup && idx === 0;
+                            const dispQty =
+                              isTier1Single && isWholesaleEnabled
+                                ? form.wholesale_min_qty || tier.min_qty
+                                : tier.min_qty;
+                            const dispPrice =
+                              isTier1Single &&
+                              isWholesaleEnabled &&
+                              Number(form.wholesale_price) > 0
+                                ? form.wholesale_price
+                                : tier.price;
+                            return (
+                              <div
+                                key={idx}
+                                className="px-2 py-1 rounded-lg bg-emerald-50/60 border border-emerald-100 flex items-center justify-between text-[11px]"
+                              >
+                                <span className="font-semibold text-slate-600">
+                                  ขั้น {idx + 1} (≥{dispQty})
+                                </span>
+                                <span className="font-extrabold text-emerald-700">
+                                  {formatCurrency(dispPrice)}
+                                </span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
-                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800">
-                  {matchedSpecialRules.length} รายการ
+              ) : isWholesaleEnabled && Number(form.wholesale_price) > 0 ? (
+                <div className="p-2.5 rounded-xl bg-white border border-emerald-100 space-y-1.5">
+                  <div className="flex items-center justify-between text-[11px]">
+                    <span className="font-bold text-slate-700">
+                      ซิงก์เป็นขั้นที่ 1 อัตโนมัติเมื่อบันทึก
+                    </span>
+                    <span className="px-2 py-0.2 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-700">
+                      แบบเดี่ยว
+                    </span>
+                  </div>
+                  <div className="px-2.5 py-1.5 rounded-lg bg-emerald-50/60 border border-emerald-100 flex items-center justify-between text-[11px]">
+                    <span className="font-semibold text-slate-600">
+                      ขั้น 1 (≥{form.wholesale_min_qty || 6} {form.unit || 'ชิ้น'})
+                    </span>
+                    <span className="font-extrabold text-emerald-700">
+                      {formatCurrency(form.wholesale_price)}
+                    </span>
+                  </div>
+                </div>
+              ) : (
+                <div className="text-[11px] text-slate-400 py-1">
+                  เปิดสวิตช์ราคาส่งด้านบน หรือตั้งค่าเพิ่มเติมได้ที่เมนูคลังสินค้า › ราคาขายส่ง
+                </div>
+              )}
+            </div>
+
+            {/* 2. สถานะราคาพิเศษ */}
+            <div
+              className={`p-3.5 rounded-2xl border space-y-2.5 ${
+                matchedSpecialRules.length > 0
+                  ? 'bg-amber-50/50 border-amber-200/80'
+                  : 'bg-slate-50 border-slate-200'
+              }`}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 text-xs font-bold text-slate-900">
+                  <Sparkles
+                    className={`w-4 h-4 ${
+                      matchedSpecialRules.length > 0
+                        ? 'text-amber-500'
+                        : 'text-slate-400'
+                    }`}
+                  />
+                  <span>ราคาพิเศษ (ตามสิทธิลูกค้า)</span>
+                </div>
+                <span
+                  className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                    matchedSpecialRules.length > 0
+                      ? 'bg-amber-100 text-amber-800 border border-amber-200'
+                      : 'bg-slate-200/80 text-slate-500'
+                  }`}
+                >
+                  {matchedSpecialRules.length > 0
+                    ? `ตั้งค่าแล้ว (${matchedSpecialRules.length} รายการ)`
+                    : 'ยังไม่ได้ตั้งค่า'}
                 </span>
               </div>
 
-              <div className="space-y-2">
-                {matchedSpecialRules.map((rule) => (
-                  <div
-                    key={rule.id}
-                    className="p-2.5 rounded-xl bg-white border border-amber-100 space-y-2"
-                  >
-                    <div className="flex items-center justify-between gap-2 text-xs">
-                      <span className="font-bold text-slate-800 truncate">
-                        {rule.name || 'ราคาพิเศษ'}
-                      </span>
-                      <span
-                        className={`px-2 py-0.5 rounded-full text-[10px] font-bold shrink-0 ${
-                          rule.target_type === 'group'
-                            ? 'bg-violet-100 text-violet-700'
-                            : 'bg-amber-100 text-amber-700'
-                        }`}
+              {matchedSpecialRules.length > 0 ? (
+                <div className="space-y-2">
+                  {matchedSpecialRules.map((rule) => {
+                    const isGroup =
+                      (rule.target_type || rule.type) === 'group';
+                    return (
+                      <div
+                        key={rule.id}
+                        className="p-2.5 rounded-xl bg-white border border-amber-100 space-y-1.5"
                       >
-                        {rule.target_type === 'group' ? 'แบบกลุ่ม' : 'แบบเดี่ยว'}
-                      </span>
-                    </div>
-
-                    <div className="grid grid-cols-2 sm:grid-cols-5 gap-1.5">
-                      {(rule.tiers || []).slice(0, 10).map((tier, idx) => (
-                        <div
-                          key={idx}
-                          className="px-2.5 py-1.5 rounded-lg bg-amber-50/60 border border-amber-100 flex items-center justify-between text-[11px]"
-                        >
-                          <span className="font-semibold text-slate-600">
-                            ≥ {tier.min_qty} {form.unit || 'ชิ้น'}
+                        <div className="flex items-center justify-between gap-2 text-[11px]">
+                          <span className="font-bold text-slate-700 truncate">
+                            {rule.name || 'ราคาพิเศษ'}
                           </span>
-                          <span className="font-extrabold text-amber-700">
-                            {formatCurrency(tier.price)}
+                          <span
+                            className={`px-2 py-0.2 rounded-full text-[10px] font-bold shrink-0 ${
+                              isGroup
+                                ? 'bg-violet-100 text-violet-700'
+                                : 'bg-amber-100 text-amber-700'
+                            }`}
+                          >
+                            {isGroup ? 'แบบกลุ่ม' : 'แบบเดี่ยว'}
                           </span>
                         </div>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
+
+                        <div className="grid grid-cols-2 gap-1.5">
+                          {(rule.tiers || []).slice(0, 10).map((tier, idx) => (
+                            <div
+                              key={idx}
+                              className="px-2 py-1 rounded-lg bg-amber-50/60 border border-amber-100 flex items-center justify-between text-[11px]"
+                            >
+                              <span className="font-semibold text-slate-600">
+                                ขั้นที่ {tier.step || tier.level || idx + 1}
+                              </span>
+                              <span className="font-extrabold text-amber-700">
+                                {formatCurrency(tier.price)}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="text-[11px] text-slate-400 py-1">
+                  ตั้งค่าราคาพิเศษแต่ละขั้นได้ที่เมนูคลังสินค้า › ราคาพิเศษ
+                </div>
+              )}
             </div>
-          )}
+          </div>
 
           {/* 4. หน่วยนับหลัก (Searchable Dropdown) และสต็อกคงเหลือ (เริ่มต้น = 0, ล็อกอัตโนมัติถ้าเป็นสินค้ารอง) */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3.5">

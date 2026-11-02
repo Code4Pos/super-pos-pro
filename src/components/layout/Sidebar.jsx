@@ -17,6 +17,7 @@ import {
   UserCog,
   Tags,
   Sparkles,
+  Truck,
 } from 'lucide-react';
 import { usePOS } from '../../context/POSContext';
 
@@ -89,6 +90,12 @@ export const SIDEBAR_MENU_GROUPS = [
         label: 'จัดการสินค้า',
         description: 'เพิ่ม/แก้ไขสินค้า ปรับสต็อก',
         icon: Boxes,
+      },
+      {
+        id: 'stock-import',
+        label: 'นำเข้าสินค้า',
+        description: 'รับสินค้าเข้าคลังจากผู้ผลิต',
+        icon: Truck,
       },
       {
         id: 'wholesale-pricing',

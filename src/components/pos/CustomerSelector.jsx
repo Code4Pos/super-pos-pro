@@ -222,7 +222,7 @@ export default function CustomerSelector({
                   }`}
                 >
                   <div className="min-w-0 pr-2">
-                    <div className="flex items-center gap-1.5">
+                    <div className="flex items-center gap-1.5 flex-wrap">
                       <span className="font-bold text-slate-900 truncate">
                         {c.name}
                       </span>
@@ -235,6 +235,11 @@ export default function CustomerSelector({
                       >
                         {isWholesale ? '⭐ ขายส่ง/ยี่ปั๊ว' : 'ขายปลีก'}
                       </span>
+                      {(Number(c.special_price_tier) || 0) > 0 && (
+                        <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-amber-100 text-amber-800">
+                          ราคาพิเศษ ขั้น {c.special_price_tier}
+                        </span>
+                      )}
                     </div>
                     <div className="text-[11px] text-slate-400 font-mono">
                       รหัส: {c.code} • โทร: {c.phone || '-'}

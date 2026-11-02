@@ -21,6 +21,7 @@ const DEFAULT_CUSTOMER_FORM = {
   name: '',
   phone: '',
   customer_type: 'wholesale',
+  special_price_tier: 0,
   shop_name: '',
   address: '',
 };
@@ -64,6 +65,7 @@ export default function CustomersPage({ onNavigateToPOS }) {
       name: cus.name || '',
       phone: cus.phone || '',
       customer_type: cus.customer_type || 'retail',
+      special_price_tier: Number(cus.special_price_tier) || 0,
       shop_name: cus.shop_name || '',
       address: cus.address || '',
     });
@@ -147,7 +149,7 @@ export default function CustomersPage({ onNavigateToPOS }) {
               <div className="space-y-3">
                 <div className="flex items-start justify-between gap-2">
                   <div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <span className="text-[11px] font-mono font-bold text-slate-400">
                         {cus.code}
                       </span>
@@ -159,9 +161,14 @@ export default function CustomersPage({ onNavigateToPOS }) {
                         }`}
                       >
                         {isWholesale
-                          ? '⭐ ลูกค้าขายส่ง (ได้เรตราคาส่งทันที)'
+                          ? '⭐ ลูกค้าขายส่ง'
                           : 'ลูกค้าขายปลีกทั่วไป'}
                       </span>
+                      {(Number(cus.special_price_tier) || 0) > 0 && (
+                        <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200">
+                          ราคาพิเศษ ขั้นที่ {cus.special_price_tier}
+                        </span>
+                      )}
                     </div>
                     <h3 className="font-bold text-slate-900 text-base mt-1">
                       {cus.name}
@@ -346,6 +353,29 @@ export default function CustomersPage({ onNavigateToPOS }) {
                     className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs"
                   />
                 </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  สิทธิราคาพิเศษ (ขั้นที่ 1 - 10)
+                </label>
+                <select
+                  value={form.special_price_tier ?? 0}
+                  onChange={(e) =>
+                    setForm({
+                      ...form,
+                      special_price_tier: Number(e.target.value) || 0,
+                    })
+                  }
+                  className="w-full px-3 py-2 rounded-xl border border-amber-300 bg-amber-50/40 text-xs font-bold text-amber-900 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                >
+                  <option value={0}>ไม่มีสิทธิราคาพิเศษ (ใช้ราคาปลีก/ส่งปกติ)</option>
+                  {Array.from({ length: 10 }, (_, i) => i + 1).map((tierNum) => (
+                    <option key={tierNum} value={tierNum}>
+                      สิทธิราคาพิเศษ ขั้นที่ {tierNum}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               <div>

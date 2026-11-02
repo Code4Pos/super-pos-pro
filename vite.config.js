@@ -14,7 +14,8 @@ export default defineConfig({
         manualChunks: {
           vendor: ['react', 'react-dom'],
           supabase: ['@supabase/supabase-js'],
-          icons: ['lucide-react']
+          icons: ['lucide-react'],
+          thaiAddress: ['./src/data/thaiAddressTree.json']
         }
       }
     }

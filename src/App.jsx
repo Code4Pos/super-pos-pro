@@ -6,6 +6,7 @@ import Header from './components/layout/Header';
 import MobileNav from './components/layout/MobileNav';
 import POSPage from './pages/POSPage';
 import InventoryPage from './pages/InventoryPage';
+import StockImportPage from './pages/StockImportPage';
 import PricingTierPage from './pages/PricingTierPage';
 import OrdersPage from './pages/OrdersPage';
 import CustomersPage from './pages/CustomersPage';
@@ -15,6 +16,7 @@ const ACTIVE_TAB_STORAGE_KEY = 'siampos_active_tab_v1';
 const VALID_TABS = new Set([
   'pos',
   'inventory',
+  'stock-import',
   'wholesale-pricing',
   'special-pricing',
   'orders',
@@ -70,6 +72,7 @@ function MainAppContent() {
         <main className="flex-1 flex overflow-hidden relative">
           {activeTab === 'pos' && <POSPage />}
           {activeTab === 'inventory' && <InventoryPage />}
+          {activeTab === 'stock-import' && <StockImportPage />}
           {activeTab === 'wholesale-pricing' && (
             <PricingTierPage key="wholesale" mode="wholesale" />
           )}

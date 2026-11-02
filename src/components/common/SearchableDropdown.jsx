@@ -42,9 +42,15 @@ export default function SearchableDropdown({
     return options.filter(
       (opt) =>
         opt.label?.toLowerCase().includes(q) ||
-        String(opt.value)?.toLowerCase().includes(q)
+        String(opt.value)?.toLowerCase().includes(q) ||
+        String(opt.badge || '')?.toLowerCase().includes(q) ||
+        String(opt.searchText || '')?.toLowerCase().includes(q)
     );
   }, [options, query]);
+
+  const visibleOptions = useMemo(() => {
+    return filteredOptions.slice(0, 120);
+  }, [filteredOptions]);
 
   const displayValue = isOpen
     ? query
@@ -54,8 +60,8 @@ export default function SearchableDropdown({
     ? String(value)
     : '';
 
-  const handleSelect = (val) => {
-    onChange(val);
+  const handleSelect = (val, optObj = null) => {
+    onChange(val, optObj);
     setQuery('');
     setIsOpen(false);
   };
@@ -64,9 +70,9 @@ export default function SearchableDropdown({
     if (e.key === 'Enter') {
       e.preventDefault();
       if (filteredOptions.length > 0) {
-        handleSelect(filteredOptions[0].value);
+        handleSelect(filteredOptions[0].value, filteredOptions[0]);
       } else if (allowCustomValue && query.trim()) {
-        handleSelect(query.trim());
+        handleSelect(query.trim(), null);
       }
     } else if (e.key === 'Escape') {
       setIsOpen(false);
@@ -156,13 +162,15 @@ export default function SearchableDropdown({
               </div>
             )
           ) : (
-            filteredOptions.map((opt) => {
-              const active = String(opt.value) === String(value);
+            visibleOptions.map((opt) => {
+              const active =
+                String(opt.value) === String(value) ||
+                (opt.label && String(opt.label) === String(value));
               return (
                 <button
                   key={opt.value}
                   type="button"
-                  onClick={() => handleSelect(opt.value)}
+                  onClick={() => handleSelect(opt.value, opt)}
                   className={`w-full px-3.5 py-2 text-left text-xs flex items-center justify-between hover:bg-indigo-50/70 transition-colors ${
                     active
                       ? 'bg-indigo-50 font-bold text-indigo-700'
@@ -171,7 +179,7 @@ export default function SearchableDropdown({
                 >
                   <span className="truncate">{opt.label}</span>
                   <div className="flex items-center gap-1.5 shrink-0 ml-2">
-                    {opt.badge !== undefined && (
+                    {opt.badge !== undefined && opt.badge !== '' && (
                       <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-600">
                         {opt.badge}
                       </span>
