@@ -222,6 +222,137 @@ export function normalizeSpecialRules(existingRules = []) {
   });
 }
 
+/**
+ * สถานะใบนำเข้าสินค้า (Stock Import)
+ * ขั้นตอน: รออนุมัติ > ระหว่างขนส่ง > นำเข้าสำเร็จ (ยกเลิกได้ก่อนนำเข้าสำเร็จ)
+ */
+export const STOCK_IMPORT_STATUS = {
+  PENDING: 'pending',
+  IN_TRANSIT: 'in_transit',
+  COMPLETED: 'completed',
+  CANCELLED: 'cancelled',
+};
+
+// สถานะถัดไปที่อนุญาตให้เปลี่ยนได้จากแต่ละสถานะ
+export const STOCK_IMPORT_TRANSITIONS = {
+  pending: ['in_transit', 'completed', 'cancelled'],
+  in_transit: ['completed', 'cancelled'],
+  completed: [],
+  cancelled: [],
+};
+
+/**
+ * เติมค่าเริ่มต้นให้ใบนำเข้า (ใบเก่าก่อน beta 0.2.1 ไม่มีสถานะ ถือว่านำเข้าสำเร็จแล้ว)
+ */
+export function normalizeStockImports(list = []) {
+  return list.map((imp) => {
+    const status = imp.status || STOCK_IMPORT_STATUS.COMPLETED;
+    return {
+      ...imp,
+      status,
+      status_history: Array.isArray(imp.status_history)
+        ? imp.status_history
+        : [{ status, at: imp.created_at }],
+    };
+  });
+}
+
+function generateImportNumber(nowIso) {
+  const datePart = nowIso.slice(2, 10).replace(/-/g, '');
+  const randPart = Math.floor(100 + Math.random() * 900);
+  return `IMP-${datePart}-${randPart}`;
+}
+
+function calculateImportTotals(items = []) {
+  return {
+    total_items: items.reduce((sum, it) => sum + (Number(it.quantity) || 0), 0),
+    total_discount: items.reduce((sum, it) => sum + (Number(it.total_discount) || 0), 0),
+    grand_total: items.reduce((sum, it) => sum + (Number(it.line_total) || 0), 0),
+  };
+}
+
+/**
+ * เพิ่มสต็อกและอัปเดตราคาต้นทุนจากรายการในใบนำเข้า
+ * พร้อมแปลงจำนวนของสินค้ารองกลับไปบวกเข้าสินค้าหลัก แล้วซิงค์สต็อกสินค้าสัมพันธ์
+ */
+async function applyImportItemsToStock(
+  items = [],
+  currentProducts = null,
+  isSupabaseActive = false,
+  nowIso = new Date().toISOString()
+) {
+  const baseProducts =
+    Array.isArray(currentProducts) && currentProducts.length > 0
+      ? currentProducts
+      : getLocal(STORAGE_KEYS.PRODUCTS, INITIAL_PRODUCTS);
+  const prodMap = new Map(baseProducts.map((p) => [p.id, p]));
+
+  const addStockByProductId = new Map();
+  const newCostByProductId = new Map();
+
+  for (const item of items) {
+    const targetProd = prodMap.get(item.product_id);
+    if (!targetProd) continue;
+    const qty = Math.max(1, Number(item.quantity) || 1);
+    const importPrice = Math.max(0, Number(item.import_price) || 0);
+
+    if (targetProd.linked_product_id) {
+      // กรณีนำเข้าสินค้ารองที่เชื่อมกับสินค้าหลัก ให้แปลงจำนวนกลับไปบวกเข้าสินค้าหลัก
+      const masterId = targetProd.linked_product_id;
+      const mult = Math.max(1, Number(targetProd.linked_deduct_qty) || 1);
+      addStockByProductId.set(
+        masterId,
+        (addStockByProductId.get(masterId) || 0) + qty * mult
+      );
+      if (importPrice > 0) {
+        newCostByProductId.set(masterId, Number((importPrice / mult).toFixed(2)));
+      }
+    } else {
+      addStockByProductId.set(
+        targetProd.id,
+        (addStockByProductId.get(targetProd.id) || 0) + qty
+      );
+      if (importPrice > 0) {
+        newCostByProductId.set(targetProd.id, importPrice);
+      }
+    }
+  }
+
+  if (isSupabaseActive && supabase) {
+    for (const [pid, addQty] of addStockByProductId.entries()) {
+      const prod = prodMap.get(pid);
+      if (prod && !String(pid).startsWith('prod-')) {
+        try {
+          const nextStock = (Number(prod.stock) || 0) + addQty;
+          const updateObj = { stock: nextStock, updated_at: nowIso };
+          if (newCostByProductId.has(pid)) {
+            updateObj.cost_price = newCostByProductId.get(pid);
+          }
+          await supabase.from('products').update(updateObj).eq('id', pid);
+        } catch {
+          // fallback local
+        }
+      }
+    }
+  }
+
+  const updatedProducts = baseProducts.map((prod) => {
+    const addQty = addStockByProductId.get(prod.id) || 0;
+    const hasNewCost = newCostByProductId.has(prod.id);
+    if (!addQty && !hasNewCost) return prod;
+    return {
+      ...prod,
+      stock: (Number(prod.stock) || 0) + addQty,
+      cost_price: hasNewCost ? newCostByProductId.get(prod.id) : prod.cost_price,
+      updated_at: nowIso,
+    };
+  });
+
+  const syncedProducts = normalizeAndSyncProducts(updatedProducts);
+  setLocal(STORAGE_KEYS.PRODUCTS, syncedProducts);
+  return syncedProducts;
+}
+
 export const posService = {
   /**
    * โหลดข้อมูลทั้งหมดของระบบตอนเปิดแอป
@@ -235,7 +366,9 @@ export const posService = {
     const rawSpecialRules = getLocal(STORAGE_KEYS.SPECIAL_RULES, []);
     const specialRules = normalizeSpecialRules(rawSpecialRules);
     const suppliers = getLocal(STORAGE_KEYS.SUPPLIERS, INITIAL_SUPPLIERS);
-    const stockImports = getLocal(STORAGE_KEYS.STOCK_IMPORTS, []);
+    const stockImports = normalizeStockImports(
+      getLocal(STORAGE_KEYS.STOCK_IMPORTS, [])
+    );
 
     if (isSupabaseConfigured && supabase) {
       try {
@@ -1513,8 +1646,9 @@ export const posService = {
   },
 
   /**
-   * บันทึกการนำเข้าสินค้าเข้าคลัง (Stock Import)
-   * เพิ่มจำนวนสต็อกสินค้า อัปเดตราคาต้นทุน และซิงค์สต็อกสินค้าสัมพันธ์อัตโนมัติ
+   * บันทึกใบนำเข้าสินค้า (Stock Import)
+   * - status 'pending' (ขออนุมัติ): บันทึกใบนำเข้าไว้ ยังไม่เพิ่มสต็อก
+   * - status 'completed' (อนุมัติทันที): เพิ่มสต็อกและอัปเดตต้นทุนทันที
    */
   async createStockImport(
     importPayload,
@@ -1522,105 +1656,39 @@ export const posService = {
     currentProducts = null
   ) {
     const nowIso = new Date().toISOString();
-    const datePart = nowIso.slice(2, 10).replace(/-/g, '');
-    const randPart = Math.floor(100 + Math.random() * 900);
-    const importNumber = `IMP-${datePart}-${randPart}`;
+    const status =
+      importPayload.status === STOCK_IMPORT_STATUS.COMPLETED
+        ? STOCK_IMPORT_STATUS.COMPLETED
+        : STOCK_IMPORT_STATUS.PENDING;
+    const items = importPayload.items || [];
 
-    const baseProducts =
-      Array.isArray(currentProducts) && currentProducts.length > 0
-        ? currentProducts
-        : getLocal(STORAGE_KEYS.PRODUCTS, INITIAL_PRODUCTS);
-    const prodMap = new Map(baseProducts.map((p) => [p.id, p]));
-
-    const addStockByProductId = new Map();
-    const newCostByProductId = new Map();
-
-    for (const item of importPayload.items || []) {
-      const targetProd = prodMap.get(item.product_id);
-      if (!targetProd) continue;
-      const qty = Math.max(1, Number(item.quantity) || 1);
-      const importPrice = Math.max(0, Number(item.import_price) || 0);
-
-      if (targetProd.linked_product_id) {
-        // กรณีนำเข้าสินค้ารองที่เชื่อมกับสินค้าหลัก ให้แปลงจำนวนกลับไปบวกเข้าสินค้าหลัก
-        const masterId = targetProd.linked_product_id;
-        const mult = Math.max(1, Number(targetProd.linked_deduct_qty) || 1);
-        addStockByProductId.set(
-          masterId,
-          (addStockByProductId.get(masterId) || 0) + qty * mult
-        );
-        if (importPrice > 0) {
-          newCostByProductId.set(masterId, Number((importPrice / mult).toFixed(2)));
-        }
-      } else {
-        addStockByProductId.set(
-          targetProd.id,
-          (addStockByProductId.get(targetProd.id) || 0) + qty
-        );
-        if (importPrice > 0) {
-          newCostByProductId.set(targetProd.id, importPrice);
-        }
-      }
+    let syncedProducts = null;
+    if (status === STOCK_IMPORT_STATUS.COMPLETED) {
+      syncedProducts = await applyImportItemsToStock(
+        items,
+        currentProducts,
+        isSupabaseActive,
+        nowIso
+      );
     }
-
-    if (isSupabaseActive && supabase) {
-      for (const [pid, addQty] of addStockByProductId.entries()) {
-        const prod = prodMap.get(pid);
-        if (prod && !String(pid).startsWith('prod-')) {
-          try {
-            const nextStock = (Number(prod.stock) || 0) + addQty;
-            const updateObj = { stock: nextStock, updated_at: nowIso };
-            if (newCostByProductId.has(pid)) {
-              updateObj.cost_price = newCostByProductId.get(pid);
-            }
-            await supabase.from('products').update(updateObj).eq('id', pid);
-          } catch {
-            // fallback local
-          }
-        }
-      }
-    }
-
-    const updatedProducts = baseProducts.map((prod) => {
-      const addQty = addStockByProductId.get(prod.id) || 0;
-      const hasNewCost = newCostByProductId.has(prod.id);
-      if (!addQty && !hasNewCost) return prod;
-      return {
-        ...prod,
-        stock: (Number(prod.stock) || 0) + addQty,
-        cost_price: hasNewCost ? newCostByProductId.get(prod.id) : prod.cost_price,
-        updated_at: nowIso,
-      };
-    });
-
-    const syncedProducts = normalizeAndSyncProducts(updatedProducts);
-    setLocal(STORAGE_KEYS.PRODUCTS, syncedProducts);
 
     const importRecord = {
       id: `imp-${Date.now()}`,
-      import_number: importNumber,
+      import_number: generateImportNumber(nowIso),
       supplier_id: importPayload.supplier?.id || null,
       supplier_name: importPayload.supplier?.name || '-',
       supplier_phone: importPayload.supplier?.phone || '',
-      items: importPayload.items || [],
-      total_items: (importPayload.items || []).reduce(
-        (sum, it) => sum + (Number(it.quantity) || 0),
-        0
-      ),
-      total_discount: (importPayload.items || []).reduce(
-        (sum, it) => sum + (Number(it.total_discount) || 0),
-        0
-      ),
-      grand_total: (importPayload.items || []).reduce(
-        (sum, it) => sum + (Number(it.line_total) || 0),
-        0
-      ),
+      items,
+      ...calculateImportTotals(items),
       note: importPayload.note || '',
+      status,
+      status_history: [{ status, at: nowIso }],
       created_at: nowIso,
+      updated_at: nowIso,
     };
 
     const existingImports = getLocal(STORAGE_KEYS.STOCK_IMPORTS, []);
-    const updatedImports = [importRecord, ...existingImports];
+    const updatedImports = normalizeStockImports([importRecord, ...existingImports]);
     setLocal(STORAGE_KEYS.STOCK_IMPORTS, updatedImports);
 
     return {
@@ -1628,6 +1696,109 @@ export const posService = {
       updatedImports,
       updatedProducts: syncedProducts,
     };
+  },
+
+  /**
+   * แก้ไขใบนำเข้าที่ยังรออนุมัติ (เปลี่ยนผู้ผลิต รายการสินค้า หรือหมายเหตุ)
+   * ถ้าส่ง status 'completed' มาด้วย จะอนุมัติและเพิ่มสต็อกทันที
+   */
+  async updateStockImport(
+    importId,
+    importPayload,
+    isSupabaseActive = false,
+    currentProducts = null
+  ) {
+    const nowIso = new Date().toISOString();
+    const existingImports = normalizeStockImports(
+      getLocal(STORAGE_KEYS.STOCK_IMPORTS, [])
+    );
+    const target = existingImports.find((imp) => imp.id === importId);
+    if (!target) throw new Error('ไม่พบใบนำเข้าที่ต้องการแก้ไข');
+    if (target.status !== STOCK_IMPORT_STATUS.PENDING) {
+      throw new Error('แก้ไขได้เฉพาะใบนำเข้าที่รออนุมัติเท่านั้น');
+    }
+
+    const items = importPayload.items || [];
+    const isApproveNow = importPayload.status === STOCK_IMPORT_STATUS.COMPLETED;
+
+    let syncedProducts = null;
+    if (isApproveNow) {
+      syncedProducts = await applyImportItemsToStock(
+        items,
+        currentProducts,
+        isSupabaseActive,
+        nowIso
+      );
+    }
+
+    const savedImport = {
+      ...target,
+      supplier_id: importPayload.supplier?.id || null,
+      supplier_name: importPayload.supplier?.name || '-',
+      supplier_phone: importPayload.supplier?.phone || '',
+      items,
+      ...calculateImportTotals(items),
+      note: importPayload.note || '',
+      status: isApproveNow ? STOCK_IMPORT_STATUS.COMPLETED : target.status,
+      status_history: isApproveNow
+        ? [...target.status_history, { status: STOCK_IMPORT_STATUS.COMPLETED, at: nowIso }]
+        : target.status_history,
+      updated_at: nowIso,
+    };
+
+    const updatedImports = existingImports.map((imp) =>
+      imp.id === importId ? savedImport : imp
+    );
+    setLocal(STORAGE_KEYS.STOCK_IMPORTS, updatedImports);
+
+    return { savedImport, updatedImports, updatedProducts: syncedProducts };
+  },
+
+  /**
+   * เปลี่ยนสถานะใบนำเข้า: รออนุมัติ > ระหว่างขนส่ง > นำเข้าสำเร็จ (หรือยกเลิก)
+   * สต็อกจะถูกเพิ่มเมื่อเปลี่ยนเป็น "นำเข้าสำเร็จ" เท่านั้น
+   */
+  async changeStockImportStatus(
+    importId,
+    nextStatus,
+    isSupabaseActive = false,
+    currentProducts = null
+  ) {
+    const nowIso = new Date().toISOString();
+    const existingImports = normalizeStockImports(
+      getLocal(STORAGE_KEYS.STOCK_IMPORTS, [])
+    );
+    const target = existingImports.find((imp) => imp.id === importId);
+    if (!target) throw new Error('ไม่พบใบนำเข้า');
+
+    const allowed = STOCK_IMPORT_TRANSITIONS[target.status] || [];
+    if (!allowed.includes(nextStatus)) {
+      throw new Error('ไม่สามารถเปลี่ยนสถานะใบนำเข้านี้ได้');
+    }
+
+    let syncedProducts = null;
+    if (nextStatus === STOCK_IMPORT_STATUS.COMPLETED) {
+      syncedProducts = await applyImportItemsToStock(
+        target.items,
+        currentProducts,
+        isSupabaseActive,
+        nowIso
+      );
+    }
+
+    const savedImport = {
+      ...target,
+      status: nextStatus,
+      status_history: [...target.status_history, { status: nextStatus, at: nowIso }],
+      updated_at: nowIso,
+    };
+
+    const updatedImports = existingImports.map((imp) =>
+      imp.id === importId ? savedImport : imp
+    );
+    setLocal(STORAGE_KEYS.STOCK_IMPORTS, updatedImports);
+
+    return { savedImport, updatedImports, updatedProducts: syncedProducts };
   },
 
   /**

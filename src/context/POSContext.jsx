@@ -3,7 +3,7 @@ import { posService, normalizeAndSyncProducts } from '../services/posService';
 import { printerService } from '../services/printerService';
 import { calculateEffectiveUnitPrice } from '../utils/formatters';
 
-export const APP_VERSION = 'version beta 0.1.9';
+export const APP_VERSION = 'version beta 0.2.1';
 const HELD_BILLS_STORAGE_KEY = 'siampos_held_bills_v1';
 
 const POSContext = createContext(null);
@@ -864,26 +864,73 @@ export function POSProvider({ children }) {
     [showToast]
   );
 
-  // บันทึกนำเข้าสินค้าเข้าคลัง (Stock Import)
-  const createStockImport = useCallback(
-    async (importPayload) => {
-      const { savedImport, updatedImports, updatedProducts } =
-        await posService.createStockImport(
-          importPayload,
-          dbMode === 'supabase',
-          products
-        );
+  // ใบนำเข้าสินค้า (Stock Import): รออนุมัติ > ระหว่างขนส่ง > นำเข้าสำเร็จ
+  // สต็อกจะเพิ่มเมื่อใบนำเข้าเปลี่ยนเป็น "นำเข้าสำเร็จ" เท่านั้น
+  const applyStockImportResult = useCallback(
+    ({ savedImport, updatedImports, updatedProducts }) => {
       setStockImports(updatedImports);
       if (updatedProducts) {
         setProducts(updatedProducts);
       }
-      showToast(
-        `นำเข้าสินค้าใบงาน ${savedImport.import_number} เข้าคลังเรียบร้อย!`,
-        'success'
-      );
+      const messages = {
+        pending: [`ส่งขออนุมัติใบนำเข้า ${savedImport.import_number} แล้ว (ยังไม่เพิ่มสต็อก)`, 'info'],
+        in_transit: [`อนุมัติใบนำเข้า ${savedImport.import_number} แล้ว สถานะ: ระหว่างขนส่ง`, 'info'],
+        completed: [`นำเข้าสินค้าใบงาน ${savedImport.import_number} เข้าคลังเรียบร้อย!`, 'success'],
+        cancelled: [`ยกเลิกใบนำเข้า ${savedImport.import_number} แล้ว`, 'warning'],
+      };
+      const [msg, type] = messages[savedImport.status] || messages.pending;
+      showToast(msg, type);
       return savedImport;
     },
-    [dbMode, products, showToast]
+    [showToast]
+  );
+
+  const createStockImport = useCallback(
+    async (importPayload) => {
+      const result = await posService.createStockImport(
+        importPayload,
+        dbMode === 'supabase',
+        products
+      );
+      return applyStockImportResult(result);
+    },
+    [dbMode, products, applyStockImportResult]
+  );
+
+  const updateStockImport = useCallback(
+    async (importId, importPayload) => {
+      try {
+        const result = await posService.updateStockImport(
+          importId,
+          importPayload,
+          dbMode === 'supabase',
+          products
+        );
+        return applyStockImportResult(result);
+      } catch (err) {
+        showToast(err.message, 'error');
+        return null;
+      }
+    },
+    [dbMode, products, applyStockImportResult, showToast]
+  );
+
+  const changeStockImportStatus = useCallback(
+    async (importId, nextStatus) => {
+      try {
+        const result = await posService.changeStockImportStatus(
+          importId,
+          nextStatus,
+          dbMode === 'supabase',
+          products
+        );
+        return applyStockImportResult(result);
+      } catch (err) {
+        showToast(err.message, 'error');
+        return null;
+      }
+    },
+    [dbMode, products, applyStockImportResult, showToast]
   );
 
   // ยกเลิกบิลและคืนสต็อก
@@ -970,6 +1017,8 @@ export function POSProvider({ children }) {
     saveSupplier,
     deleteSupplier,
     createStockImport,
+    updateStockImport,
+    changeStockImportStatus,
     voidOrder,
     refreshData,
     resetDemo,

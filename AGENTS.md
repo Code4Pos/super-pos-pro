@@ -82,4 +82,5 @@ npm run build    # ต้องผ่านก่อน commit ทุกคร�
 > ให้ agent เขียนสั้นๆ เมื่อจบงานที่ยังไม่เสร็จ หรือเมื่อมีเรื่องที่อีกฝ่ายต้องรู้ (ลบรายการที่เสร็จแล้วทิ้ง)
 > รูปแบบ: `- [YYYY-MM-DD] (Claude|Gemini) สิ่งที่ทำ / สิ่งที่ค้าง / ไฟล์ที่เกี่ยวข้อง`
 
+- [2026-11-04] (Claude) beta 0.2.1: ใบนำเข้ามี `status` (`pending` > `in_transit` > `completed` หรือ `cancelled`) สต็อกเพิ่มเมื่อเป็น `completed` เท่านั้น ใช้ `createStockImport` / `updateStockImport` / `changeStockImportStatus` ใน POSContext หน้า UI อยู่ใน `src/components/stockImport/` และ Modal ผู้ผลิตใช้ร่วมกันที่ `src/components/inventory/SupplierModal.jsx` (suppliers และ stock imports ยังเก็บใน LocalStorage อย่างเดียว)
 - [2026-11-04] (Claude) สร้าง AGENTS.md นี้ ข้อควรตรวจ: workflow deploy ฝัง Supabase publishable key ไว้เป็นค่าสำรอง ควรตรวจว่าเปิด RLS ในตาราง Supabase แล้ว

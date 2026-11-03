@@ -18,6 +18,8 @@ import {
   Tags,
   Sparkles,
   Truck,
+  Briefcase,
+  Building2,
 } from 'lucide-react';
 import { usePOS } from '../../context/POSContext';
 
@@ -147,6 +149,21 @@ export const SIDEBAR_MENU_GROUPS = [
       },
     ],
   },
+  {
+    id: 'group-management',
+    label: 'บริหาร',
+    description: 'ข้อมูลผู้ผลิต & คู่ค้า',
+    icon: Briefcase,
+    isDropdown: true,
+    children: [
+      {
+        id: 'suppliers',
+        label: 'จัดการผู้ผลิต',
+        description: 'ลงทะเบียน/แก้ไขบริษัทที่ขายของให้เรา',
+        icon: Building2,
+      },
+    ],
+  },
 ];
 
 export default function Sidebar({
@@ -162,6 +179,7 @@ export default function Sidebar({
     'group-inventory': true,
     'group-reports': true,
     'group-customers': true,
+    'group-management': true,
   });
 
   // เก็บสถานะ Popover Dropdown ในโหมดย่อแสดงเฉพาะไอคอน

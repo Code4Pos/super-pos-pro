@@ -130,6 +130,7 @@ export default function Header({
               {activeTab === 'orders' && 'รายงาน › ประวัติบิล'}
               {activeTab === 'dashboard' && 'รายงาน › แดชบอร์ด'}
               {activeTab === 'customers' && 'ลูกค้า › จัดการลูกค้า'}
+              {activeTab === 'suppliers' && 'บริหาร › จัดการผู้ผลิต'}
             </h2>
 
             {/* ป้าย Version Beta 0.1.3 */}

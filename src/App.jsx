@@ -11,6 +11,7 @@ import PricingTierPage from './pages/PricingTierPage';
 import OrdersPage from './pages/OrdersPage';
 import CustomersPage from './pages/CustomersPage';
 import DashboardPage from './pages/DashboardPage';
+import SuppliersPage from './pages/SuppliersPage';
 
 const ACTIVE_TAB_STORAGE_KEY = 'siampos_active_tab_v1';
 const VALID_TABS = new Set([
@@ -22,6 +23,7 @@ const VALID_TABS = new Set([
   'orders',
   'customers',
   'dashboard',
+  'suppliers',
 ]);
 
 function MainAppContent() {
@@ -86,6 +88,7 @@ function MainAppContent() {
           {activeTab === 'dashboard' && (
             <DashboardPage onNavigate={(tab) => setActiveTab(tab)} />
           )}
+          {activeTab === 'suppliers' && <SuppliersPage />}
         </main>
 
         {/* แถบเมนูด้านล่าง (Smartphone & Tablet Bottom Nav) */}
