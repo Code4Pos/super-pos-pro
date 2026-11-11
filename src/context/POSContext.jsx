@@ -8,7 +8,7 @@ import { hasPermission, canAccessTab } from '../utils/rbac';
 
 const SESSION_STORAGE_KEY = 'siampos_session_v1';
 
-export const APP_VERSION = 'version beta 0.3.0';
+export const APP_VERSION = 'version beta 0.3.1';
 const HELD_BILLS_STORAGE_KEY = 'siampos_held_bills_v1';
 
 const POSContext = createContext(null);
@@ -28,6 +28,7 @@ export function POSProvider({ children }) {
   const [taxInvoices, setTaxInvoices] = useState([]);
   const [taxNotes, setTaxNotes] = useState([]);
   const [stockCounts, setStockCounts] = useState([]);
+  const [productLots, setProductLots] = useState([]);
 
   // ผู้ใช้งานและสิทธิ์ (RBAC): ถ้ายังไม่มีผู้ใช้ที่เปิดใช้งาน ระบบจะเปิดทุกเมนูแบบไม่ต้องล็อกอิน
   // โหลดรายชื่อผู้ใช้จากเครื่องทันที เพื่อไม่ให้หน้าจอเปิดทุกเมนูชั่วขณะก่อนโหลดข้อมูลเสร็จ
@@ -143,6 +144,7 @@ export function POSProvider({ children }) {
       setTaxInvoices(data.taxInvoices || []);
       setTaxNotes(data.taxNotes || []);
       setStockCounts(data.stockCounts || []);
+      setProductLots(data.productLots || []);
       setUsers(data.users || []);
       setSuppliers(data.suppliers || []);
       setStockImports(data.stockImports || []);
@@ -760,6 +762,8 @@ export function POSProvider({ children }) {
         (a, b) => new Date(b.created_at) - new Date(a.created_at)
       );
     });
+    // ล็อตถูกปรับพร้อมกับการเคลื่อนไหวสต็อก (ข้อมูลในเครื่องรวมกับฐานข้อมูลแล้วตอนโหลด)
+    setProductLots(posService.getProductLots());
   }, [products]);
 
   // movementMeta: { reason, approved_by, reference_doc } สำหรับบันทึก Stock Ledger
@@ -810,6 +814,40 @@ export function POSProvider({ children }) {
       return finalTarget;
     },
     [dbMode, products, showToast]
+  );
+
+  // เปิด/ปิดการติดตาม Lot และกลยุทธ์ FEFO/FIFO ของสินค้า
+  const updateLotSettings = useCallback(
+    async (productId, settings) => {
+      const { updatedProducts, updatedLots } = await posService.updateLotSettings(
+        productId,
+        settings,
+        dbMode === 'supabase',
+        products
+      );
+      setProducts(updatedProducts);
+      setProductLots(updatedLots);
+    },
+    [dbMode, products]
+  );
+
+  // ปรับยอดล็อตรวมให้เท่าสต็อกจริงของสินค้า
+  const reconcileProductLots = useCallback(
+    async (productId) => {
+      const lots = await posService.reconcileProductLots(productId, dbMode === 'supabase', products);
+      setProductLots(lots);
+      showToast('ปรับยอดล็อตให้ตรงกับสต็อกแล้ว', 'success');
+    },
+    [dbMode, products, showToast]
+  );
+
+  const updateLotDetails = useCallback(
+    async (lotId, details) => {
+      const lots = await posService.updateLotDetails(lotId, details, dbMode === 'supabase');
+      setProductLots(lots);
+      showToast('บันทึกข้อมูลล็อตแล้ว', 'success');
+    },
+    [dbMode, showToast]
   );
 
   // ตั้งค่าจุดสั่งซื้อ (ระยะเวลารอสินค้า / สต็อกสำรอง) ของสินค้า
@@ -1428,6 +1466,10 @@ export function POSProvider({ children }) {
     taxNotes,
     createTaxNote,
     stockCounts,
+    productLots,
+    updateLotSettings,
+    reconcileProductLots,
+    updateLotDetails,
     createStockCount,
     saveStockCountProgress,
     submitStockCount,

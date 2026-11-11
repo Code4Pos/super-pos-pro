@@ -136,6 +136,13 @@ export default function ImportItemsView({
     }
   };
 
+  // สินค้า (หรือสินค้าหลักของสินค้ารอง) เปิดติดตาม Lot / วันหมดอายุหรือไม่
+  const isLotTracked = (productId) => {
+    const prod = products.find((p) => p.id === productId);
+    const master = prod?.linked_product_id ? products.find((p) => p.id === prod.linked_product_id) : prod;
+    return Boolean(master?.track_lots);
+  };
+
   const handleUpdateImportRow = (rowId, field, value) => {
     setItems((prev) =>
       prev.map((row) => (row.row_id === rowId ? { ...row, [field]: value } : row))
@@ -316,10 +323,29 @@ export default function ImportItemsView({
                     </div>
                   </td>
 
-                  {/* 2. ชื่อสินค้า */}
+                  {/* 2. ชื่อสินค้า (+ เลขล็อต/วันหมดอายุ เมื่อสินค้าหลักติดตาม Lot) */}
                   <td className="py-2.5 px-3 font-bold text-slate-900">
                     <div>{row.product_name}</div>
                     <div className="text-[10px] font-normal text-slate-400">หน่วย: {row.unit}</div>
+                    {isLotTracked(row.product_id) && (
+                      <div className="mt-1 flex items-center gap-1.5 font-normal">
+                        <input
+                          type="text"
+                          data-allow-scanner="false"
+                          value={row.lot_number || ''}
+                          onChange={(e) => handleUpdateImportRow(row.row_id, 'lot_number', e.target.value)}
+                          placeholder="เลขล็อต"
+                          className="w-24 px-2 py-1 rounded-lg border border-violet-300 bg-violet-50/40 text-[11px]"
+                        />
+                        <input
+                          type="date"
+                          value={row.expiry_date || ''}
+                          onChange={(e) => handleUpdateImportRow(row.row_id, 'expiry_date', e.target.value)}
+                          title="วันหมดอายุ"
+                          className="px-2 py-1 rounded-lg border border-violet-300 bg-violet-50/40 text-[11px]"
+                        />
+                      </div>
+                    )}
                   </td>
 
                   {/* 3. ราคาขายสินค้า */}

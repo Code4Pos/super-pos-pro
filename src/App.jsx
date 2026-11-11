@@ -18,6 +18,7 @@ import ReorderPage from './pages/ReorderPage';
 import SalesTaxReportPage from './pages/SalesTaxReportPage';
 import SettingsPage from './pages/SettingsPage';
 import StockCountPage from './pages/StockCountPage';
+import LotsPage from './pages/LotsPage';
 import LoginScreen from './components/auth/LoginScreen';
 import { SETTINGS_TABS } from './utils/rbac';
 
@@ -37,6 +38,7 @@ const VALID_TABS = new Set([
   'reorder',
   'sales-tax',
   'stock-count',
+  'lots',
   ...SETTINGS_TABS,
 ]);
 
@@ -120,6 +122,7 @@ function MainAppContent() {
           {activeTab === 'reorder' && <ReorderPage />}
           {activeTab === 'sales-tax' && <SalesTaxReportPage />}
           {activeTab === 'stock-count' && <StockCountPage />}
+          {activeTab === 'lots' && <LotsPage />}
           {SETTINGS_TABS.includes(activeTab) && <SettingsPage section={activeTab} />}
         </main>
 

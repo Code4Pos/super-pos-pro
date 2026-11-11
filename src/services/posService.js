@@ -2,6 +2,7 @@ import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { B2B_CUSTOMER_DEFAULTS, normalizeB2BFields } from '../utils/credit';
 import { calculateOrderVat, getNextTaxInvoiceNumber, getTaxInvoicePrefix } from '../utils/tax';
 import { hashPin, generateSalt } from '../utils/rbac';
+import { consumeLots, addToLots, restoreToLots, summarizeLotsByProduct } from '../utils/lots';
 import {
   INITIAL_CATEGORIES,
   INITIAL_UNITS,
@@ -26,6 +27,8 @@ const STORAGE_KEYS = {
   USERS: 'siampos_users_v1',
   TAX_NOTES: 'siampos_tax_notes_v1',
   STOCK_COUNTS: 'siampos_stock_counts_v1',
+  PRODUCT_LOTS: 'siampos_product_lots_v1',
+  LOT_CONSUMPTIONS: 'siampos_lot_consumptions_v1',
   SUPPLIERS: 'siampos_suppliers_v1',
   STOCK_IMPORTS: 'siampos_stock_imports_v1',
   ORDERS: 'siampos_orders_v1',
@@ -418,7 +421,79 @@ async function recordStockMovements(beforeProducts, afterProducts, meta, isSupab
       console.warn('Supabase stock ledger fallback:', err.message);
     }
   }
+  await syncLotsWithMovements(entries, afterProducts, meta, isSupabaseActive);
   return entries;
+}
+
+/**
+ * ปรับล็อตของสินค้าที่ติดตาม Lot ตามการเคลื่อนไหวสต็อก (ทุกจุดที่สต็อกเปลี่ยนผ่าน recordStockMovements)
+ * - สต็อกลด: ตัดล็อตตาม FEFO/FIFO และจำประวัติการตัดตามเลขที่เอกสาร
+ * - ยกเลิกบิล (VOID): คืนเข้าล็อตเดิมที่บิลนั้นตัดไป
+ * - รับสินค้าเข้า (IMPORT): สร้างล็อตตามเลขล็อต/วันหมดอายุที่ระบุในใบนำเข้า
+ * - อื่นๆ ที่สต็อกเพิ่ม: เข้า "ไม่ระบุล็อต"
+ */
+async function syncLotsWithMovements(entries, afterProducts, meta = {}, isSupabaseActive) {
+  const productMap = new Map(afterProducts.map((p) => [p.id, p]));
+  const tracked = entries.filter((e) => productMap.get(e.product_id)?.track_lots);
+  if (tracked.length === 0) return;
+
+  const nowIso = new Date().toISOString();
+  const beforeLots = getLocal(STORAGE_KEYS.PRODUCT_LOTS, []);
+  let lots = beforeLots;
+  let consumptions = getLocal(STORAGE_KEYS.LOT_CONSUMPTIONS, []);
+
+  tracked.forEach((entry) => {
+    const product = productMap.get(entry.product_id);
+    const strategy = product.lot_strategy || 'FEFO';
+    const delta = Number(entry.change_qty) || 0;
+
+    if (delta < 0) {
+      const result = consumeLots(lots, product.id, -delta, strategy, nowIso);
+      lots = result.lots;
+      if (meta.reference_doc && result.consumed.length > 0) {
+        consumptions = [
+          { reference_doc: meta.reference_doc, product_id: product.id, consumed: result.consumed, at: nowIso },
+          ...consumptions,
+        ].slice(0, MAX_LOCAL_LEDGER_ENTRIES);
+      }
+      return;
+    }
+
+    if (meta.movement_type === 'VOID') {
+      const log = consumptions.find(
+        (c) => c.reference_doc === meta.reference_doc && c.product_id === product.id
+      );
+      lots = restoreToLots(lots, product, log?.consumed || [], delta, meta, nowIso);
+      consumptions = consumptions.filter((c) => c !== log);
+      return;
+    }
+
+    let remaining = delta;
+    (meta.lotInfos?.[product.id] || []).forEach((info) => {
+      const qty = Math.min(remaining, Number(info.qty) || 0);
+      if (qty <= 0) return;
+      lots = addToLots(lots, product, qty, info, meta, nowIso);
+      remaining -= qty;
+    });
+    if (remaining > 0) lots = addToLots(lots, product, remaining, null, meta, nowIso);
+  });
+
+  setLocal(STORAGE_KEYS.PRODUCT_LOTS, lots);
+  setLocal(STORAGE_KEYS.LOT_CONSUMPTIONS, consumptions);
+  await upsertChangedLots(beforeLots, lots, isSupabaseActive);
+}
+
+// ส่งเฉพาะล็อตที่เพิ่ม/เปลี่ยนขึ้น Supabase (ตาราง product_lots ใช้ id จากฝั่งแอป)
+async function upsertChangedLots(beforeLots, afterLots, isSupabaseActive) {
+  if (!isSupabaseActive || !supabase) return;
+  const beforeById = new Map(beforeLots.map((l) => [l.id, l.updated_at]));
+  const changed = afterLots.filter((l) => beforeById.get(l.id) !== l.updated_at);
+  if (changed.length === 0) return;
+  try {
+    await supabase.from('product_lots').upsert(changed);
+  } catch (err) {
+    console.warn('Supabase product lots fallback:', err.message);
+  }
 }
 
 /**
@@ -503,6 +578,8 @@ async function applyImportItemsToStock(
 
   const addStockByProductId = new Map();
   const addValueByProductId = new Map();
+  // ข้อมูลล็อตจากใบนำเข้า (เฉพาะสินค้าหลักที่ติดตาม Lot) จำนวนเป็นหน่วยฐานของสินค้าหลัก
+  const lotInfos = {};
 
   for (const item of items) {
     const targetProd = prodMap.get(item.product_id);
@@ -521,6 +598,17 @@ async function applyImportItemsToStock(
       : 1;
     addStockByProductId.set(targetId, (addStockByProductId.get(targetId) || 0) + qty * mult);
     addValueByProductId.set(targetId, (addValueByProductId.get(targetId) || 0) + lineValue);
+    if (prodMap.get(targetId)?.track_lots && (item.lot_number || item.expiry_date)) {
+      lotInfos[targetId] = [
+        ...(lotInfos[targetId] || []),
+        {
+          lot_number: item.lot_number || '',
+          expiry_date: item.expiry_date || null,
+          qty: qty * mult,
+          cost_price: qty * mult > 0 ? lineValue / (qty * mult) : 0,
+        },
+      ];
+    }
   }
 
   const newCostByProductId = new Map();
@@ -568,7 +656,7 @@ async function applyImportItemsToStock(
   await recordStockMovements(
     baseProducts,
     syncedProducts,
-    { movement_type: 'IMPORT', reference_doc: referenceDoc },
+    { movement_type: 'IMPORT', reference_doc: referenceDoc, lotInfos },
     isSupabaseActive
   );
   return syncedProducts;
@@ -631,6 +719,8 @@ export const posService = {
                 p.linked_deduct_qty || meta.linked_deduct_qty || 1,
               lead_time_days: p.lead_time_days ?? meta.lead_time_days,
               safety_stock: p.safety_stock ?? meta.safety_stock,
+              track_lots: p.track_lots ?? meta.track_lots ?? false,
+              lot_strategy: p.lot_strategy ?? meta.lot_strategy ?? 'FEFO',
             };
           });
 
@@ -662,7 +752,7 @@ export const posService = {
         );
 
         // ยอดรับชำระหนี้ และใบวางบิล (ถ้ายังไม่มีตารางในฐานข้อมูลให้ใช้ข้อมูลในเครื่อง)
-        const [customerPayments, billingNotes, stockLedger, taxInvoices, remoteUsers, taxNotes, remoteCounts] =
+        const [customerPayments, billingNotes, stockLedger, taxInvoices, remoteUsers, taxNotes, remoteCounts, remoteLots] =
           await Promise.all([
             loadRemoteWithLocal('customer_payments', STORAGE_KEYS.CUSTOMER_PAYMENTS),
             loadRemoteWithLocal('billing_notes', STORAGE_KEYS.BILLING_NOTES),
@@ -671,9 +761,12 @@ export const posService = {
             loadRemoteWithLocal('app_users', STORAGE_KEYS.USERS),
             loadRemoteWithLocal('tax_notes', STORAGE_KEYS.TAX_NOTES, 5000),
             loadRemoteWithLocal('stock_counts', STORAGE_KEYS.STOCK_COUNTS, 500),
+            loadRemoteWithLocal('product_lots', STORAGE_KEYS.PRODUCT_LOTS, 5000),
           ]);
-        // ใบตรวจนับแก้ไขได้หลายครั้ง จึงยึดฉบับที่อัปเดตล่าสุด
+        // ใบตรวจนับและล็อตแก้ไขได้หลายครั้ง จึงยึดฉบับที่อัปเดตล่าสุด
         const stockCounts = mergeByLatestUpdate(remoteCounts, getLocal(STORAGE_KEYS.STOCK_COUNTS, []));
+        const productLots = mergeByLatestUpdate(remoteLots, getLocal(STORAGE_KEYS.PRODUCT_LOTS, []));
+        setLocal(STORAGE_KEYS.PRODUCT_LOTS, productLots);
         // ผู้ใช้จากฐานข้อมูลเป็นค่าหลัก (แก้จากเครื่องอื่นได้) เก็บสำเนาในเครื่องไว้ใช้ตอน Offline
         const users = mergeByLatestUpdate(remoteUsers, getLocal(STORAGE_KEYS.USERS, []));
         setLocal(STORAGE_KEYS.USERS, users);
@@ -691,6 +784,7 @@ export const posService = {
           taxInvoices,
           taxNotes,
           stockCounts,
+          productLots,
           users,
           suppliers,
           stockImports,
@@ -730,6 +824,7 @@ export const posService = {
       taxInvoices: getLocal(STORAGE_KEYS.TAX_INVOICES, []),
       taxNotes: getLocal(STORAGE_KEYS.TAX_NOTES, []),
       stockCounts: getLocal(STORAGE_KEYS.STOCK_COUNTS, []),
+      productLots: getLocal(STORAGE_KEYS.PRODUCT_LOTS, []),
       users: getLocal(STORAGE_KEYS.USERS, []),
       suppliers,
       stockImports,
@@ -909,6 +1004,9 @@ export const posService = {
       ...mergedProduct,
       lead_time_days: mergedProduct.lead_time_days ?? p.lead_time_days,
       safety_stock: mergedProduct.safety_stock ?? p.safety_stock,
+      // ค่าการติดตาม Lot ตั้งจากหน้า Lot / วันหมดอายุ ไม่ได้อยู่ในฟอร์มสินค้า
+      track_lots: mergedProduct.track_lots ?? p.track_lots,
+      lot_strategy: mergedProduct.lot_strategy ?? p.lot_strategy,
     });
 
     if (productData.id && updatedList.some((p) => p.id === productData.id)) {
@@ -1230,6 +1328,94 @@ export const posService = {
     const updated = baseProducts.map((p) => (p.id === productId ? { ...p, ...patch } : p));
     setLocal(STORAGE_KEYS.PRODUCTS, updated);
     return updated;
+  },
+
+  /**
+   * ล็อตสินค้าทั้งหมดที่บันทึกไว้ในเครื่อง
+   */
+  getProductLots() {
+    return getLocal(STORAGE_KEYS.PRODUCT_LOTS, []);
+  },
+
+  /**
+   * เปิด/ปิดการติดตาม Lot และตั้งกลยุทธ์ตัดสต็อก (FEFO/FIFO) ของสินค้าหลัก
+   * เปิดครั้งแรก: สต็อกเดิมทั้งหมดเข้า "ไม่ระบุล็อต" เพื่อให้ยอดล็อตรวม = สต็อก
+   */
+  async updateLotSettings(productId, settings, isSupabaseActive, currentProducts = null) {
+    const patch = {
+      track_lots: Boolean(settings.track_lots),
+      lot_strategy: settings.lot_strategy === 'FIFO' ? 'FIFO' : 'FEFO',
+    };
+    if (isSupabaseActive && supabase && !String(productId).startsWith('prod-')) {
+      try {
+        await supabase.from('products').update(patch).eq('id', productId);
+      } catch {
+        // ฐานข้อมูลยังไม่มีคอลัมน์ ใช้ค่าในเครื่องแทน
+      }
+    }
+    const baseProducts =
+      Array.isArray(currentProducts) && currentProducts.length > 0
+        ? currentProducts
+        : getLocal(STORAGE_KEYS.PRODUCTS, INITIAL_PRODUCTS);
+    const target = baseProducts.find((p) => p.id === productId);
+    const localMeta = getLocal(STORAGE_KEYS.PRODUCT_META, {});
+    localMeta[productId] = { ...(localMeta[productId] || {}), ...patch };
+    if (target?.sku) localMeta[target.sku] = { ...(localMeta[target.sku] || {}), ...patch };
+    setLocal(STORAGE_KEYS.PRODUCT_META, localMeta);
+
+    const updated = baseProducts.map((p) => (p.id === productId ? { ...p, ...patch } : p));
+    setLocal(STORAGE_KEYS.PRODUCTS, updated);
+
+    let lots = this.getProductLots();
+    if (patch.track_lots) {
+      lots = await this.reconcileProductLots(productId, isSupabaseActive, updated);
+    }
+    return { updatedProducts: updated, updatedLots: lots };
+  },
+
+  /**
+   * ปรับยอดล็อตรวมให้เท่าสต็อกจริง: ขาด = เพิ่ม "ไม่ระบุล็อต", เกิน = ตัดล็อตตามกลยุทธ์
+   */
+  async reconcileProductLots(productId, isSupabaseActive, currentProducts = null) {
+    const products =
+      Array.isArray(currentProducts) && currentProducts.length > 0
+        ? currentProducts
+        : getLocal(STORAGE_KEYS.PRODUCTS, INITIAL_PRODUCTS);
+    const product = products.find((p) => p.id === productId);
+    const beforeLots = this.getProductLots();
+    if (!product) return beforeLots;
+    const lotTotal = summarizeLotsByProduct(beforeLots).get(productId) || 0;
+    const diff = Math.round(((Number(product.stock) || 0) - lotTotal) * 10000) / 10000;
+    let lots = beforeLots;
+    if (diff > 0) {
+      lots = addToLots(lots, product, diff, null, { reference_doc: 'ปรับยอดล็อตให้ตรงสต็อก' });
+    } else if (diff < 0) {
+      lots = consumeLots(lots, productId, -diff, product.lot_strategy || 'FEFO').lots;
+    }
+    setLocal(STORAGE_KEYS.PRODUCT_LOTS, lots);
+    await upsertChangedLots(beforeLots, lots, isSupabaseActive);
+    return lots;
+  },
+
+  /**
+   * แก้ไขเลขล็อต/วันหมดอายุของล็อต (เช่น ระบุล็อตให้สต็อกที่เข้า "ไม่ระบุล็อต")
+   */
+  async updateLotDetails(lotId, details, isSupabaseActive) {
+    const beforeLots = this.getProductLots();
+    const nowIso = new Date().toISOString();
+    const lots = beforeLots.map((l) =>
+      l.id === lotId
+        ? {
+            ...l,
+            lot_number: String(details.lot_number || '').trim() || l.lot_number,
+            expiry_date: details.expiry_date || null,
+            updated_at: nowIso,
+          }
+        : l
+    );
+    setLocal(STORAGE_KEYS.PRODUCT_LOTS, lots);
+    await upsertChangedLots(beforeLots, lots, isSupabaseActive);
+    return lots;
   },
 
   /**
@@ -2570,6 +2756,8 @@ export const posService = {
     setLocal(STORAGE_KEYS.TAX_INVOICES, []);
     setLocal(STORAGE_KEYS.TAX_NOTES, []);
     setLocal(STORAGE_KEYS.STOCK_COUNTS, []);
+    setLocal(STORAGE_KEYS.PRODUCT_LOTS, []);
+    setLocal(STORAGE_KEYS.LOT_CONSUMPTIONS, []);
     setLocal(STORAGE_KEYS.SUPPLIERS, INITIAL_SUPPLIERS);
     setLocal(STORAGE_KEYS.STOCK_IMPORTS, []);
     setLocal(STORAGE_KEYS.ORDERS, INITIAL_ORDERS);

@@ -17,7 +17,7 @@ export const ROLES = {
     description: 'ยกเลิกบิล อนุมัติปรับสต็อก อนุมัติใบนำเข้า เปิดลิ้นชักฉุกเฉิน',
     tabs: [
       'pos', 'orders', 'dashboard', 'sales-tax', 'customers', 'receivables',
-      'inventory', 'stock-import', 'stock-ledger', 'stock-count', 'reorder', 'wholesale-pricing', 'special-pricing',
+      'inventory', 'stock-import', 'stock-ledger', 'stock-count', 'lots', 'reorder', 'wholesale-pricing', 'special-pricing',
       'suppliers', 'settings-printer', 'settings-payment',
     ],
     permissions: [
@@ -40,7 +40,7 @@ export const ROLES = {
   warehouse: {
     label: 'เจ้าหน้าที่คลังสินค้า',
     description: 'รับสินค้าเข้า ตรวจนับ ปรับสต็อก (ลด/กำหนดยอดต้องมีผู้อนุมัติ)',
-    tabs: ['inventory', 'stock-import', 'stock-ledger', 'stock-count', 'reorder', 'suppliers'],
+    tabs: ['inventory', 'stock-import', 'stock-ledger', 'stock-count', 'lots', 'reorder', 'suppliers'],
     permissions: ['adjust_stock'],
   },
   accountant: {

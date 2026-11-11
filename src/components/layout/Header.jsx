@@ -136,6 +136,7 @@ export default function Header({
               {activeTab === 'stock-import' && 'คลังสินค้า › นำเข้าสินค้า'}
               {activeTab === 'stock-ledger' && 'คลังสินค้า › ความเคลื่อนไหวสต็อก'}
               {activeTab === 'stock-count' && 'คลังสินค้า › ตรวจนับสต็อก'}
+              {activeTab === 'lots' && 'คลังสินค้า › Lot / วันหมดอายุ'}
               {activeTab === 'reorder' && 'คลังสินค้า › แนะนำสั่งซื้อ (PO)'}
               {activeTab === 'wholesale-pricing' && 'คลังสินค้า › ราคาขายส่ง'}
               {activeTab === 'special-pricing' && 'คลังสินค้า › ราคาพิเศษ'}

@@ -24,6 +24,7 @@ import {
   History,
   ClipboardList,
   ClipboardCheck,
+  CalendarClock,
   FileSpreadsheet,
   Settings,
   Percent,
@@ -125,6 +126,12 @@ export const SIDEBAR_MENU_GROUPS = [
         label: 'ตรวจนับสต็อก',
         description: 'นับสต็อกแบบ Blind Count และอนุมัติผลต่าง',
         icon: ClipboardCheck,
+      },
+      {
+        id: 'lots',
+        label: 'Lot / วันหมดอายุ',
+        description: 'ล็อตคงเหลือ เตือนสินค้าใกล้หมดอายุ FEFO/FIFO',
+        icon: CalendarClock,
       },
       {
         id: 'wholesale-pricing',

@@ -246,6 +246,24 @@ CREATE TABLE IF NOT EXISTS stock_counts (
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- beta 0.3.1: Lot / วันหมดอายุ (FEFO/FIFO) ล็อตเป็นบัญชีย่อยของสต็อกสินค้าหลักที่เปิด track_lots
+ALTER TABLE products ADD COLUMN IF NOT EXISTS track_lots BOOLEAN DEFAULT FALSE;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS lot_strategy TEXT DEFAULT 'FEFO' CHECK (lot_strategy IN ('FEFO', 'FIFO'));
+CREATE TABLE IF NOT EXISTS product_lots (
+  id TEXT PRIMARY KEY,
+  product_id TEXT NOT NULL,
+  product_name TEXT,
+  lot_number TEXT NOT NULL,
+  expiry_date DATE,
+  received_qty NUMERIC(12, 4) NOT NULL DEFAULT 0,
+  remaining_qty NUMERIC(12, 4) NOT NULL DEFAULT 0,
+  cost_price NUMERIC(12, 4) DEFAULT 0,
+  received_at TIMESTAMPTZ DEFAULT NOW(),
+  reference_doc TEXT,
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_product_lots_product ON product_lots (product_id, expiry_date);
+
 -- รับคืนสินค้าจากใบลดหนี้บันทึกใน Stock Ledger เป็นประเภท RETURN
 ALTER TABLE stock_ledger DROP CONSTRAINT IF EXISTS stock_ledger_movement_type_check;
 ALTER TABLE stock_ledger ADD CONSTRAINT stock_ledger_movement_type_check
@@ -292,6 +310,10 @@ ALTER TABLE tax_invoices ENABLE ROW LEVEL SECURITY;
 ALTER TABLE app_users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tax_notes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE stock_counts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE product_lots ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Allow public access to product_lots" ON product_lots;
+CREATE POLICY "Allow public access to product_lots" ON product_lots FOR ALL USING (true) WITH CHECK (true);
 
 DROP POLICY IF EXISTS "Allow public access to stock_counts" ON stock_counts;
 CREATE POLICY "Allow public access to stock_counts" ON stock_counts FOR ALL USING (true) WITH CHECK (true);
