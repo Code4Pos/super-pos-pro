@@ -28,6 +28,9 @@ const STORAGE_KEYS = {
   TAX_NOTES: 'siampos_tax_notes_v1',
   STOCK_COUNTS: 'siampos_stock_counts_v1',
   PRODUCT_LOTS: 'siampos_product_lots_v1',
+  OFFLINE_QUEUE: 'siampos_offline_queue_v1',
+  OFFLINE_FAILED: 'siampos_offline_failed_v1',
+  SUPABASE_CACHE_AT: 'siampos_supabase_cache_at_v1',
   LOT_CONSUMPTIONS: 'siampos_lot_consumptions_v1',
   SUPPLIERS: 'siampos_suppliers_v1',
   STOCK_IMPORTS: 'siampos_stock_imports_v1',
@@ -415,11 +418,7 @@ async function recordStockMovements(beforeProducts, afterProducts, meta, isSupab
   // ใช้ id เดียวกับในเครื่อง เพื่อรวมข้อมูลจากฐานข้อมูลกับในเครื่องโดยไม่ซ้ำกัน
   const remoteEntries = entries.filter((e) => !String(e.product_id).startsWith('prod-'));
   if (isSupabaseActive && supabase && remoteEntries.length > 0) {
-    try {
-      await supabase.from('stock_ledger').insert(remoteEntries);
-    } catch (err) {
-      console.warn('Supabase stock ledger fallback:', err.message);
-    }
+    await upsertOrQueue('stock_ledger', remoteEntries);
   }
   await syncLotsWithMovements(entries, afterProducts, meta, isSupabaseActive);
   return entries;
@@ -489,10 +488,106 @@ async function upsertChangedLots(beforeLots, afterLots, isSupabaseActive) {
   const beforeById = new Map(beforeLots.map((l) => [l.id, l.updated_at]));
   const changed = afterLots.filter((l) => beforeById.get(l.id) !== l.updated_at);
   if (changed.length === 0) return;
+  await upsertOrQueue('product_lots', changed);
+}
+
+// =================================================================================
+// โหมดออฟไลน์ (Offline-First): บิลขายและข้อมูลที่ใช้ id ฝั่งแอป เข้าคิวเมื่อเน็ตหลุด แล้วซิงค์ทีหลัง
+// =================================================================================
+
+export function isOnline() {
+  return typeof navigator === 'undefined' || navigator.onLine !== false;
+}
+
+// ข้อผิดพลาดที่เกิดจากเชื่อมต่อไม่ได้ (ไม่ใช่ข้อผิดพลาดของข้อมูล) ควรเก็บเข้าคิวรอซิงค์
+export function isNetworkError(err) {
+  if (!isOnline()) return true;
+  return /failed to fetch|fetch failed|network|load failed|timeout/i.test(String(err?.message || err || ''));
+}
+
+// กันการซิงค์คิวซ้อนกัน (เช่น กดปุ่มซิงค์ระหว่างที่ซิงค์อัตโนมัติ)
+let offlineFlushRunning = false;
+
+function enqueueOffline(item) {
+  const queue = getLocal(STORAGE_KEYS.OFFLINE_QUEUE, []);
+  setLocal(STORAGE_KEYS.OFFLINE_QUEUE, [
+    ...queue,
+    { ...item, id: `q-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, queued_at: new Date().toISOString() },
+  ]);
+}
+
+/**
+ * upsert ข้อมูลที่ใช้ id ฝั่งแอป (ไม่ซ้ำเมื่อส่งซ้ำ) ถ้าเชื่อมต่อไม่ได้ให้เก็บเข้าคิว
+ */
+async function upsertOrQueue(table, rows) {
+  if (!isOnline()) {
+    enqueueOffline({ kind: 'upsert', table, rows });
+    return false;
+  }
   try {
-    await supabase.from('product_lots').upsert(changed);
+    const { error } = await supabase.from(table).upsert(rows);
+    if (!error) return true;
+    if (isNetworkError(error)) enqueueOffline({ kind: 'upsert', table, rows });
+    else console.warn(`Supabase ${table} error:`, error.message);
   } catch (err) {
-    console.warn('Supabase product lots fallback:', err.message);
+    if (isNetworkError(err)) enqueueOffline({ kind: 'upsert', table, rows });
+    else console.warn(`Supabase ${table} error:`, err.message);
+  }
+  return false;
+}
+
+/**
+ * ส่งบิลขายขึ้น Supabase แล้วตัดสต็อกจากยอดล่าสุดในฐานข้อมูล (ไม่ใช้ค่าที่แคชไว้)
+ * - ฐานข้อมูลที่ยังไม่ได้รัน Migration: ลองบันทึกแบบเดิม (ไม่มี payments / credit_due_date / created_by_name)
+ * คืนค่า { ok, networkError }
+ */
+async function pushOrderToSupabase(orderData, deductions = []) {
+  try {
+    let { data: savedOrder, error: orderError } = await supabase
+      .from('orders')
+      .insert([orderData])
+      .select()
+      .single();
+
+    if (orderError && isNetworkError(orderError)) return { ok: false, networkError: true };
+    if (orderError?.code === '23505') return { ok: true }; // เลขที่บิลนี้ถูกบันทึกไปแล้ว (ซิงค์ซ้ำ)
+
+    if (orderError) {
+      const payments = Array.isArray(orderData.payments) ? orderData.payments : [];
+      const mainPayment = [...payments].sort((a, b) => b.amount - a.amount)[0];
+      const legacyOrderData = { ...orderData };
+      delete legacyOrderData.payments;
+      delete legacyOrderData.credit_due_date;
+      delete legacyOrderData.created_by_name;
+      legacyOrderData.payment_method =
+        orderData.payment_method === 'split' ? mainPayment?.method || 'cash' : orderData.payment_method;
+      ({ data: savedOrder, error: orderError } = await supabase
+        .from('orders')
+        .insert([legacyOrderData])
+        .select()
+        .single());
+      if (orderError && isNetworkError(orderError)) return { ok: false, networkError: true };
+    }
+    if (orderError || !savedOrder) {
+      console.warn('Supabase order error:', orderError?.message);
+      return { ok: false, networkError: false };
+    }
+
+    const ids = deductions.map(([id]) => id);
+    if (ids.length > 0) {
+      const { data: rows } = await supabase.from('products').select('id, stock').in('id', ids);
+      const deductById = new Map(deductions);
+      const nowIso = new Date().toISOString();
+      for (const row of rows || []) {
+        await supabase
+          .from('products')
+          .update({ stock: Math.max(0, (Number(row.stock) || 0) - deductById.get(row.id)), updated_at: nowIso })
+          .eq('id', row.id);
+      }
+    }
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, networkError: isNetworkError(err) };
   }
 }
 
@@ -679,8 +774,11 @@ export const posService = {
       getLocal(STORAGE_KEYS.STOCK_IMPORTS, [])
     );
 
+    let offlineFallback = false;
     if (isSupabaseConfigured && supabase) {
       try {
+        // ซิงค์บิลที่ค้างจากตอนออฟไลน์ก่อน เพื่อให้ข้อมูลที่โหลดมาเป็นยอดล่าสุด
+        await this.flushOfflineQueue();
         const [catRes, prodRes, cusRes, ordRes] = await Promise.all([
           supabase.from('categories').select('*').order('created_at', { ascending: true }),
           supabase.from('products').select('*').order('name', { ascending: true }),
@@ -770,6 +868,11 @@ export const posService = {
         // ผู้ใช้จากฐานข้อมูลเป็นค่าหลัก (แก้จากเครื่องอื่นได้) เก็บสำเนาในเครื่องไว้ใช้ตอน Offline
         const users = mergeByLatestUpdate(remoteUsers, getLocal(STORAGE_KEYS.USERS, []));
         setLocal(STORAGE_KEYS.USERS, users);
+        // เก็บสำเนาข้อมูลจริงไว้ในเครื่อง เปิดแอปตอนเน็ตหลุดจะใช้แคชนี้แทนข้อมูลสาธิต
+        if (categories.length > 1) setLocal(STORAGE_KEYS.CATEGORIES, categories);
+        setLocal(STORAGE_KEYS.CUSTOMERS, cusRes.data || []);
+        setLocal(STORAGE_KEYS.ORDERS, ordRes.data || []);
+        setLocal(STORAGE_KEYS.SUPABASE_CACHE_AT, new Date().toISOString());
 
         return {
           mode: 'supabase',
@@ -793,11 +896,18 @@ export const posService = {
           specialRules,
         };
       } catch (err) {
-        console.warn('Supabase connection error, falling back to Demo Mode:', err.message);
+        // เน็ตหลุดและเคยโหลดข้อมูลจริงไว้แล้ว = ทำงานต่อด้วยข้อมูลในเครื่อง (ยังเป็นโหมด Supabase แต่ออฟไลน์)
+        offlineFallback = isNetworkError(err) && Boolean(getLocal(STORAGE_KEYS.SUPABASE_CACHE_AT, null));
+        console.warn(
+          offlineFallback
+            ? 'Supabase offline, using cached data:'
+            : 'Supabase connection error, falling back to Demo Mode:',
+          err.message
+        );
       }
     }
 
-    // Fallback: โหมดสาธิต (LocalStorage)
+    // Fallback: ข้อมูลในเครื่อง (โหมดสาธิต หรือแคชของโหมด Supabase ตอนออฟไลน์)
     const rawProducts = getLocal(STORAGE_KEYS.PRODUCTS, INITIAL_PRODUCTS);
     const normalized = normalizeAndSyncProducts(rawProducts);
     setLocal(STORAGE_KEYS.PRODUCTS, normalized);
@@ -812,7 +922,8 @@ export const posService = {
     );
 
     return {
-      mode: 'demo',
+      mode: offlineFallback ? 'supabase' : 'demo',
+      offline: offlineFallback,
       categories: getLocal(STORAGE_KEYS.CATEGORIES, INITIAL_CATEGORIES),
       units: localUnits,
       products: normalized,
@@ -1328,6 +1439,59 @@ export const posService = {
     const updated = baseProducts.map((p) => (p.id === productId ? { ...p, ...patch } : p));
     setLocal(STORAGE_KEYS.PRODUCTS, updated);
     return updated;
+  },
+
+  /**
+   * รายการที่รอซิงค์ขึ้น Supabase (บันทึกตอนออฟไลน์)
+   */
+  getOfflineQueue() {
+    return getLocal(STORAGE_KEYS.OFFLINE_QUEUE, []);
+  },
+
+  /**
+   * ซิงค์คิวออฟไลน์ขึ้น Supabase ตามลำดับ หยุดทันทีเมื่อยังเชื่อมต่อไม่ได้ (ทำต่อรอบหน้า)
+   * รายการที่ผิดพลาดจากข้อมูล (ไม่ใช่เน็ต) จะถูกย้ายไปเก็บแยกเพื่อไม่ให้คิวค้าง
+   * คืนค่า { synced, remaining, failed }
+   */
+  async flushOfflineQueue() {
+    const queue = this.getOfflineQueue();
+    if (!supabase || queue.length === 0 || !isOnline() || offlineFlushRunning) {
+      return { synced: 0, remaining: queue.length, failed: 0 };
+    }
+    offlineFlushRunning = true;
+    try {
+    let synced = 0;
+    let failed = 0;
+    let index = 0;
+    for (; index < queue.length; index += 1) {
+      const item = queue[index];
+      let result;
+      if (item.kind === 'order') {
+        result = await pushOrderToSupabase(item.order, item.deductions || []);
+      } else {
+        try {
+          const { error } = await supabase.from(item.table).upsert(item.rows);
+          result = { ok: !error, networkError: error ? isNetworkError(error) : false };
+        } catch (err) {
+          result = { ok: false, networkError: isNetworkError(err) };
+        }
+      }
+      if (result.networkError) break;
+      if (result.ok) synced += 1;
+      else {
+        failed += 1;
+        const failedItems = getLocal(STORAGE_KEYS.OFFLINE_FAILED, []);
+        setLocal(STORAGE_KEYS.OFFLINE_FAILED, [...failedItems, { ...item, failed_at: new Date().toISOString() }]);
+      }
+    }
+    // รายการที่เข้าคิวเพิ่มระหว่างซิงค์ (ต่อท้ายคิว) ต้องเก็บไว้ด้วย
+    const addedDuringFlush = this.getOfflineQueue().slice(queue.length);
+    const remaining = [...queue.slice(index), ...addedDuringFlush];
+    setLocal(STORAGE_KEYS.OFFLINE_QUEUE, remaining);
+    return { synced, remaining: remaining.length, failed };
+    } finally {
+      offlineFlushRunning = false;
+    }
   },
 
   /**
@@ -2069,54 +2233,22 @@ export const posService = {
     }
 
     if (isSupabaseActive && supabase) {
-      try {
-        const supabaseOrderData = {
-          ...fullOrder,
-          customer_id:
-            fullOrder.customer_id && !String(fullOrder.customer_id).startsWith('cus-')
-              ? fullOrder.customer_id
-              : null,
-        };
-
-        let { data: savedOrder, error: orderError } = await supabase
-          .from('orders')
-          .insert([supabaseOrderData])
-          .select()
-          .single();
-
-        // ฐานข้อมูลที่ยังไม่ได้รัน Migration (ไม่มีคอลัมน์ payments / ไม่รองรับ 'split')
-        // ให้บันทึกแบบเดิมโดยใช้ช่องทางที่ยอดชำระมากที่สุดเป็นวิธีชำระหลัก
-        if (orderError) {
-          const mainPayment = [...fullOrder.payments].sort((a, b) => b.amount - a.amount)[0];
-          const legacyOrderData = { ...supabaseOrderData };
-          delete legacyOrderData.payments;
-          delete legacyOrderData.credit_due_date;
-          delete legacyOrderData.created_by_name;
-          legacyOrderData.payment_method =
-            fullOrder.payment_method === 'split'
-              ? mainPayment?.method || 'cash'
-              : fullOrder.payment_method;
-          ({ data: savedOrder, error: orderError } = await supabase
-            .from('orders')
-            .insert([legacyOrderData])
-            .select()
-            .single());
-        }
-
-        if (!orderError && savedOrder) {
-          for (const [targetId, deductQty] of deductionByProductId.entries()) {
-            const targetProd = prodMap.get(targetId);
-            if (targetProd && !String(targetId).startsWith('prod-')) {
-              const newStock = Math.max(0, (Number(targetProd.stock) || 0) - deductQty);
-              await supabase
-                .from('products')
-                .update({ stock: newStock, updated_at: nowIso })
-                .eq('id', targetId);
-            }
-          }
-        }
-      } catch (err) {
-        console.warn('Supabase order error:', err.message);
+      const supabaseOrderData = {
+        ...fullOrder,
+        customer_id:
+          fullOrder.customer_id && !String(fullOrder.customer_id).startsWith('cus-')
+            ? fullOrder.customer_id
+            : null,
+      };
+      const deductions = [...deductionByProductId.entries()].filter(
+        ([targetId]) => !String(targetId).startsWith('prod-')
+      );
+      // ออฟไลน์หรือเน็ตหลุด: เก็บบิลเข้าคิวไว้ซิงค์ทีหลัง หน้าร้านขายต่อได้ทันที
+      const result = isOnline()
+        ? await pushOrderToSupabase(supabaseOrderData, deductions)
+        : { ok: false, networkError: true };
+      if (!result.ok && result.networkError) {
+        enqueueOffline({ kind: 'order', order: supabaseOrderData, deductions });
       }
     }
 

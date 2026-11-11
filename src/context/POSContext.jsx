@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useMemo, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { posService, normalizeAndSyncProducts } from '../services/posService';
 import { printerService } from '../services/printerService';
 import { calculateEffectiveUnitPrice } from '../utils/formatters';
@@ -8,7 +8,7 @@ import { hasPermission, canAccessTab } from '../utils/rbac';
 
 const SESSION_STORAGE_KEY = 'siampos_session_v1';
 
-export const APP_VERSION = 'version beta 0.3.1';
+export const APP_VERSION = 'version beta 0.3.2';
 const HELD_BILLS_STORAGE_KEY = 'siampos_held_bills_v1';
 
 const POSContext = createContext(null);
@@ -16,6 +16,10 @@ const POSContext = createContext(null);
 export function POSProvider({ children }) {
   const [dbMode, setDbMode] = useState('demo');
   const [loading, setLoading] = useState(true);
+  // โหมดออฟไลน์: เน็ตหลุด หรือเปิดแอปด้วยแคชเพราะเชื่อม Supabase ไม่ได้
+  const [isOffline, setIsOffline] = useState(() => typeof navigator !== 'undefined' && navigator.onLine === false);
+  const [pendingSyncCount, setPendingSyncCount] = useState(() => posService.getOfflineQueue().length);
+  const [syncing, setSyncing] = useState(false);
 
   const [categories, setCategories] = useState([]);
   const [units, setUnits] = useState([]);
@@ -133,6 +137,8 @@ export function POSProvider({ children }) {
     try {
       const data = await posService.fetchAllData();
       setDbMode(data.mode);
+      setIsOffline(Boolean(data.offline) || (typeof navigator !== 'undefined' && navigator.onLine === false));
+      setPendingSyncCount(posService.getOfflineQueue().length);
       setCategories(data.categories);
       setUnits(data.units || []);
       setProducts(data.products);
@@ -590,6 +596,8 @@ export function POSProvider({ children }) {
         orderPayload,
         dbMode === 'supabase'
       );
+      // บิลที่บันทึกตอนออฟไลน์จะเข้าคิวรอซิงค์
+      setPendingSyncCount(posService.getOfflineQueue().length);
       const enrichedSavedOrder = {
         ...savedOrder,
         vat_mode: vatMode,
@@ -1308,6 +1316,59 @@ export function POSProvider({ children }) {
     [products, dbMode, showToast]
   );
 
+  // ซิงค์รายการที่ค้างตอนออฟไลน์ขึ้น Supabase แล้วโหลดข้อมูลล่าสุด
+  const syncNow = useCallback(
+    async ({ silent = false } = {}) => {
+      if (syncing) return;
+      setSyncing(true);
+      try {
+        const result = await posService.flushOfflineQueue();
+        setPendingSyncCount(result.remaining);
+        if (result.synced > 0 || result.failed > 0 || dbMode !== 'supabase' || isOffline) {
+          await refreshData();
+        }
+        if (!silent || result.synced > 0) {
+          if (result.remaining > 0) {
+            showToast(`ยังเชื่อมต่อไม่ได้ ค้างซิงค์ ${result.remaining} รายการ`, 'warning');
+          } else if (result.failed > 0) {
+            showToast(`ซิงค์ไม่สำเร็จ ${result.failed} รายการ (เก็บไว้ในเครื่อง)`, 'error');
+          } else if (result.synced > 0) {
+            showToast(`ซิงค์ข้อมูลขึ้นระบบแล้ว ${result.synced} รายการ`, 'success');
+          } else if (!silent) {
+            showToast('ข้อมูลเป็นปัจจุบันแล้ว', 'info');
+          }
+        }
+      } finally {
+        setSyncing(false);
+      }
+    },
+    [syncing, dbMode, isOffline, refreshData, showToast]
+  );
+
+  // ติดตามสถานะเน็ต: กลับมาออนไลน์ให้ซิงค์อัตโนมัติ
+  const syncNowRef = useRef(syncNow);
+  syncNowRef.current = syncNow;
+  useEffect(() => {
+    const handleOnline = () => {
+      setIsOffline(false);
+      syncNowRef.current({ silent: true });
+    };
+    const handleOffline = () => setIsOffline(true);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    // ตรวจคิวทุก 1 นาที เผื่อเน็ตกลับมาโดยไม่มี event
+    const timer = setInterval(() => {
+      const queued = posService.getOfflineQueue().length;
+      setPendingSyncCount(queued);
+      if (queued > 0 && navigator.onLine !== false) syncNowRef.current({ silent: true });
+    }, 60000);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+      clearInterval(timer);
+    };
+  }, []);
+
   const resetDemo = useCallback(async () => {
     posService.resetDemoData();
     await refreshData();
@@ -1392,6 +1453,10 @@ export function POSProvider({ children }) {
 
   const value = {
     appVersion: APP_VERSION,
+    isOffline,
+    pendingSyncCount,
+    syncing,
+    syncNow,
     users,
     currentUser,
     authEnabled,

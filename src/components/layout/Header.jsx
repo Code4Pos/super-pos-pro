@@ -12,6 +12,8 @@ import {
   Settings,
   LogOut,
   UserCircle2,
+  WifiOff,
+  CloudUpload,
 } from 'lucide-react';
 import { usePOS } from '../../context/POSContext';
 import { formatCurrency } from '../../utils/formatters';
@@ -27,6 +29,10 @@ export default function Header({
     orders,
     products,
     dbMode,
+    isOffline,
+    pendingSyncCount,
+    syncing,
+    syncNow,
     refreshData,
     loading,
     appVersion,
@@ -191,6 +197,37 @@ export default function Header({
             </div>
           </div>
         </button>
+
+        {/* สถานะออฟไลน์ / รายการรอซิงค์ขึ้นฐานข้อมูล (กดเพื่อซิงค์ทันที) */}
+        {(isOffline || pendingSyncCount > 0) && (
+          <button
+            type="button"
+            onClick={() => syncNow()}
+            disabled={syncing}
+            className={`flex items-center gap-1 px-2.5 py-1.5 rounded-xl border text-xs font-semibold disabled:opacity-60 ${
+              isOffline
+                ? 'bg-rose-50 hover:bg-rose-100 text-rose-700 border-rose-200'
+                : 'bg-sky-50 hover:bg-sky-100 text-sky-700 border-sky-200'
+            }`}
+            title={
+              isOffline
+                ? 'ออฟไลน์: บิลจะถูกเก็บไว้ในเครื่องแล้วซิงค์เมื่อกลับมาออนไลน์'
+                : 'กดเพื่อซิงค์ข้อมูลที่ค้างขึ้นระบบ'
+            }
+          >
+            {isOffline ? (
+              <WifiOff className="w-3.5 h-3.5 shrink-0" />
+            ) : (
+              <CloudUpload className="w-3.5 h-3.5 shrink-0" />
+            )}
+            <span className="hidden sm:inline">
+              {isOffline ? 'ออฟไลน์' : syncing ? 'กำลังซิงค์' : 'รอซิงค์'}
+            </span>
+            {pendingSyncCount > 0 && (
+              <span className="px-1.5 bg-white/80 rounded font-bold">{pendingSyncCount}</span>
+            )}
+          </button>
+        )}
 
         {lowStockCount > 0 && (
           <button
