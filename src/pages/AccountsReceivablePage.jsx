@@ -4,6 +4,7 @@ import { usePOS } from '../context/POSContext';
 import { printerService } from '../services/printerService';
 import BillingNoteModal from '../components/customers/BillingNoteModal';
 import CustomerPaymentModal from '../components/customers/CustomerPaymentModal';
+import PaymentHistoryView from '../components/customers/PaymentHistoryView';
 import { AGING_BUCKETS, calculateAgingReport, getBillingNoteStatus } from '../utils/credit';
 import { formatCurrency, formatDateTime, formatNumber } from '../utils/formatters';
 
@@ -14,7 +15,7 @@ import { formatCurrency, formatDateTime, formatNumber } from '../utils/formatter
  */
 export default function AccountsReceivablePage() {
   const { customers, orders, customerPayments, billingNotes, can } = usePOS();
-  const [viewMode, setViewMode] = useState('aging'); // 'aging' | 'billing'
+  const [viewMode, setViewMode] = useState('aging'); // 'aging' | 'billing' | 'payments'
   const [billingCustomer, setBillingCustomer] = useState(null);
   const [paymentCustomer, setPaymentCustomer] = useState(null);
 
@@ -50,10 +51,11 @@ export default function AccountsReceivablePage() {
               <p className="text-xs text-slate-500">อายุลูกหนี้นับจากวันที่ออกบิล</p>
             </div>
           </div>
-          <div className="flex items-center bg-slate-100 p-1 rounded-xl border border-slate-200">
+          <div className="flex items-center bg-slate-100 p-1 rounded-xl border border-slate-200 overflow-x-auto whitespace-nowrap">
             {[
               { id: 'aging', label: 'อายุลูกหนี้ (Aging)', icon: Users },
               { id: 'billing', label: `ใบวางบิล (${billingNotes.length})`, icon: FileText },
+              { id: 'payments', label: `ประวัติรับชำระ (${customerPayments.length})`, icon: Wallet },
             ].map((t) => {
               const Icon = t.icon;
               return (
@@ -194,6 +196,8 @@ export default function AccountsReceivablePage() {
             )}
           </table>
         </div>
+      ) : viewMode === 'payments' ? (
+        <PaymentHistoryView />
       ) : (
         <div className="flex-1 bg-white rounded-2xl border border-slate-200 overflow-auto shadow-2xs">
           <table className="w-full text-left border-collapse min-w-[760px] text-xs">

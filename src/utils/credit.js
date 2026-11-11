@@ -197,3 +197,36 @@ export function getBillingNoteStatus(note, customer, orders = [], customerPaymen
     .reduce((sum, b) => sum + b.remaining, 0);
   return { paid: remaining <= 0.001, remaining: Math.round(remaining * 100) / 100 };
 }
+
+/**
+ * จับคู่ยอดรับชำระแต่ละครั้งกับบิลเครดิตที่ถูกตัดชำระ (FIFO: รับชำระก่อน ตัดบิลเก่าก่อน)
+ * คืนค่า Map: paymentId => [{ order_number, amount }]
+ */
+export function allocatePaymentsToBills(customer, orders = [], customerPayments = []) {
+  const allocation = new Map();
+  if (!customer) return allocation;
+  const bills = orders
+    .filter((o) => o.customer_id === customer.id)
+    .map((o) => ({ order_number: o.order_number, created_at: o.created_at, left: getOrderCreditAmount(o) }))
+    .filter((b) => b.left > 0)
+    .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+  const payments = customerPayments
+    .filter((p) => p.customer_id === customer.id)
+    .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+
+  let billIdx = 0;
+  payments.forEach((p) => {
+    let remaining = Number(p.amount) || 0;
+    const parts = [];
+    while (remaining > 0.001 && billIdx < bills.length) {
+      const bill = bills[billIdx];
+      const used = Math.min(bill.left, remaining);
+      parts.push({ order_number: bill.order_number, amount: Math.round(used * 100) / 100 });
+      bill.left -= used;
+      remaining -= used;
+      if (bill.left <= 0.001) billIdx += 1;
+    }
+    allocation.set(p.id, parts);
+  });
+  return allocation;
+}

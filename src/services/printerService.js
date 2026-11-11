@@ -1183,7 +1183,102 @@ function buildTaxNoteHtml(note, settings, copyLabel) {
 </html>`;
 }
 
+/**
+ * ใบเสร็จรับเงิน (รับชำระหนี้) ขนาด A4 พร้อมรายการบิลที่ถูกตัดชำระ
+ */
+function buildPaymentReceiptHtml(payment, customer, allocations, settings) {
+  const methodLabel = PAYMENT_LABELS[payment.method] || payment.method;
+  const rowsHtml = (allocations || [])
+    .map(
+      (a, idx) => `
+      <tr>
+        <td style="text-align:center;">${idx + 1}</td>
+        <td style="font-family:monospace;">${escapeHtml(a.order_number)}</td>
+        <td style="text-align:right;">${formatCurrency(a.amount)}</td>
+      </tr>`
+    )
+    .join('');
+
+  return `<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8" />
+  <title>ใบเสร็จรับเงิน - ${escapeHtml(payment.receipt_number)}</title>
+  <link href="https://fonts.googleapis.com/css2?family=Prompt:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    @page { size: A4 portrait; margin: 14mm; }
+    * { box-sizing: border-box; }
+    body { font-family: 'Prompt', sans-serif; font-size: 13px; color: #0f172a; margin: 0; }
+    .header { display: flex; justify-content: space-between; border-bottom: 2px solid #1e293b; padding-bottom: 10px; margin-bottom: 14px; }
+    .title { font-size: 20px; font-weight: 700; text-align: right; }
+    .box { border: 1px solid #cbd5e1; border-radius: 6px; padding: 10px 12px; }
+    .grid { display: grid; grid-template-columns: 1.4fr 1fr; gap: 12px; margin-bottom: 14px; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { border: 1px solid #cbd5e1; padding: 7px 8px; }
+    th { background: #f1f5f9; font-weight: 600; }
+    .total td { font-weight: 700; font-size: 15px; background: #f8fafc; }
+    .sign { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; margin-top: 56px; text-align: center; }
+    .sign div { border-top: 1px dotted #475569; padding-top: 6px; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div>
+      <div style="font-size:18px;font-weight:700;">${escapeHtml(settings.shopName)}</div>
+      <div>${escapeHtml(settings.shopAddress)}</div>
+      <div>โทร. ${escapeHtml(settings.shopPhone)}</div>
+    </div>
+    <div style="text-align:right;">
+      <div class="title">ใบเสร็จรับเงิน</div>
+      <div>RECEIPT (รับชำระหนี้)</div>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="box">
+      <div><strong>ได้รับเงินจาก:</strong> ${escapeHtml(payment.customer_name || customer?.name || '-')}</div>
+      ${customer?.tax_id ? `<div><strong>เลขประจำตัวผู้เสียภาษี:</strong> ${escapeHtml(customer.tax_id)} (${formatBranch(customer.branch_number)})</div>` : ''}
+      ${customer?.address ? `<div><strong>ที่อยู่:</strong> ${escapeHtml(customer.address)}</div>` : ''}
+    </div>
+    <div class="box">
+      <div><strong>เลขที่:</strong> <span style="font-family:monospace;font-weight:700;">${escapeHtml(payment.receipt_number)}</span></div>
+      <div><strong>วันที่:</strong> ${formatDateOnly(payment.created_at)}</div>
+      <div><strong>ชำระโดย:</strong> ${escapeHtml(methodLabel)}</div>
+    </div>
+  </div>
+
+  <table>
+    <thead>
+      <tr><th style="width:60px;">ลำดับ</th><th>ชำระบิลเลขที่</th><th style="width:160px;">จำนวนเงิน</th></tr>
+    </thead>
+    <tbody>
+      ${rowsHtml || '<tr><td colspan="3" style="text-align:center;color:#64748b;">ชำระล่วงหน้า / ไม่มีบิลค้าง</td></tr>'}
+      <tr class="total">
+        <td colspan="2" style="text-align:right;">รวมรับชำระ <span style="font-weight:400;font-size:12px;">(${bahtText(payment.amount)})</span></td>
+        <td style="text-align:right;">${formatCurrency(payment.amount)}</td>
+      </tr>
+    </tbody>
+  </table>
+  ${payment.note ? `<div class="box" style="margin-top:12px;"><strong>หมายเหตุ:</strong> ${escapeHtml(payment.note)}</div>` : ''}
+
+  <div class="sign">
+    <div>ผู้รับเงิน</div>
+    <div>ผู้จ่ายเงิน</div>
+  </div>
+</body>
+</html>`;
+}
+
 export const printerService = {
+  /**
+   * พิมพ์ใบเสร็จรับชำระหนี้ ขนาด A4
+   */
+  printPaymentReceipt(payment, customer = null, allocations = []) {
+    if (!payment) return false;
+    printHtmlViaHiddenIframe(buildPaymentReceiptHtml(payment, customer, allocations, this.getSettings()));
+    return true;
+  },
+
   /**
    * พิมพ์ใบลดหนี้ / ใบเพิ่มหนี้ ขนาด A4
    */
