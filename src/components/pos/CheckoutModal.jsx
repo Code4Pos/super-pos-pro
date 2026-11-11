@@ -9,16 +9,21 @@ import {
   Delete,
   RotateCcw,
   AlertCircle,
+  Split,
 } from 'lucide-react';
 import { usePOS } from '../../context/POSContext';
 import CustomerSelector from './CustomerSelector';
+import PromptPayQR from './PromptPayQR';
+import SplitPaymentPanel, { createSplitLine } from './SplitPaymentPanel';
 import { formatCurrency } from '../../utils/formatters';
+import { summarizeSplitPayments } from '../../utils/payments';
 
 const PAYMENT_TABS = [
   { id: 'cash', label: 'เงินสด', icon: Banknote },
   { id: 'promptpay', label: 'QR PromptPay', icon: QrCode },
   { id: 'transfer', label: 'โอนธนาคาร', icon: Building2 },
   { id: 'credit', label: 'เครดิต', icon: Handshake },
+  { id: 'split', label: 'แบ่งจ่าย', icon: Split },
 ];
 
 /**
@@ -38,6 +43,7 @@ export default function CheckoutModal({ isOpen, onClose, onOrderSuccess }) {
   const [isFresh, setIsFresh] = useState(true);
   const [note, setNote] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [splitLines, setSplitLines] = useState([]);
 
   useEffect(() => {
     if (isOpen) {
@@ -45,6 +51,7 @@ export default function CheckoutModal({ isOpen, onClose, onOrderSuccess }) {
       setCashStr('0');
       setIsFresh(true);
       setNote('');
+      setSplitLines([createSplitLine('cash'), createSplitLine('promptpay')]);
     }
   }, [isOpen]);
 
@@ -91,9 +98,15 @@ export default function CheckoutModal({ isOpen, onClose, onOrderSuccess }) {
   const numericCash = parseFloat(cashStr) || 0;
   const changeAmount = Math.max(0, numericCash - grandTotal);
 
+  const isSplit = paymentMethod === 'split';
+  const splitSummary = summarizeSplitPayments(splitLines, grandTotal);
+  const splitHasCredit = splitLines.some((l) => l.method === 'credit' && Number(l.amount) > 0);
+
   const isCashValid = paymentMethod !== 'cash' || numericCash >= grandTotal;
-  const isCreditValid = paymentMethod !== 'credit' || Boolean(selectedCustomer);
-  const canSubmit = isCashValid && isCreditValid && !submitting;
+  const isCreditValid =
+    (paymentMethod !== 'credit' && !(isSplit && splitHasCredit)) || Boolean(selectedCustomer);
+  const isSplitValid = !isSplit || splitSummary.isComplete;
+  const canSubmit = isCashValid && isCreditValid && isSplitValid && !submitting;
 
   const handleConfirmCheckout = async (e) => {
     if (e) e.preventDefault();
@@ -105,6 +118,9 @@ export default function CheckoutModal({ isOpen, onClose, onOrderSuccess }) {
         payment_method: paymentMethod,
         cash_received: paymentMethod === 'cash' ? numericCash : grandTotal,
         note,
+        payments: isSplit
+          ? splitLines.map((l) => ({ method: l.method, amount: Number(l.amount) || 0 }))
+          : null,
       });
       if (savedOrder) {
         onClose();
@@ -139,9 +155,9 @@ export default function CheckoutModal({ isOpen, onClose, onOrderSuccess }) {
         </div>
 
         {/* เนื้อหาหลัก ไม่มี Scrollbar แนวตั้ง */}
-        <div className="p-3 sm:p-4 space-y-3 overflow-hidden flex-1 flex flex-col justify-between">
+        <div className="p-3 sm:p-4 space-y-3 overflow-y-auto flex-1 flex flex-col justify-between">
           {/* แถบเมนูเลือกวิธีชำระเงินแถวเดียว (Single-Row Tabs) */}
-          <div className="grid grid-cols-4 gap-1.5 p-1 rounded-2xl bg-slate-100 border border-slate-200 shrink-0">
+          <div className="grid grid-cols-5 gap-1 sm:gap-1.5 p-1 rounded-2xl bg-slate-100 border border-slate-200 shrink-0">
             {PAYMENT_TABS.map((tab) => {
               const Icon = tab.icon;
               const active = paymentMethod === tab.id;
@@ -150,7 +166,7 @@ export default function CheckoutModal({ isOpen, onClose, onOrderSuccess }) {
                   key={tab.id}
                   type="button"
                   onClick={() => setPaymentMethod(tab.id)}
-                  className={`py-2 px-2 rounded-xl flex items-center justify-center gap-1.5 text-xs sm:text-sm font-bold transition-colors ${
+                  className={`py-2 px-1 sm:px-2 rounded-xl flex flex-col sm:flex-row items-center justify-center gap-0.5 sm:gap-1.5 text-[10px] sm:text-sm font-bold transition-colors ${
                     active
                       ? 'bg-indigo-600 text-white shadow-xs'
                       : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
@@ -385,20 +401,18 @@ export default function CheckoutModal({ isOpen, onClose, onOrderSuccess }) {
               </div>
 
               {paymentMethod === 'promptpay' && (
-                <div className="p-4 rounded-2xl bg-indigo-50/40 border border-indigo-200 flex flex-col items-center text-center space-y-2">
-                  <div className="px-3 py-1 rounded-full bg-indigo-600 text-white text-xs font-bold">
-                    THAI QR PROMPTPAY
-                  </div>
-                  <div className="w-36 h-36 bg-white p-3 rounded-2xl border-2 border-indigo-600 flex items-center justify-center">
-                    <QrCode className="w-24 h-24 text-slate-900 stroke-[1.5]" />
-                  </div>
-                  <p className="text-xs font-semibold text-slate-700">
-                    สแกนเพื่อชำระยอด{' '}
-                    <span className="text-indigo-700 font-bold">
-                      {formatCurrency(grandTotal)}
-                    </span>
-                  </p>
+                <div className="p-4 rounded-2xl bg-indigo-50/40 border border-indigo-200">
+                  <PromptPayQR amount={grandTotal} size={160} />
                 </div>
+              )}
+
+              {paymentMethod === 'split' && (
+                <SplitPaymentPanel
+                  lines={splitLines}
+                  setLines={setSplitLines}
+                  grandTotal={grandTotal}
+                  selectedCustomer={selectedCustomer}
+                />
               )}
 
               {paymentMethod === 'transfer' && (
@@ -469,6 +483,8 @@ export default function CheckoutModal({ isOpen, onClose, onOrderSuccess }) {
                   <span>
                     {!isCreditValid
                       ? 'กรุณาเลือกลูกค้าก่อนชำระแบบเครดิต'
+                      : !isSplitValid
+                      ? 'ยอดแบ่งจ่ายยังไม่ครบ'
                       : submitting
                       ? 'กำลังบันทึกบิล...'
                       : 'ยืนยันชำระเงิน & ออกใบเสร็จ'}

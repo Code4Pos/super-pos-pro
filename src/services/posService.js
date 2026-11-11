@@ -1189,6 +1189,7 @@ export const posService = {
       grand_total: Number(orderPayload.grand_total) || 0,
       total_cost: Number(orderPayload.total_cost) || 0,
       payment_method: orderPayload.payment_method || 'cash',
+      payments: Array.isArray(orderPayload.payments) ? orderPayload.payments : [],
       cash_received: Number(orderPayload.cash_received) || 0,
       change_amount: Number(orderPayload.change_amount) || 0,
       status: 'completed',
@@ -1226,11 +1227,28 @@ export const posService = {
               : null,
         };
 
-        const { data: savedOrder, error: orderError } = await supabase
+        let { data: savedOrder, error: orderError } = await supabase
           .from('orders')
           .insert([supabaseOrderData])
           .select()
           .single();
+
+        // ฐานข้อมูลที่ยังไม่ได้รัน Migration (ไม่มีคอลัมน์ payments / ไม่รองรับ 'split')
+        // ให้บันทึกแบบเดิมโดยใช้ช่องทางที่ยอดชำระมากที่สุดเป็นวิธีชำระหลัก
+        if (orderError) {
+          const mainPayment = [...fullOrder.payments].sort((a, b) => b.amount - a.amount)[0];
+          const legacyOrderData = { ...supabaseOrderData };
+          delete legacyOrderData.payments;
+          legacyOrderData.payment_method =
+            fullOrder.payment_method === 'split'
+              ? mainPayment?.method || 'cash'
+              : fullOrder.payment_method;
+          ({ data: savedOrder, error: orderError } = await supabase
+            .from('orders')
+            .insert([legacyOrderData])
+            .select()
+            .single());
+        }
 
         if (!orderError && savedOrder) {
           for (const [targetId, deductQty] of deductionByProductId.entries()) {

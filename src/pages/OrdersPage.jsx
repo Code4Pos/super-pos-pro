@@ -12,12 +12,14 @@ import {
 import { usePOS } from '../context/POSContext';
 import ReceiptModal from '../components/pos/ReceiptModal';
 import { formatCurrency, formatDateTime } from '../utils/formatters';
+import { getOrderPayments, describeOrderPayments } from '../utils/payments';
 
 const PAYMENT_BADGES = {
   cash: { label: 'เงินสด', cls: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
   promptpay: { label: 'QR PromptPay', cls: 'bg-indigo-50 text-indigo-700 border-indigo-200' },
   transfer: { label: 'โอนธนาคาร', cls: 'bg-blue-50 text-blue-700 border-blue-200' },
   credit: { label: 'เครดิต/ค้างชำระ', cls: 'bg-amber-50 text-amber-800 border-amber-200' },
+  split: { label: 'แบ่งจ่าย', cls: 'bg-violet-50 text-violet-700 border-violet-200' },
 };
 
 export default function OrdersPage() {
@@ -34,7 +36,12 @@ export default function OrdersPage() {
     const todayStr = new Date().toDateString();
 
     return orders.filter((o) => {
-      if (paymentFilter !== 'all' && o.payment_method !== paymentFilter) {
+      // บิลแบ่งจ่ายจะแสดงเมื่อกรองด้วยช่องทางใดก็ได้ที่ใช้ชำระในบิลนั้น
+      if (
+        paymentFilter !== 'all' &&
+        o.payment_method !== paymentFilter &&
+        !getOrderPayments(o).some((p) => p.method === paymentFilter)
+      ) {
         return false;
       }
 
@@ -139,6 +146,7 @@ export default function OrdersPage() {
             <option value="promptpay">QR PromptPay</option>
             <option value="transfer">โอนเงินธนาคาร</option>
             <option value="credit">เครดิต/ค้างชำระ</option>
+            <option value="split">แบ่งจ่ายหลายช่องทาง</option>
           </select>
         </div>
       </div>
@@ -213,6 +221,11 @@ export default function OrdersPage() {
                         >
                           {pBadge.label}
                         </span>
+                        {order.payment_method === 'split' && (
+                          <div className="text-[10px] text-slate-500 mt-0.5">
+                            {describeOrderPayments(order, formatCurrency)}
+                          </div>
+                        )}
                       </td>
 
                       <td className="py-3.5 px-3 text-right font-extrabold text-slate-900">

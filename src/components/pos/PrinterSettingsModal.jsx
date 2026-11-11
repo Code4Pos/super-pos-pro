@@ -10,9 +10,12 @@ import {
   Gauge,
   Cable,
   RefreshCw,
+  QrCode,
+  Inbox,
 } from 'lucide-react';
 import { printerService } from '../../services/printerService';
 import { usePOS } from '../../context/POSContext';
+import { parsePromptPayId } from '../../utils/promptpay';
 
 export default function PrinterSettingsModal({ isOpen, onClose }) {
   const {
@@ -35,8 +38,15 @@ export default function PrinterSettingsModal({ isOpen, onClose }) {
 
   if (!isOpen) return null;
 
+  const promptpayIdInvalid =
+    String(form.promptpayId || '').trim() !== '' && !parsePromptPayId(form.promptpayId);
+
   const handleSave = (e) => {
     e.preventDefault();
+    if (promptpayIdInvalid) {
+      showToast('หมายเลขพร้อมเพย์ต้องเป็นเบอร์มือถือ 10 หลัก หรือเลข 13 หลัก', 'error');
+      return;
+    }
     updatePrinterSettings(form);
     showToast('บันทึกการตั้งค่าเครื่องพิมพ์ความร้อนเรียบร้อย', 'success');
     onClose();
@@ -64,6 +74,12 @@ export default function PrinterSettingsModal({ isOpen, onClose }) {
     } catch (err) {
       showToast(err.message || 'ไม่สามารถเชื่อมต่อพอร์ต Serial ได้', 'warning');
     }
+  };
+
+  // ทดสอบ / เปิดลิ้นชักเก็บเงินฉุกเฉิน
+  const handleOpenDrawer = async () => {
+    const result = await printerService.openCashDrawer(form);
+    showToast(result.message, result.ok ? 'success' : 'warning');
   };
 
   const handleTestPrint = async () => {
@@ -302,6 +318,77 @@ export default function PrinterSettingsModal({ isOpen, onClose }) {
                   </div>
                 );
               })}
+            </div>
+          </div>
+
+          {/* 3. รับชำระเงิน: หมายเลขพร้อมเพย์ของร้าน และลิ้นชักเก็บเงิน */}
+          <div className="space-y-2">
+            <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
+              3. รับชำระเงิน (PromptPay & ลิ้นชักเก็บเงิน)
+            </label>
+
+            <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200 space-y-1.5">
+              <div className="flex items-center gap-2 text-xs sm:text-sm font-bold text-slate-800">
+                <QrCode className="w-4 h-4 text-indigo-600" />
+                <span>หมายเลขพร้อมเพย์ของร้าน (สำหรับสร้าง QR ตามยอดเงิน)</span>
+              </div>
+              <input
+                type="text"
+                inputMode="numeric"
+                data-allow-scanner="false"
+                value={form.promptpayId || ''}
+                onChange={(e) => setForm({ ...form, promptpayId: e.target.value })}
+                placeholder="เบอร์มือถือ 10 หลัก หรือเลขผู้เสียภาษี 13 หลัก"
+                className={`w-full px-3 py-2 rounded-xl border bg-white text-sm font-mono font-bold text-slate-900 focus:outline-none focus:ring-2 ${
+                  promptpayIdInvalid
+                    ? 'border-rose-400 focus:ring-rose-500'
+                    : 'border-slate-300 focus:ring-indigo-500'
+                }`}
+              />
+              {promptpayIdInvalid && (
+                <p className="text-[11px] font-bold text-rose-600">
+                  รูปแบบไม่ถูกต้อง: ใช้เบอร์มือถือ 10 หลักที่ขึ้นต้นด้วย 0 หรือเลข 13 หลัก
+                </p>
+              )}
+            </div>
+
+            <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200 space-y-2">
+              <label className="flex items-center justify-between gap-2 cursor-pointer">
+                <div className="flex items-center gap-2.5">
+                  <Inbox className="w-5 h-5 text-emerald-600 shrink-0" />
+                  <div>
+                    <div className="text-xs sm:text-sm font-bold text-slate-800">
+                      เปิดลิ้นชักเก็บเงินอัตโนมัติเมื่อรับเงินสด
+                    </div>
+                    <div className="text-[11px] text-slate-500">
+                      ลิ้นชักต้องต่อสาย RJ11 กับเครื่องพิมพ์ และเชื่อมแบบ USB / Serial / RawBT
+                    </div>
+                  </div>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={Boolean(form.cashDrawerEnabled)}
+                  onChange={(e) => setForm({ ...form, cashDrawerEnabled: e.target.checked })}
+                  className="w-5 h-5 accent-indigo-600 rounded shrink-0"
+                />
+              </label>
+              <div className="flex items-center gap-2 flex-wrap">
+                <select
+                  value={form.cashDrawerPin || '2'}
+                  onChange={(e) => setForm({ ...form, cashDrawerPin: e.target.value })}
+                  className="px-2.5 py-1.5 rounded-xl border border-slate-300 bg-white text-xs font-bold"
+                >
+                  <option value="2">ขาสัญญาณ Pin 2 (ลิ้นชักทั่วไป)</option>
+                  <option value="5">ขาสัญญาณ Pin 5</option>
+                </select>
+                <button
+                  type="button"
+                  onClick={handleOpenDrawer}
+                  className="px-3 py-1.5 rounded-xl border border-emerald-600 bg-white hover:bg-emerald-50 text-emerald-700 text-xs font-bold"
+                >
+                  ทดสอบเปิดลิ้นชัก
+                </button>
+              </div>
             </div>
           </div>
 

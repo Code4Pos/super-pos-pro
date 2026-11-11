@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { usePOS } from '../context/POSContext';
 import { formatCurrency, formatNumber } from '../utils/formatters';
+import { getOrderPayments } from '../utils/payments';
 
 export default function DashboardPage({ onNavigate }) {
   const { orders, products } = usePOS();
@@ -45,8 +46,10 @@ export default function DashboardPage({ onNavigate }) {
         wholesaleOrderCount += 1;
       }
 
-      const pm = order.payment_method || 'cash';
-      paymentMap[pm] = (paymentMap[pm] || 0) + rev;
+      // บิลแบ่งจ่ายกระจายยอดเข้าแต่ละช่องทางตามจริง
+      getOrderPayments(order).forEach((p) => {
+        paymentMap[p.method] = (paymentMap[p.method] || 0) + (Number(p.amount) || 0);
+      });
 
       (order.items || []).forEach((item) => {
         const key = item.product_id || item.sku || item.product_name;

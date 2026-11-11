@@ -12,6 +12,7 @@ import { usePOS } from '../../context/POSContext';
 import { printerService } from '../../services/printerService';
 import PrinterSettingsModal from './PrinterSettingsModal';
 import { formatCurrency } from '../../utils/formatters';
+import { describeOrderPayments } from '../../utils/payments';
 
 /**
  * ReceiptModal (version beta 0.1.3):
@@ -130,6 +131,12 @@ export default function ReceiptModal({ order, onClose }) {
               <div className="text-xl sm:text-2xl font-extrabold text-emerald-600 mt-0.5">
                 {formatCurrency(order.change_amount)}
               </div>
+            </div>
+            <div className="col-span-2 pt-2 border-t border-slate-200 text-xs text-slate-600">
+              ชำระโดย:{' '}
+              <span className="font-bold text-slate-900">
+                {describeOrderPayments(order, formatCurrency)}
+              </span>
             </div>
           </div>
 

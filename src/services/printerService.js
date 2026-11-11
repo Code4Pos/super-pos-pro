@@ -1,4 +1,5 @@
 import { formatCurrency, formatDateTime } from '../utils/formatters';
+import { PAYMENT_METHOD_LABELS, getOrderPayments } from '../utils/payments';
 
 const PRINTER_SETTINGS_KEY = 'siampos_printer_settings_v2';
 
@@ -13,14 +14,32 @@ const DEFAULT_PRINTER_SETTINGS = {
   footerText: 'ขอบคุณที่อุดหนุน สินค้าซื้อแล้วรับเปลี่ยนคืนภายใน 7 วัน',
   performanceMode: true,
   systemPrinterReady: true,
+  promptpayId: '', // เบอร์มือถือ 10 หลัก หรือเลขผู้เสียภาษี 13 หลัก สำหรับสร้าง QR พร้อมเพย์
+  cashDrawerEnabled: false, // เปิดลิ้นชักเก็บเงินอัตโนมัติเมื่อรับเงินสด
+  cashDrawerPin: '2', // ขาสัญญาณลิ้นชัก '2' (Pin 2) | '5' (Pin 5)
 };
 
 const PAYMENT_LABELS = {
+  ...PAYMENT_METHOD_LABELS,
   cash: 'เงินสด (Cash)',
-  promptpay: 'QR PromptPay',
   transfer: 'โอนเงินธนาคาร',
-  credit: 'เครดิต/ค้างชำระ',
 };
+
+// ข้อความวิธีชำระเงินบนใบเสร็จ (บิลแบ่งจ่ายจะแสดงยอดแยกแต่ละช่องทาง)
+function getPaymentLines(order) {
+  return getOrderPayments(order).map((p) => ({
+    label: PAYMENT_LABELS[p.method] || p.method,
+    amount: Number(p.amount) || 0,
+  }));
+}
+
+/**
+ * คำสั่ง ESC/POS เปิดลิ้นชักเก็บเงิน: ESC p m t1 t2
+ * m = 0 (Pin 2) หรือ 1 (Pin 5), t1/t2 = ระยะเวลาพัลส์เปิด/ปิด (หน่วย 2ms)
+ */
+function buildCashDrawerKickBytes(pin = '2') {
+  return new Uint8Array([0x1b, 0x70, pin === '5' ? 0x01 : 0x00, 0x19, 0xfa]);
+}
 
 let activeUsbDevice = null;
 let activeUsbEndpoint = null;
@@ -215,11 +234,10 @@ function renderSlipToCanvas(order, settings, mode = 'receipt') {
     drawLeftRight('เลขที่:', order.order_number, `bold ${smallFontSize}px Prompt, sans-serif`);
     drawLeftRight('วันที่:', formatDateTime(order.created_at), `${smallFontSize}px Prompt, sans-serif`);
     drawLeftRight('ลูกค้า:', order.customer_name || 'ลูกค้าทั่วไป', `${smallFontSize}px Prompt, sans-serif`);
-    drawLeftRight(
-      'ชำระโดย:',
-      PAYMENT_LABELS[order.payment_method] || order.payment_method,
-      `${smallFontSize}px Prompt, sans-serif`
-    );
+    const paymentLines = getPaymentLines(order);
+    if (paymentLines.length === 1) {
+      drawLeftRight('ชำระโดย:', paymentLines[0].label, `${smallFontSize}px Prompt, sans-serif`);
+    }
     drawDashedDivider();
 
     drawLeftRight('รายการสินค้า', 'รวม', `bold ${smallFontSize}px Prompt, sans-serif`);
@@ -265,6 +283,11 @@ function renderSlipToCanvas(order, settings, mode = 'receipt') {
 
     drawDashedDivider();
     drawLeftRight('ยอดสุทธิ (TOTAL)', formatCurrency(order.grand_total), `bold ${titleFontSize}px Prompt, sans-serif`);
+    if (paymentLines.length > 1) {
+      paymentLines.forEach((line) => {
+        drawLeftRight(`ชำระ ${line.label}`, formatCurrency(line.amount), `${smallFontSize}px Prompt, sans-serif`);
+      });
+    }
     drawLeftRight('รับเงินมา', formatCurrency(order.cash_received), `${smallFontSize}px Prompt, sans-serif`);
     drawLeftRight('เงินทอน', formatCurrency(order.change_amount), `bold ${baseFontSize}px Prompt, sans-serif`);
 
@@ -400,7 +423,7 @@ function buildThermalReceiptHtml(order, settings, paperSize) {
   <div class="row"><span>เลขที่:</span><strong>${order.order_number}</strong></div>
   <div class="row"><span>วันที่:</span><span>${formatDateTime(order.created_at)}</span></div>
   <div class="row"><span>ลูกค้า:</span><strong>${order.customer_name || 'ลูกค้าทั่วไป'}</strong></div>
-  <div class="row"><span>ชำระโดย:</span><span>${PAYMENT_LABELS[order.payment_method] || order.payment_method}</span></div>
+  ${getPaymentLines(order).length === 1 ? `<div class="row"><span>ชำระโดย:</span><span>${getPaymentLines(order)[0].label}</span></div>` : ''}
   <div class="divider"></div>
   <div class="row" style="font-weight:700;font-size:10.5px;"><span>รายการสินค้า</span><span>รวม</span></div>
   <div class="divider"></div>
@@ -410,6 +433,7 @@ function buildThermalReceiptHtml(order, settings, paperSize) {
   ${Number(order.bill_discount) > 0 ? `<div class="row"><span>ส่วนลดท้ายบิล</span><span>-${formatCurrency(order.bill_discount)}</span></div>` : ''}
   ${vatHtml}
   <div class="row total"><span>ยอดสุทธิ</span><span>${formatCurrency(order.grand_total)}</span></div>
+  ${getPaymentLines(order).length > 1 ? getPaymentLines(order).map((line) => `<div class="row"><span>ชำระ ${line.label}</span><span>${formatCurrency(line.amount)}</span></div>`).join('') : ''}
   <div class="row"><span>รับเงินมา</span><span>${formatCurrency(order.cash_received)}</span></div>
   <div class="row" style="font-weight:700;"><span>เงินทอน</span><span>${formatCurrency(order.change_amount)}</span></div>
   ${order.note ? `<div style="margin-top:6px;font-size:10.5px;border:1px solid #000;padding:4px;">หมายเหตุ: ${order.note}</div>` : ''}
@@ -568,7 +592,7 @@ function buildA4ReceiptHtml(order, settings) {
     </div>
     <div style="text-align:right;">
       <div><strong>วันที่/เวลา (Date):</strong> ${formatDateTime(order.created_at)}</div>
-      <div><strong>วิธีชำระเงิน (Payment):</strong> ${PAYMENT_LABELS[order.payment_method] || order.payment_method}</div>
+      <div><strong>วิธีชำระเงิน (Payment):</strong> ${getPaymentLines(order).map((line) => (getPaymentLines(order).length > 1 ? `${line.label} ${formatCurrency(line.amount)}` : line.label)).join(' + ')}</div>
     </div>
   </div>
 
@@ -913,7 +937,24 @@ export const printerService = {
    */
   async sendCanvasToHardwarePrinter(canvas, settings) {
     const rasterBytes = canvasToEscPosGSv0(canvas);
+    const sent = await this.sendRawBytes(rasterBytes, settings);
+    if (sent) return true;
 
+    // RawBT: ส่งเป็น PNG Data URI ให้แอป RawBT พิมพ์ภาษาไทยคมชัด 100% เมื่อเชื่อม WebSocket ไม่ได้
+    if (settings.connectionType === 'rawbt') {
+      const dataUrl = canvas.toDataURL('image/png');
+      window.location.href = `rawbt:${dataUrl}`;
+      return true;
+    }
+
+    return false;
+  },
+
+  /**
+   * ส่งคำสั่ง ESC/POS (ไบต์ดิบ) ออกเครื่องพิมพ์ผ่าน WebUSB / WebSerial / RawBT WebSocket
+   * คืนค่า false ถ้าส่งไม่ได้ (เช่น ใช้ไดรเวอร์ระบบ หรือยังไม่ได้เชื่อมต่อ)
+   */
+  async sendRawBytes(rasterBytes, settings) {
     // 1. WebUSB
     if (settings.connectionType === 'webusb') {
       if (!activeUsbDevice || !activeUsbDevice.opened || !activeUsbEndpoint) {
@@ -982,14 +1023,34 @@ export const printerService = {
         notifyStatusChange('ready', 'ส่งพิมพ์ผ่าน RawBT Server สำเร็จ');
         return true;
       }
-
-      // Fallback ส่งเป็น PNG Data URI ให้แอป RawBT พิมพ์ภาษาไทยคมชัด 100%
-      const dataUrl = canvas.toDataURL('image/png');
-      window.location.href = `rawbt:${dataUrl}`;
-      return true;
     }
 
     return false;
+  },
+
+  /**
+   * สั่งเปิดลิ้นชักเก็บเงิน (Kick Cash Drawer) ผ่านเครื่องพิมพ์ความร้อน
+   * ลิ้นชักต้องต่อสาย RJ11 เข้ากับเครื่องพิมพ์ และต้องเชื่อมแบบ WebUSB / WebSerial / RawBT
+   */
+  async openCashDrawer(customSettings = null) {
+    const settings = customSettings || this.getSettings();
+    if (settings.connectionType === 'system') {
+      return {
+        ok: false,
+        message: 'โหมดไดรเวอร์ระบบ (System Print) สั่งเปิดลิ้นชักไม่ได้ กรุณาเชื่อมแบบ WebUSB / WebSerial',
+      };
+    }
+    try {
+      const ok = await this.sendRawBytes(
+        buildCashDrawerKickBytes(settings.cashDrawerPin),
+        settings
+      );
+      return ok
+        ? { ok: true, message: 'ส่งคำสั่งเปิดลิ้นชักเก็บเงินแล้ว' }
+        : { ok: false, message: 'ยังไม่ได้เชื่อมต่อเครื่องพิมพ์ จึงเปิดลิ้นชักไม่ได้' };
+    } catch (err) {
+      return { ok: false, message: `เปิดลิ้นชักไม่สำเร็จ: ${err.message}` };
+    }
   },
 
   /**

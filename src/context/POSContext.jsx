@@ -2,8 +2,9 @@ import React, { createContext, useContext, useState, useEffect, useMemo, useCall
 import { posService, normalizeAndSyncProducts } from '../services/posService';
 import { printerService } from '../services/printerService';
 import { calculateEffectiveUnitPrice } from '../utils/formatters';
+import { summarizeSplitPayments } from '../utils/payments';
 
-export const APP_VERSION = 'version beta 0.2.1';
+export const APP_VERSION = 'version beta 0.2.2';
 const HELD_BILLS_STORAGE_KEY = 'siampos_held_bills_v1';
 
 const POSContext = createContext(null);
@@ -458,14 +459,39 @@ export function POSProvider({ children }) {
 
   // บันทึกการขาย (Checkout)
   const checkoutOrder = useCallback(
-    async ({ payment_method, cash_received, note }) => {
+    async ({ payment_method, cash_received, note, payments = null }) => {
       if (cartSummary.items.length === 0) {
         showToast('ไม่มีสินค้าในตะกร้า', 'error');
         return null;
       }
 
-      const cashVal = Number(cash_received) || cartSummary.grandTotal;
-      const changeVal = Math.max(0, cashVal - cartSummary.grandTotal);
+      let finalMethod = payment_method;
+      let cashVal = Number(cash_received) || cartSummary.grandTotal;
+      let changeVal = Math.max(0, cashVal - cartSummary.grandTotal);
+      let orderPayments = [{ method: payment_method, amount: cartSummary.grandTotal }];
+
+      // แบ่งจ่ายหลายช่องทาง: บันทึกยอดที่ใช้ชำระจริงต่อช่องทาง (เงินสดหักเงินทอนแล้ว)
+      if (Array.isArray(payments) && payments.length > 0) {
+        const split = summarizeSplitPayments(payments, cartSummary.grandTotal);
+        if (!split.isComplete) {
+          showToast('ยอดชำระแต่ละช่องทางยังไม่ครบยอดสุทธิ', 'error');
+          return null;
+        }
+        const amountByMethod = new Map();
+        payments.forEach((p) => {
+          const amt = Number(p.amount) || 0;
+          if (amt > 0) amountByMethod.set(p.method, (amountByMethod.get(p.method) || 0) + amt);
+        });
+        if (amountByMethod.has('cash')) {
+          amountByMethod.set('cash', amountByMethod.get('cash') - split.change);
+        }
+        orderPayments = [...amountByMethod.entries()]
+          .map(([method, amount]) => ({ method, amount: Math.round(amount * 100) / 100 }))
+          .filter((p) => p.amount > 0);
+        finalMethod = orderPayments.length > 1 ? 'split' : orderPayments[0]?.method || 'cash';
+        cashVal = split.cashTotal;
+        changeVal = split.change;
+      }
 
       const orderPayload = {
         customer: selectedCustomer,
@@ -478,7 +504,8 @@ export function POSProvider({ children }) {
         tax_amount: cartSummary.taxAmount,
         grand_total: cartSummary.grandTotal,
         total_cost: cartSummary.totalCost,
-        payment_method,
+        payment_method: finalMethod,
+        payments: orderPayments,
         cash_received: cashVal,
         change_amount: changeVal,
         note,
@@ -517,9 +544,25 @@ export function POSProvider({ children }) {
 
       clearCart();
       showToast(`บันทึกบิล ${savedOrder.order_number} สำเร็จ!`, 'success');
+
+      // เปิดลิ้นชักเก็บเงินอัตโนมัติเมื่อบิลนี้รับเงินสด (ไม่รอผล เพื่อไม่ให้หน้าขายช้า)
+      if (printerSettings.cashDrawerEnabled && orderPayments.some((p) => p.method === 'cash')) {
+        printerService.openCashDrawer(printerSettings).then((result) => {
+          if (!result.ok) showToast(result.message, 'warning');
+        });
+      }
       return enrichedSavedOrder;
     },
-    [cartSummary, selectedCustomer, pricingMode, vatMode, dbMode, clearCart, showToast]
+    [
+      cartSummary,
+      selectedCustomer,
+      pricingMode,
+      vatMode,
+      dbMode,
+      clearCart,
+      showToast,
+      printerSettings,
+    ]
   );
 
   // เพิ่ม/แก้ไขสินค้า (ซิงค์สต็อกสินค้าสัมพันธ์อัตโนมัติ)

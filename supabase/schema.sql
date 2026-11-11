@@ -91,7 +91,7 @@ CREATE TABLE IF NOT EXISTS orders (
   tax_amount NUMERIC(12, 2) NOT NULL DEFAULT 0,
   grand_total NUMERIC(12, 2) NOT NULL DEFAULT 0,
   total_cost NUMERIC(12, 2) NOT NULL DEFAULT 0,
-  payment_method TEXT NOT NULL DEFAULT 'cash' CHECK (payment_method IN ('cash', 'promptpay', 'transfer', 'credit')),
+  payment_method TEXT NOT NULL DEFAULT 'cash' CHECK (payment_method IN ('cash', 'promptpay', 'transfer', 'credit', 'split')),
   cash_received NUMERIC(12, 2) DEFAULT 0,
   change_amount NUMERIC(12, 2) DEFAULT 0,
   status TEXT NOT NULL DEFAULT 'completed' CHECK (status IN ('completed', 'voided')),
@@ -99,6 +99,13 @@ CREATE TABLE IF NOT EXISTS orders (
   items JSONB NOT NULL DEFAULT '[]'::jsonb,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- beta 0.2.2: แบ่งจ่ายหลายช่องทาง (Split Payment)
+-- payments เก็บยอดที่ชำระจริงต่อช่องทาง เช่น [{"method":"cash","amount":200},{"method":"promptpay","amount":150}]
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS payments JSONB DEFAULT '[]'::jsonb;
+ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_payment_method_check;
+ALTER TABLE orders ADD CONSTRAINT orders_payment_method_check
+  CHECK (payment_method IN ('cash', 'promptpay', 'transfer', 'credit', 'split'));
 
 -- 6. ตารางรายการสินค้าในบิล (Order Items)
 CREATE TABLE IF NOT EXISTS order_items (
