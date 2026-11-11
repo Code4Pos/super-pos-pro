@@ -1,6 +1,7 @@
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { B2B_CUSTOMER_DEFAULTS, normalizeB2BFields } from '../utils/credit';
 import { calculateOrderVat, getNextTaxInvoiceNumber, getTaxInvoicePrefix } from '../utils/tax';
+import { hashPin, generateSalt } from '../utils/rbac';
 import {
   INITIAL_CATEGORIES,
   INITIAL_UNITS,
@@ -22,6 +23,7 @@ const STORAGE_KEYS = {
   BILLING_NOTES: 'siampos_billing_notes_v1',
   STOCK_LEDGER: 'siampos_stock_ledger_v1',
   TAX_INVOICES: 'siampos_tax_invoices_v1',
+  USERS: 'siampos_users_v1',
   SUPPLIERS: 'siampos_suppliers_v1',
   STOCK_IMPORTS: 'siampos_stock_imports_v1',
   ORDERS: 'siampos_orders_v1',
@@ -292,6 +294,16 @@ async function insertRemoteWithLocal(table, storageKey, record, localIdPrefix, i
   const updated = [saved, ...getLocal(storageKey, [])];
   setLocal(storageKey, updated);
   return { saved, updated };
+}
+
+// รวมรายชื่อผู้ใช้จากฐานข้อมูลกับในเครื่อง โดยยึดข้อมูลที่แก้ไขล่าสุด (updated_at)
+function mergeUsersById(remoteUsers = [], localUsers = []) {
+  const byId = new Map();
+  [...localUsers, ...remoteUsers].forEach((u) => {
+    const prev = byId.get(u.id);
+    if (!prev || new Date(u.updated_at || 0) >= new Date(prev.updated_at || 0)) byId.set(u.id, u);
+  });
+  return [...byId.values()];
 }
 
 // จำนวนรายการ Stock Ledger สูงสุดที่เก็บในเครื่อง (กันพื้นที่ LocalStorage เต็ม)
@@ -591,12 +603,16 @@ export const posService = {
         );
 
         // ยอดรับชำระหนี้ และใบวางบิล (ถ้ายังไม่มีตารางในฐานข้อมูลให้ใช้ข้อมูลในเครื่อง)
-        const [customerPayments, billingNotes, stockLedger, taxInvoices] = await Promise.all([
+        const [customerPayments, billingNotes, stockLedger, taxInvoices, remoteUsers] = await Promise.all([
           loadRemoteWithLocal('customer_payments', STORAGE_KEYS.CUSTOMER_PAYMENTS),
           loadRemoteWithLocal('billing_notes', STORAGE_KEYS.BILLING_NOTES),
           loadRemoteWithLocal('stock_ledger', STORAGE_KEYS.STOCK_LEDGER, MAX_LOCAL_LEDGER_ENTRIES),
           loadRemoteWithLocal('tax_invoices', STORAGE_KEYS.TAX_INVOICES, 5000),
+          loadRemoteWithLocal('app_users', STORAGE_KEYS.USERS),
         ]);
+        // ผู้ใช้จากฐานข้อมูลเป็นค่าหลัก (แก้จากเครื่องอื่นได้) เก็บสำเนาในเครื่องไว้ใช้ตอน Offline
+        const users = mergeUsersById(remoteUsers, getLocal(STORAGE_KEYS.USERS, []));
+        setLocal(STORAGE_KEYS.USERS, users);
 
         return {
           mode: 'supabase',
@@ -609,6 +625,7 @@ export const posService = {
           billingNotes,
           stockLedger,
           taxInvoices,
+          users,
           suppliers,
           stockImports,
           orders: ordRes.data || [],
@@ -645,6 +662,7 @@ export const posService = {
       billingNotes: getLocal(STORAGE_KEYS.BILLING_NOTES, []),
       stockLedger: getLocal(STORAGE_KEYS.STOCK_LEDGER, []),
       taxInvoices: getLocal(STORAGE_KEYS.TAX_INVOICES, []),
+      users: getLocal(STORAGE_KEYS.USERS, []),
       suppliers,
       stockImports,
       orders: getLocal(STORAGE_KEYS.ORDERS, INITIAL_ORDERS),
@@ -1416,6 +1434,63 @@ export const posService = {
   },
 
   /**
+   * เพิ่ม/แก้ไขผู้ใช้งาน (RBAC)
+   * - เก็บ PIN เป็น SHA-256 พร้อม salt เท่านั้น (ไม่เก็บ PIN จริง)
+   * - ส่ง pin ว่างตอนแก้ไข = ใช้ PIN เดิม
+   */
+  async upsertUser(userData, isSupabaseActive) {
+    const nowIso = new Date().toISOString();
+    const users = getLocal(STORAGE_KEYS.USERS, []);
+    const existing = users.find((u) => u.id === userData.id) || null;
+    const pin = String(userData.pin || '').trim();
+    if (!existing && !/^\d{4,6}$/.test(pin)) {
+      throw new Error('PIN ต้องเป็นตัวเลข 4-6 หลัก');
+    }
+    if (pin && !/^\d{4,6}$/.test(pin)) {
+      throw new Error('PIN ต้องเป็นตัวเลข 4-6 หลัก');
+    }
+
+    const salt = pin ? generateSalt() : existing.pin_salt;
+    const record = {
+      id: existing?.id || `usr-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      name: String(userData.name || '').trim(),
+      role: userData.role,
+      is_active: userData.is_active !== false,
+      pin_salt: salt,
+      pin_hash: pin ? hashPin(pin, salt) : existing.pin_hash,
+      created_at: existing?.created_at || nowIso,
+      updated_at: nowIso,
+    };
+    if (!record.name) throw new Error('กรุณาระบุชื่อผู้ใช้งาน');
+
+    // ต้องมีผู้ดูแลระบบที่ใช้งานได้อย่างน้อย 1 คนเสมอ
+    const nextUsers = existing
+      ? users.map((u) => (u.id === record.id ? record : u))
+      : [record, ...users];
+    if (!nextUsers.some((u) => u.role === 'admin' && u.is_active)) {
+      throw new Error('ต้องมีผู้ดูแลระบบ (Admin) ที่เปิดใช้งานอย่างน้อย 1 คน');
+    }
+
+    if (isSupabaseActive && supabase) {
+      try {
+        await supabase.from('app_users').upsert([record]);
+      } catch (err) {
+        console.warn('Supabase app_users fallback:', err.message);
+      }
+    }
+    setLocal(STORAGE_KEYS.USERS, nextUsers);
+    return { savedUser: record, updatedUsers: nextUsers };
+  },
+
+  /**
+   * ตรวจ PIN ของผู้ใช้ คืนค่า true ถ้าถูกต้องและบัญชียังเปิดใช้งาน
+   */
+  verifyUserPin(user, pin) {
+    if (!user || !user.is_active) return false;
+    return hashPin(String(pin || ''), user.pin_salt) === user.pin_hash;
+  },
+
+  /**
    * ออกใบกำกับภาษีเต็มรูปแบบ (Full Tax Invoice) จากบิลขาย 1 บิล
    * - เลขที่เรียงต่อเนื่องรายเดือน (TXYYYYMM-0001) ห้ามซ้ำ
    * - โหมด Supabase อ่านเลขล่าสุดจากฐานข้อมูลก่อน และลองเลขถัดไปถ้าชนกับเครื่องอื่น (unique)
@@ -1563,6 +1638,7 @@ export const posService = {
       payment_method: orderPayload.payment_method || 'cash',
       payments: Array.isArray(orderPayload.payments) ? orderPayload.payments : [],
       credit_due_date: orderPayload.credit_due_date || null,
+      created_by_name: orderPayload.created_by_name || '',
       cash_received: Number(orderPayload.cash_received) || 0,
       change_amount: Number(orderPayload.change_amount) || 0,
       status: 'completed',
@@ -1613,6 +1689,7 @@ export const posService = {
           const legacyOrderData = { ...supabaseOrderData };
           delete legacyOrderData.payments;
           delete legacyOrderData.credit_due_date;
+          delete legacyOrderData.created_by_name;
           legacyOrderData.payment_method =
             fullOrder.payment_method === 'split'
               ? mainPayment?.method || 'cash'

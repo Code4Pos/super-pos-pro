@@ -193,6 +193,20 @@ CREATE TABLE IF NOT EXISTS tax_invoices (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_tax_invoices_active_order
   ON tax_invoices (order_number) WHERE status = 'active';
 
+-- beta 0.2.8: ผู้ใช้งานและบทบาท (RBAC) — เก็บ PIN เป็น SHA-256 + salt เท่านั้น
+-- หมายเหตุ: เป็นการจำกัดสิทธิ์ในตัวแอป ตารางนี้ยังอ่านได้ด้วย anon key จนกว่าจะเปลี่ยนไปใช้ Supabase Auth
+CREATE TABLE IF NOT EXISTS app_users (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  role TEXT NOT NULL CHECK (role IN ('admin', 'manager', 'cashier', 'wholesale', 'warehouse', 'accountant')),
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  pin_salt TEXT NOT NULL,
+  pin_hash TEXT NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS created_by_name TEXT;
+
 -- 6. ตารางรายการสินค้าในบิล (Order Items)
 CREATE TABLE IF NOT EXISTS order_items (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -231,6 +245,10 @@ ALTER TABLE customer_payments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE billing_notes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE stock_ledger ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tax_invoices ENABLE ROW LEVEL SECURITY;
+ALTER TABLE app_users ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Allow public access to app_users" ON app_users;
+CREATE POLICY "Allow public access to app_users" ON app_users FOR ALL USING (true) WITH CHECK (true);
 
 DROP POLICY IF EXISTS "Allow public access to tax_invoices" ON tax_invoices;
 CREATE POLICY "Allow public access to tax_invoices" ON tax_invoices FOR ALL USING (true) WITH CHECK (true);

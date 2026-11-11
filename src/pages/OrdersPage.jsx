@@ -25,7 +25,7 @@ const PAYMENT_BADGES = {
 };
 
 export default function OrdersPage() {
-  const { orders, voidOrder, taxInvoices = [] } = usePOS();
+  const { orders, voidOrder, taxInvoices = [], can } = usePOS();
   const [taxInvoiceOrder, setTaxInvoiceOrder] = useState(null);
   const invoicedOrderNumbers = useMemo(
     () => new Set(taxInvoices.filter((t) => t.status !== 'cancelled').map((t) => t.order_number)),
@@ -264,7 +264,7 @@ export default function OrdersPage() {
                             <span>สั่งพิมพ์</span>
                           </button>
 
-                          {!isVoided && (
+                          {!isVoided && can('issue_tax_invoice') && (
                             <button
                               type="button"
                               onClick={() => setTaxInvoiceOrder(order)}
@@ -283,7 +283,7 @@ export default function OrdersPage() {
                             </button>
                           )}
 
-                          {!isVoided && (
+                          {!isVoided && can('void_order') && (
                             <button
                               type="button"
                               onClick={() => voidOrder(order)}

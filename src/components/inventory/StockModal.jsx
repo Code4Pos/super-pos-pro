@@ -13,7 +13,24 @@ import { formatCurrency } from '../../utils/formatters';
 import { ADJUST_REASONS, requiresApprover } from '../../utils/stockLedger';
 
 export default function StockModal({ product, onClose }) {
-  const { products, updateProductStock } = usePOS();
+  const {
+    products,
+    updateProductStock,
+    authEnabled,
+    currentUser,
+    users,
+    can,
+    verifyApprover,
+    showToast,
+  } = usePOS();
+  // เมื่อเปิดระบบผู้ใช้: ผู้มีสิทธิ์อนุมัติจะเป็นผู้อนุมัติอัตโนมัติ ถ้าไม่มีสิทธิ์ต้องให้ผู้จัดการใส่ PIN
+  const [approverId, setApproverId] = useState('');
+  const [approverPin, setApproverPin] = useState('');
+  const approverCandidates = (users || []).filter(
+    (u) => u.is_active && (u.role === 'admin' || u.role === 'manager')
+  );
+  const selfApprove = authEnabled && can('approve_stock');
+  const canAdjust = !authEnabled || can('adjust_stock');
   const [mode, setMode] = useState('add'); // 'add' | 'reduce' | 'set'
   const [amount, setAmount] = useState(1);
   const [remainderAmount, setRemainderAmount] = useState(0);
@@ -63,6 +80,8 @@ export default function StockModal({ product, onClose }) {
       setReason(ADJUST_REASONS.add[0]);
       setReasonDetail('');
       setApprovedBy('');
+      setApproverId('');
+      setApproverPin('');
     }
   }, [product?.id]);
 
@@ -111,19 +130,38 @@ export default function StockModal({ product, onClose }) {
 
   const needsApprover = requiresApprover(mode);
   const finalReason = reason === 'อื่นๆ' ? reasonDetail.trim() : reason;
-  const canSubmit =
-    !saving && Boolean(finalReason) && (!needsApprover || approvedBy.trim() !== '');
+  const approverReady = !needsApprover
+    ? true
+    : !authEnabled
+    ? approvedBy.trim() !== ''
+    : selfApprove || (approverId !== '' && approverPin.length >= 4);
+  const canSubmit = !saving && canAdjust && Boolean(finalReason) && approverReady;
+
+  // ชื่อผู้อนุมัติที่บันทึกลง Stock Ledger (ตรวจ PIN ของผู้อนุมัติเมื่อเปิดระบบผู้ใช้)
+  const resolveApproverName = () => {
+    if (!authEnabled) return approvedBy.trim();
+    if (selfApprove) return currentUser.name;
+    if (!needsApprover) return '';
+    const approver = verifyApprover(approverId, approverPin, 'approve_stock');
+    return approver ? approver.name : null;
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!canSubmit) return;
+    const approverName = resolveApproverName();
+    if (approverName === null) {
+      showToast('PIN ผู้อนุมัติไม่ถูกต้อง', 'error');
+      setApproverPin('');
+      return;
+    }
     setSaving(true);
     try {
       const hasCostUpdate = mode === 'add' || mode === 'set';
       const movementMeta = {
         reason: finalReason,
-        approved_by: approvedBy.trim(),
-        reference_doc: 'ปรับสต็อกด้วยมือ',
+        approved_by: approverName,
+        reference_doc: authEnabled && currentUser ? `ปรับสต็อกโดย ${currentUser.name}` : 'ปรับสต็อกด้วยมือ',
       };
       if (isSecondaryLinked && masterProd) {
         const nextMasterCost = hasCostUpdate
@@ -365,17 +403,56 @@ export default function StockModal({ product, onClose }) {
               <label className="block text-xs font-bold text-slate-700 mb-1">
                 ผู้อนุมัติ {needsApprover ? '*' : '(ไม่บังคับ)'}
               </label>
-              <input
-                type="text"
-                data-allow-scanner="false"
-                value={approvedBy}
-                onChange={(e) => setApprovedBy(e.target.value)}
-                placeholder="ชื่อผู้อนุมัติ"
-                className={`w-full px-3 py-2 rounded-xl border text-xs ${
-                  needsApprover && !approvedBy.trim() ? 'border-amber-400 bg-amber-50/40' : 'border-slate-300'
-                }`}
-              />
+              {!authEnabled ? (
+                <input
+                  type="text"
+                  data-allow-scanner="false"
+                  value={approvedBy}
+                  onChange={(e) => setApprovedBy(e.target.value)}
+                  placeholder="ชื่อผู้อนุมัติ"
+                  className={`w-full px-3 py-2 rounded-xl border text-xs ${
+                    needsApprover && !approvedBy.trim() ? 'border-amber-400 bg-amber-50/40' : 'border-slate-300'
+                  }`}
+                />
+              ) : selfApprove || !needsApprover ? (
+                <div className="px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 text-xs font-bold text-slate-700">
+                  {selfApprove ? currentUser.name : '-'}
+                </div>
+              ) : (
+                <select
+                  value={approverId}
+                  onChange={(e) => setApproverId(e.target.value)}
+                  className={`w-full px-3 py-2 rounded-xl border bg-white text-xs font-bold ${
+                    approverId ? 'border-slate-300' : 'border-amber-400'
+                  }`}
+                >
+                  <option value="">เลือกผู้จัดการ...</option>
+                  {approverCandidates.map((u) => (
+                    <option key={u.id} value={u.id}>
+                      {u.name}
+                    </option>
+                  ))}
+                </select>
+              )}
             </div>
+            {authEnabled && needsApprover && !selfApprove && (
+              <input
+                type="password"
+                inputMode="numeric"
+                autoComplete="off"
+                data-allow-scanner="false"
+                maxLength={6}
+                value={approverPin}
+                onChange={(e) => setApproverPin(e.target.value.replace(/\D/g, ''))}
+                placeholder="PIN ผู้อนุมัติ *"
+                className="col-span-2 w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-mono tracking-widest"
+              />
+            )}
+            {!canAdjust && (
+              <p className="col-span-2 text-[11px] font-bold text-rose-600">
+                บทบาทของคุณไม่มีสิทธิ์ปรับสต็อก
+              </p>
+            )}
             {reason === 'อื่นๆ' && (
               <input
                 type="text"

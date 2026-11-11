@@ -36,7 +36,10 @@ const PAYMENT_TABS = [
  * - ชำระแบบเครดิตบังคับเลือกลูกค้าก่อนเสมอ
  */
 export default function CheckoutModal({ isOpen, onClose, onOrderSuccess }) {
-  const { cartSummary, selectedCustomer, checkoutOrder, getCustomerCredit } = usePOS();
+  const { cartSummary, selectedCustomer, checkoutOrder, getCustomerCredit, can } = usePOS();
+  // บทบาทที่ไม่มีสิทธิ์ขายเชื่อ (เช่น แคชเชียร์) จะไม่เห็นแท็บเครดิต
+  const canCreditSale = can('credit_sale');
+  const paymentTabs = PAYMENT_TABS.filter((t) => t.id !== 'credit' || canCreditSale);
   const { grandTotal, totalItemsCount, wholesaleSavings, vatMode, taxAmount } =
     cartSummary;
 
@@ -113,11 +116,10 @@ export default function CheckoutModal({ isOpen, onClose, onOrderSuccess }) {
           .filter((l) => l.method === 'credit')
           .reduce((sum, l) => sum + (Number(l.amount) || 0), 0)
       : 0;
-  const creditCheck = checkCreditSale(
-    selectedCustomer,
-    creditAmount,
-    getCustomerCredit(selectedCustomer)
-  );
+  const creditCheck =
+    creditAmount > 0 && !canCreditSale
+      ? { ok: false, message: 'บทบาทของคุณไม่มีสิทธิ์ขายเชื่อ' }
+      : checkCreditSale(selectedCustomer, creditAmount, getCustomerCredit(selectedCustomer));
 
   const isCashValid = paymentMethod !== 'cash' || numericCash >= grandTotal;
   const isCreditValid =
@@ -175,8 +177,11 @@ export default function CheckoutModal({ isOpen, onClose, onOrderSuccess }) {
         {/* เนื้อหาหลัก ไม่มี Scrollbar แนวตั้ง */}
         <div className="p-3 sm:p-4 space-y-3 overflow-y-auto flex-1 flex flex-col justify-between">
           {/* แถบเมนูเลือกวิธีชำระเงินแถวเดียว (Single-Row Tabs) */}
-          <div className="grid grid-cols-5 gap-1 sm:gap-1.5 p-1 rounded-2xl bg-slate-100 border border-slate-200 shrink-0">
-            {PAYMENT_TABS.map((tab) => {
+          <div
+            className="grid gap-1 sm:gap-1.5 p-1 rounded-2xl bg-slate-100 border border-slate-200 shrink-0"
+            style={{ gridTemplateColumns: `repeat(${paymentTabs.length}, minmax(0, 1fr))` }}
+          >
+            {paymentTabs.map((tab) => {
               const Icon = tab.icon;
               const active = paymentMethod === tab.id;
               return (

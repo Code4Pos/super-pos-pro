@@ -20,12 +20,6 @@ import NumpadModal from '../common/NumpadModal';
 import ConfirmModal from '../common/ConfirmModal';
 import { formatCurrency } from '../../utils/formatters';
 
-const VAT_MODES = [
-  { id: 'no_vat', label: 'No VAT' },
-  { id: 'vat_in', label: 'VAT in (รวมในสินค้า)' },
-  { id: 'vat_out', label: 'VAT out (คิดแยกนอก)' },
-];
-
 export default function CartPanel({ onOpenCheckout, onCloseMobileDrawer }) {
   const {
     cartSummary,
@@ -34,7 +28,6 @@ export default function CartPanel({ onOpenCheckout, onCloseMobileDrawer }) {
     billDiscount,
     setBillDiscount,
     vatMode,
-    setVatMode,
     updateCartQty,
     updateCartItemPrice,
     resetCartItemPrice,
@@ -450,28 +443,10 @@ export default function CartPanel({ onOpenCheckout, onCloseMobileDrawer }) {
         )}
       </div>
 
-      {/* ส่วนสรุปยอดเงิน, ระบบคำนวณ VAT 3 รูปแบบ และปุ่มชำระเงิน */}
+      {/* ส่วนสรุปยอดเงิน และปุ่มชำระเงิน (รูปแบบ VAT ตั้งค่าที่เมนู ตั้งค่า › ภาษี) */}
       <div className="p-3 border-t border-slate-200 bg-slate-50/90 space-y-2 shrink-0">
-        {/* เลือกรูปแบบการคำนวณ VAT 3 รูปแบบ: No VAT | VAT in product | VAT out product */}
-        <div className="grid grid-cols-3 gap-1 p-1 rounded-xl bg-slate-200/70 border border-slate-200">
-          {VAT_MODES.map((vm) => (
-            <button
-              key={vm.id}
-              type="button"
-              onClick={() => setVatMode(vm.id)}
-              className={`py-1.5 px-1.5 rounded-lg text-[10px] sm:text-[11px] font-bold truncate transition-colors ${
-                vatMode === vm.id
-                  ? 'bg-white text-indigo-700 shadow-2xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              {vm.label}
-            </button>
-          ))}
-        </div>
-
-        {/* ปุ่มส่วนลดท้ายบิล (Numpad) & แสดงยอดภาษีตามโหมด VAT */}
-        <div className="grid grid-cols-2 gap-2">
+        {/* ปุ่มส่วนลดท้ายบิล (Numpad) & แสดงยอดภาษีตามรูปแบบ VAT ที่ตั้งไว้ */}
+        <div className={`grid gap-2 ${vatMode === 'no_vat' ? 'grid-cols-1' : 'grid-cols-2'}`}>
           <button
             type="button"
             onClick={handleOpenDiscountNumpad}
@@ -488,19 +463,17 @@ export default function CartPanel({ onOpenCheckout, onCloseMobileDrawer }) {
             </span>
           </button>
 
-          <div className="px-2.5 py-1.5 rounded-xl bg-white border border-slate-200 flex items-center justify-between text-[11px]">
-            <span className="text-slate-500 font-medium truncate">
-              {vatMode === 'no_vat'
-                ? 'ภาษี (No VAT)'
-                : vatMode === 'vat_in'
-                ? 'VAT 7% (ในสินค้า)'
-                : 'VAT 7% (แยกนอก)'}
-            </span>
-            <span className="font-bold text-slate-800 shrink-0">
-              {vatMode === 'vat_out' ? '+' : ''}
-              {formatCurrency(taxAmount)}
-            </span>
-          </div>
+          {vatMode !== 'no_vat' && (
+            <div className="px-2.5 py-1.5 rounded-xl bg-white border border-slate-200 flex items-center justify-between text-[11px]">
+              <span className="text-slate-500 font-medium truncate">
+                {vatMode === 'vat_in' ? 'VAT 7% (ในสินค้า)' : 'VAT 7% (แยกนอก)'}
+              </span>
+              <span className="font-bold text-slate-800 shrink-0">
+                {vatMode === 'vat_out' ? '+' : ''}
+                {formatCurrency(taxAmount)}
+              </span>
+            </div>
+          )}
         </div>
 
         {/* แสดงรายละเอียดเมื่อเลือก VAT in product หรือประหยัดราคาส่ง */}

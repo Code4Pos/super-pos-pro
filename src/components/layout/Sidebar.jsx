@@ -24,6 +24,10 @@ import {
   History,
   ClipboardList,
   FileSpreadsheet,
+  Settings,
+  Percent,
+  Wallet,
+  Printer,
 } from 'lucide-react';
 import { usePOS } from '../../context/POSContext';
 
@@ -192,6 +196,20 @@ export const SIDEBAR_MENU_GROUPS = [
       },
     ],
   },
+  {
+    id: 'group-settings',
+    label: 'ตั้งค่า',
+    description: 'ร้าน ภาษี การชำระเงิน เครื่องพิมพ์ ผู้ใช้งาน',
+    icon: Settings,
+    isDropdown: true,
+    children: [
+      { id: 'settings-shop', label: 'ข้อมูลร้าน', description: 'ชื่อ ที่อยู่ เบอร์โทรร้าน', icon: Store },
+      { id: 'settings-tax', label: 'ภาษี (VAT)', description: 'รูปแบบคิด VAT และเลขผู้เสียภาษี', icon: Percent },
+      { id: 'settings-payment', label: 'การชำระเงิน', description: 'พร้อมเพย์ และลิ้นชักเก็บเงิน', icon: Wallet },
+      { id: 'settings-printer', label: 'เครื่องพิมพ์', description: 'กระดาษ การเชื่อมต่อ พิมพ์อัตโนมัติ', icon: Printer },
+      { id: 'settings-users', label: 'ผู้ใช้งาน & สิทธิ์', description: 'พนักงาน PIN และบทบาท', icon: UserCog },
+    ],
+  },
 ];
 
 export default function Sidebar({
@@ -200,7 +218,13 @@ export default function Sidebar({
   isOpen = false,
   onToggleSidebar,
 }) {
-  const { products, dbMode, resetDemo, appVersion } = usePOS();
+  const { products, dbMode, resetDemo, appVersion, canTab, currentUser, authEnabled } = usePOS();
+
+  // แสดงเฉพาะเมนูที่บทบาทของผู้ใช้มีสิทธิ์เข้า (กลุ่มที่ไม่เหลือเมนูย่อยจะถูกซ่อน)
+  const visibleGroups = SIDEBAR_MENU_GROUPS.map((group) =>
+    group.isDropdown ? { ...group, children: group.children.filter((c) => canTab(c.id)) } : group
+  ).filter((group) => (group.isDropdown ? group.children.length > 0 : canTab(group.id)));
+  const canResetDemo = !authEnabled || currentUser?.role === 'admin';
 
   // เก็บสถานะการเปิด/ปิดของแต่ละ Dropdown ในโหมดขยายเต็ม
   const [openGroups, setOpenGroups] = useState({
@@ -208,6 +232,7 @@ export default function Sidebar({
     'group-reports': true,
     'group-customers': true,
     'group-management': true,
+    'group-settings': true,
   });
 
   // เก็บสถานะ Popover Dropdown ในโหมดย่อแสดงเฉพาะไอคอน
@@ -321,7 +346,7 @@ export default function Sidebar({
           </div>
         )}
 
-        {SIDEBAR_MENU_GROUPS.map((group) => {
+        {visibleGroups.map((group) => {
           const GroupIcon = group.icon;
 
           // 1. เมนูขายหน้าร้าน (POS) — ไม่เป็น Dropdown กดเข้าหน้าขายได้ทันที
@@ -562,7 +587,7 @@ export default function Sidebar({
               : 'ทำงานด้วยข้อมูลจำลองในเครื่อง (LocalStorage)'}
           </p>
 
-          {dbMode === 'demo' && (
+          {dbMode === 'demo' && canResetDemo && (
             <button
               type="button"
               onClick={resetDemo}
@@ -595,7 +620,7 @@ export default function Sidebar({
             />
           </div>
 
-          {dbMode === 'demo' && (
+          {dbMode === 'demo' && canResetDemo && (
             <button
               type="button"
               onClick={resetDemo}

@@ -38,7 +38,7 @@ const DEFAULT_CUSTOMER_FORM = {
 };
 
 export default function CustomersPage({ onNavigateToPOS }) {
-  const { customers, saveCustomer, selectCustomer, getCustomerCredit, showToast } = usePOS();
+  const { customers, saveCustomer, selectCustomer, getCustomerCredit, showToast, can } = usePOS();
 
   const [searchQuery, setSearchQuery] = useState('');
   const [typeFilter, setTypeFilter] = useState('all'); // 'all' | 'wholesale' | 'retail' | 'outstanding'
@@ -330,7 +330,7 @@ export default function CustomersPage({ onNavigateToPOS }) {
                     <ShoppingCart className="w-3.5 h-3.5" />
                     <span>เปิดบิลขาย</span>
                   </button>
-                  {credit?.outstanding > 0 && (
+                  {credit?.outstanding > 0 && can('receive_payment') && (
                     <button
                       type="button"
                       onClick={() => setPaymentCustomer(cus)}

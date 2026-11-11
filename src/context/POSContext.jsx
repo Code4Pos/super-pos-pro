@@ -4,8 +4,11 @@ import { printerService } from '../services/printerService';
 import { calculateEffectiveUnitPrice } from '../utils/formatters';
 import { summarizeSplitPayments } from '../utils/payments';
 import { calculateCustomerCredit, checkCreditSale } from '../utils/credit';
+import { hasPermission, canAccessTab } from '../utils/rbac';
 
-export const APP_VERSION = 'version beta 0.2.7';
+const SESSION_STORAGE_KEY = 'siampos_session_v1';
+
+export const APP_VERSION = 'version beta 0.2.8';
 const HELD_BILLS_STORAGE_KEY = 'siampos_held_bills_v1';
 
 const POSContext = createContext(null);
@@ -23,6 +26,28 @@ export function POSProvider({ children }) {
   const [billingNotes, setBillingNotes] = useState([]);
   const [stockLedger, setStockLedger] = useState([]);
   const [taxInvoices, setTaxInvoices] = useState([]);
+
+  // ผู้ใช้งานและสิทธิ์ (RBAC): ถ้ายังไม่มีผู้ใช้ที่เปิดใช้งาน ระบบจะเปิดทุกเมนูแบบไม่ต้องล็อกอิน
+  // โหลดรายชื่อผู้ใช้จากเครื่องทันที เพื่อไม่ให้หน้าจอเปิดทุกเมนูชั่วขณะก่อนโหลดข้อมูลเสร็จ
+  const [users, setUsers] = useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('siampos_users_v1') || '[]');
+      return Array.isArray(saved) ? saved : [];
+    } catch {
+      return [];
+    }
+  });
+  const [sessionUserId, setSessionUserId] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem(SESSION_STORAGE_KEY) || 'null')?.userId || null;
+    } catch {
+      return null;
+    }
+  });
+  const authEnabled = users.some((u) => u.is_active);
+  const currentUser = authEnabled
+    ? users.find((u) => u.id === sessionUserId && u.is_active) || null
+    : null;
   const [suppliers, setSuppliers] = useState([]);
   const [stockImports, setStockImports] = useState([]);
   const [orders, setOrders] = useState([]);
@@ -35,13 +60,13 @@ export function POSProvider({ children }) {
   const [selectedCustomer, setSelectedCustomer] = useState(null);
   const [billDiscount, setBillDiscount] = useState(0);
 
-  // ระบบคำนวณ VAT 3 รูปแบบ: 'no_vat' | 'vat_in' | 'vat_out'
-  const [vatMode, setVatMode] = useState('no_vat');
-
-  // การตั้งค่าเครื่องพิมพ์ความร้อน และ สถานะเครื่องพิมพ์ 3 สถานะ ('ready' | 'warning' | 'error')
+  // การตั้งค่าระบบ (เครื่องพิมพ์, ร้าน, ภาษี, การชำระเงิน) และ สถานะเครื่องพิมพ์ 3 สถานะ ('ready' | 'warning' | 'error')
   const [printerSettings, setPrinterSettings] = useState(() =>
     printerService.getSettings()
   );
+
+  // ระบบคำนวณ VAT 3 รูปแบบ: 'no_vat' | 'vat_in' | 'vat_out' (ตั้งค่าครั้งเดียวที่หน้าตั้งค่า › ภาษี ใช้กับทุกบิล)
+  const vatMode = printerSettings.vatMode || 'no_vat';
   const [printerStatus, setPrinterStatus] = useState('ready');
 
   const refreshPrinterStatus = useCallback(async (customSettings = null) => {
@@ -62,6 +87,11 @@ export function POSProvider({ children }) {
     const updated = printerService.saveSettings(newSettings);
     setPrinterSettings(updated);
   }, []);
+
+  const setVatMode = useCallback(
+    (mode) => updatePrinterSettings({ vatMode: mode }),
+    [updatePrinterSettings]
+  );
 
   // รายการพักบิล (Held Bills) บันทึกลง LocalStorage
   const [heldBills, setHeldBills] = useState(() => {
@@ -109,6 +139,7 @@ export function POSProvider({ children }) {
       setBillingNotes(data.billingNotes || []);
       setStockLedger(data.stockLedger || []);
       setTaxInvoices(data.taxInvoices || []);
+      setUsers(data.users || []);
       setSuppliers(data.suppliers || []);
       setStockImports(data.stockImports || []);
       setOrders(data.orders);
@@ -443,7 +474,7 @@ export function POSProvider({ children }) {
       setSelectedCustomer(target.selectedCustomer || null);
       setPricingMode(target.pricingMode || 'auto');
       setBillDiscount(target.billDiscount || 0);
-      setVatMode(target.vatMode || 'no_vat');
+      // รูปแบบ VAT ใช้ค่าจากหน้าตั้งค่าเสมอ ไม่เปลี่ยนตามบิลที่พักไว้
       showToast(`เรียกบิล "${target.title}" กลับมาขายต่อแล้ว`, 'success');
     },
     [
@@ -530,6 +561,7 @@ export function POSProvider({ children }) {
 
       const orderPayload = {
         credit_due_date: creditDueDate,
+        created_by_name: currentUser?.name || '',
         customer: selectedCustomer,
         pricing_mode: pricingMode,
         subtotal: cartSummary.subtotal,
@@ -599,6 +631,7 @@ export function POSProvider({ children }) {
       showToast,
       printerSettings,
       getCustomerCredit,
+      currentUser,
     ]
   );
 
@@ -1118,8 +1151,92 @@ export function POSProvider({ children }) {
     showToast('รีเซ็ตข้อมูลตัวอย่างกลับเป็นค่าเริ่มต้นเรียบร้อย', 'info');
   }, [refreshData, clearCart, showToast]);
 
+  // ล็อกอินด้วย PIN (ผิดติดกัน 5 ครั้ง ล็อก 30 วินาที)
+  const [failedPinAttempts, setFailedPinAttempts] = useState({ count: 0, lockedUntil: 0 });
+  const login = useCallback(
+    (userId, pin) => {
+      const now = Date.now();
+      if (failedPinAttempts.lockedUntil > now) {
+        const waitSec = Math.ceil((failedPinAttempts.lockedUntil - now) / 1000);
+        return { ok: false, message: `ใส่ PIN ผิดหลายครั้ง กรุณารอ ${waitSec} วินาที` };
+      }
+      const user = users.find((u) => u.id === userId);
+      if (!posService.verifyUserPin(user, pin)) {
+        const count = failedPinAttempts.count + 1;
+        setFailedPinAttempts({ count: count >= 5 ? 0 : count, lockedUntil: count >= 5 ? now + 30000 : 0 });
+        return { ok: false, message: 'PIN ไม่ถูกต้อง' };
+      }
+      setFailedPinAttempts({ count: 0, lockedUntil: 0 });
+      setSessionUserId(user.id);
+      try {
+        localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify({ userId: user.id, at: now }));
+      } catch {
+        // ignore storage errors
+      }
+      showToast(`ยินดีต้อนรับ ${user.name}`, 'success');
+      return { ok: true };
+    },
+    [users, failedPinAttempts, showToast]
+  );
+
+  const logout = useCallback(() => {
+    setSessionUserId(null);
+    clearCart();
+    try {
+      localStorage.removeItem(SESSION_STORAGE_KEY);
+    } catch {
+      // ignore storage errors
+    }
+  }, [clearCart]);
+
+  const saveUser = useCallback(
+    async (userData) => {
+      try {
+        const { savedUser, updatedUsers } = await posService.upsertUser(userData, dbMode === 'supabase');
+        setUsers(updatedUsers);
+        // ผู้ใช้คนแรกที่สร้าง (ผู้ดูแลระบบ) ล็อกอินให้อัตโนมัติ
+        if (!authEnabled) {
+          setSessionUserId(savedUser.id);
+          try {
+            localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify({ userId: savedUser.id, at: Date.now() }));
+          } catch {
+            // ignore storage errors
+          }
+        }
+        showToast(`บันทึกผู้ใช้งาน "${savedUser.name}" เรียบร้อย`, 'success');
+        return savedUser;
+      } catch (err) {
+        showToast(err.message, 'error');
+        return null;
+      }
+    },
+    [dbMode, authEnabled, showToast]
+  );
+
+  // ยืนยันผู้อนุมัติด้วย PIN (เช่น ผู้จัดการอนุมัติการลดสต็อก) คืนผู้ใช้ที่อนุมัติ หรือ null
+  const verifyApprover = useCallback(
+    (userId, pin, permission) => {
+      const user = users.find((u) => u.id === userId);
+      if (!posService.verifyUserPin(user, pin)) return null;
+      return hasPermission(user, permission) ? user : null;
+    },
+    [users]
+  );
+
+  const can = useCallback((permission) => hasPermission(currentUser, permission), [currentUser]);
+  const canTab = useCallback((tab) => canAccessTab(currentUser, tab), [currentUser]);
+
   const value = {
     appVersion: APP_VERSION,
+    users,
+    currentUser,
+    authEnabled,
+    login,
+    logout,
+    saveUser,
+    can,
+    canTab,
+    verifyApprover,
     dbMode,
     loading,
     categories,

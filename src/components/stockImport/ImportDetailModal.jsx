@@ -32,7 +32,7 @@ const STATUS_ACTION_CONFIRM = {
  * Modal ตรวจสอบใบนำเข้า: แสดงรายละเอียด ขั้นตอนสถานะ และปุ่มเปลี่ยนสถานะ
  */
 export default function ImportDetailModal({ importDoc, onClose, onEdit, onChangeStatus }) {
-  const { suppliers = [] } = usePOS();
+  const { suppliers = [], can } = usePOS();
   const [pendingAction, setPendingAction] = useState(null);
 
   if (!importDoc) return null;
@@ -177,7 +177,7 @@ export default function ImportDetailModal({ importDoc, onClose, onEdit, onChange
         </div>
 
         {/* ปุ่มเปลี่ยนสถานะตามขั้นตอน */}
-        {(status === 'pending' || status === 'in_transit') && (
+        {(status === 'pending' || status === 'in_transit') && can('approve_import') && (
           <div className="px-5 py-3.5 border-t border-slate-200 bg-slate-50 flex flex-col sm:flex-row sm:items-center justify-between gap-2 shrink-0">
             <button
               type="button"

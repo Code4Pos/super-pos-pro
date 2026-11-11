@@ -3,7 +3,9 @@ import { NAV_ITEMS } from './Sidebar';
 import { usePOS } from '../../context/POSContext';
 
 export default function MobileNav({ activeTab, setActiveTab }) {
-  const { products } = usePOS();
+  const { products, canTab } = usePOS();
+  // แสดงเฉพาะเมนูที่บทบาทของผู้ใช้มีสิทธิ์เข้า
+  const items = NAV_ITEMS.filter((item) => canTab(item.id));
 
   const lowStockCount = products.filter(
     (p) => Number(p.stock) <= Number(p.min_stock || 10)
@@ -11,8 +13,11 @@ export default function MobileNav({ activeTab, setActiveTab }) {
 
   return (
     <nav className="lg:hidden fixed bottom-0 inset-x-0 bg-white/95 backdrop-blur-md border-t border-slate-200 z-30 safe-area-pb">
-      <div className="grid grid-cols-5 h-16 max-w-lg mx-auto">
-        {NAV_ITEMS.map((item) => {
+      <div
+        className="grid h-16 max-w-lg mx-auto"
+        style={{ gridTemplateColumns: `repeat(${Math.max(1, items.length)}, minmax(0, 1fr))` }}
+      >
+        {items.map((item) => {
           const Icon = item.icon;
           const isActive = activeTab === item.id;
           return (

@@ -13,7 +13,7 @@ import { formatCurrency, formatDateTime, formatNumber } from '../utils/formatter
  * - ออก/พิมพ์ใบวางบิล และรับชำระหนี้
  */
 export default function AccountsReceivablePage() {
-  const { customers, orders, customerPayments, billingNotes } = usePOS();
+  const { customers, orders, customerPayments, billingNotes, can } = usePOS();
   const [viewMode, setViewMode] = useState('aging'); // 'aging' | 'billing'
   const [billingCustomer, setBillingCustomer] = useState(null);
   const [paymentCustomer, setPaymentCustomer] = useState(null);
@@ -150,6 +150,7 @@ export default function AccountsReceivablePage() {
                     </td>
                     <td className="py-2.5 px-3">
                       <div className="flex items-center justify-center gap-1.5">
+                        {can('billing_note') && (
                         <button
                           type="button"
                           onClick={() => setBillingCustomer(row.customer)}
@@ -158,6 +159,8 @@ export default function AccountsReceivablePage() {
                           <FileText className="w-3.5 h-3.5" />
                           <span>วางบิล</span>
                         </button>
+                        )}
+                        {can('receive_payment') && (
                         <button
                           type="button"
                           onClick={() => setPaymentCustomer(row.customer)}
@@ -166,6 +169,7 @@ export default function AccountsReceivablePage() {
                           <Wallet className="w-3.5 h-3.5" />
                           <span>รับชำระ</span>
                         </button>
+                        )}
                       </div>
                     </td>
                   </tr>

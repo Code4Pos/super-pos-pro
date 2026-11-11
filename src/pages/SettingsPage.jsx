@@ -1,0 +1,28 @@
+import React from 'react';
+import ShopSettings from '../components/settings/ShopSettings';
+import TaxSettings from '../components/settings/TaxSettings';
+import PaymentSettings from '../components/settings/PaymentSettings';
+import PrinterSettings from '../components/settings/PrinterSettings';
+import UsersSettings from '../components/settings/UsersSettings';
+
+const SECTIONS = {
+  'settings-shop': ShopSettings,
+  'settings-tax': TaxSettings,
+  'settings-payment': PaymentSettings,
+  'settings-printer': PrinterSettings,
+  'settings-users': UsersSettings,
+};
+
+/**
+ * หน้าตั้งค่าระบบ แยกเป็นเมนูย่อยใน Sidebar (ข้อมูลร้าน / ภาษี / การชำระเงิน / เครื่องพิมพ์ / ผู้ใช้งาน)
+ */
+export default function SettingsPage({ section }) {
+  const Section = SECTIONS[section] || ShopSettings;
+  return (
+    <div className="flex-1 overflow-y-auto bg-slate-50 p-3 sm:p-5 pb-24 lg:pb-5">
+      <div className="max-w-3xl mx-auto">
+        <Section />
+      </div>
+    </div>
+  );
+}

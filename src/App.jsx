@@ -16,6 +16,9 @@ import AccountsReceivablePage from './pages/AccountsReceivablePage';
 import StockLedgerPage from './pages/StockLedgerPage';
 import ReorderPage from './pages/ReorderPage';
 import SalesTaxReportPage from './pages/SalesTaxReportPage';
+import SettingsPage from './pages/SettingsPage';
+import LoginScreen from './components/auth/LoginScreen';
+import { SETTINGS_TABS } from './utils/rbac';
 
 const ACTIVE_TAB_STORAGE_KEY = 'siampos_active_tab_v1';
 const VALID_TABS = new Set([
@@ -32,6 +35,7 @@ const VALID_TABS = new Set([
   'stock-ledger',
   'reorder',
   'sales-tax',
+  ...SETTINGS_TABS,
 ]);
 
 function MainAppContent() {
@@ -58,7 +62,19 @@ function MainAppContent() {
 
   // ซ่อน/ย่อ Sidebar เป็นค่าเริ่มต้น (false = โหมดย่อแสดงเฉพาะไอคอน, true = โหมดแสดงเต็ม)
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  const { toast } = usePOS();
+  const { toast, authEnabled, currentUser, canTab } = usePOS();
+
+  // ถ้าบทบาทของผู้ใช้เข้าหน้านี้ไม่ได้ ให้ย้ายไปหน้าแรกที่มีสิทธิ์
+  useEffect(() => {
+    if (!canTab(activeTab)) {
+      const firstAllowed = [...VALID_TABS].find((tab) => canTab(tab));
+      if (firstAllowed) setActiveTab(firstAllowed);
+    }
+  }, [activeTab, canTab]);
+
+  if (authEnabled && !currentUser) {
+    return <LoginScreen />;
+  }
 
   return (
     <div className="h-[100dvh] w-screen overflow-hidden flex bg-slate-50 text-slate-900">
@@ -101,6 +117,7 @@ function MainAppContent() {
           {activeTab === 'stock-ledger' && <StockLedgerPage />}
           {activeTab === 'reorder' && <ReorderPage />}
           {activeTab === 'sales-tax' && <SalesTaxReportPage />}
+          {SETTINGS_TABS.includes(activeTab) && <SettingsPage section={activeTab} />}
         </main>
 
         {/* แถบเมนูด้านล่าง (Smartphone & Tablet Bottom Nav) */}

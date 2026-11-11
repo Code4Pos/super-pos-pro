@@ -9,11 +9,13 @@ import {
   PanelLeftClose,
   Maximize,
   Minimize,
-  Printer,
+  Settings,
+  LogOut,
+  UserCircle2,
 } from 'lucide-react';
 import { usePOS } from '../../context/POSContext';
-import PrinterSettingsModal from '../pos/PrinterSettingsModal';
 import { formatCurrency } from '../../utils/formatters';
+import { ROLES, SETTINGS_TABS } from '../../utils/rbac';
 
 export default function Header({
   activeTab,
@@ -29,10 +31,17 @@ export default function Header({
     loading,
     appVersion,
     printerStatus,
+    currentUser,
+    logout,
+    canTab,
   } = usePOS();
 
+  // ปุ่มฟันเฟืองพาไปหน้าตั้งค่าเครื่องพิมพ์ (หรือหน้าตั้งค่าแรกที่บทบาทนี้เข้าได้)
+  const settingsTab = canTab('settings-printer')
+    ? 'settings-printer'
+    : SETTINGS_TABS.find((tab) => canTab(tab));
+
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [isPrinterModalOpen, setIsPrinterModalOpen] = useState(false);
 
   useEffect(() => {
     const handleFsChange = () => {
@@ -132,6 +141,11 @@ export default function Header({
               {activeTab === 'orders' && 'รายงาน › ประวัติบิล'}
               {activeTab === 'dashboard' && 'รายงาน › แดชบอร์ด'}
               {activeTab === 'sales-tax' && 'รายงาน › รายงานภาษีขาย'}
+              {activeTab === 'settings-shop' && 'ตั้งค่า › ข้อมูลร้าน'}
+              {activeTab === 'settings-tax' && 'ตั้งค่า › ภาษี (VAT)'}
+              {activeTab === 'settings-payment' && 'ตั้งค่า › การชำระเงิน'}
+              {activeTab === 'settings-printer' && 'ตั้งค่า › เครื่องพิมพ์'}
+              {activeTab === 'settings-users' && 'ตั้งค่า › ผู้ใช้งาน & สิทธิ์'}
               {activeTab === 'customers' && 'ลูกค้า › จัดการลูกค้า'}
               {activeTab === 'suppliers' && 'บริหาร › จัดการผู้ผลิต'}
               {activeTab === 'receivables' && 'ลูกค้า › ลูกหนี้ & วางบิล'}
@@ -190,18 +204,34 @@ export default function Header({
           </button>
         )}
 
-        {/* ปุ่มไอคอนแสดงสถานะเครื่องพิมพ์ 3 สถานะ (ใส่เฉพาะไอคอนและจุดสี เขียว/ส้ม/แดง ไม่ใส่ตัวหนังสือตามที่กำหนด) */}
-        <button
-          type="button"
-          onClick={() => setIsPrinterModalOpen(true)}
-          className="relative w-10 h-9 rounded-xl border border-slate-200 hover:bg-slate-100 text-slate-700 flex items-center justify-center"
-          title="ตั้งค่าและตรวจสอบสถานะเครื่องพิมพ์ความร้อน"
-        >
-          <Printer className="w-4 h-4 text-slate-700" />
-          <span
-            className={`w-2.5 h-2.5 rounded-full ${printerDotColorClass} absolute top-1.5 right-1.5 ring-2 ring-white`}
-          />
-        </button>
+        {/* ปุ่มตั้งค่าระบบ (ฟันเฟือง) พร้อมจุดสีสถานะเครื่องพิมพ์ เขียว/ส้ม/แดง */}
+        {settingsTab && (
+          <button
+            type="button"
+            onClick={() => setActiveTab(settingsTab)}
+            className="relative w-10 h-9 rounded-xl border border-slate-200 hover:bg-slate-100 text-slate-700 flex items-center justify-center"
+            title="ตั้งค่าระบบ (จุดสี = สถานะเครื่องพิมพ์)"
+          >
+            <Settings className="w-4 h-4 text-slate-700" />
+            <span
+              className={`w-2.5 h-2.5 rounded-full ${printerDotColorClass} absolute top-1.5 right-1.5 ring-2 ring-white`}
+            />
+          </button>
+        )}
+
+        {/* ผู้ใช้งานที่ล็อกอินอยู่ และปุ่มออกจากระบบ */}
+        {currentUser && (
+          <button
+            type="button"
+            onClick={logout}
+            className="flex items-center gap-1.5 px-2.5 h-9 rounded-xl border border-slate-200 hover:bg-rose-50 hover:border-rose-200 text-slate-700 hover:text-rose-700 text-xs font-bold"
+            title={`${currentUser.name} (${ROLES[currentUser.role]?.label || currentUser.role}) — กดเพื่อออกจากระบบ`}
+          >
+            <UserCircle2 className="w-4 h-4 shrink-0" />
+            <span className="hidden md:inline max-w-[8rem] truncate">{currentUser.name}</span>
+            <LogOut className="w-3.5 h-3.5 shrink-0" />
+          </button>
+        )}
 
         {/* ปุ่ม Full Screen */}
         <button
@@ -236,11 +266,6 @@ export default function Header({
         </button>
       </div>
 
-      {/* Modal ตั้งค่าเครื่องพิมพ์ความร้อน */}
-      <PrinterSettingsModal
-        isOpen={isPrinterModalOpen}
-        onClose={() => setIsPrinterModalOpen(false)}
-      />
     </header>
   );
 }
