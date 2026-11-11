@@ -171,6 +171,28 @@ ALTER TABLE products ALTER COLUMN cost_price TYPE NUMERIC(12, 4);
 ALTER TABLE products ADD COLUMN IF NOT EXISTS lead_time_days INTEGER;
 ALTER TABLE products ADD COLUMN IF NOT EXISTS safety_stock NUMERIC(12, 2);
 
+-- beta 0.2.7: ใบกำกับภาษีเต็มรูปแบบ (Full Tax Invoice) เลขที่เรียงต่อเนื่องรายเดือน ห้ามซ้ำ
+CREATE TABLE IF NOT EXISTS tax_invoices (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  invoice_number TEXT UNIQUE NOT NULL,
+  order_id TEXT,
+  order_number TEXT NOT NULL,
+  buyer_name TEXT NOT NULL,
+  buyer_tax_id VARCHAR(13),
+  buyer_branch VARCHAR(5) DEFAULT '00000',
+  buyer_address TEXT,
+  items JSONB NOT NULL DEFAULT '[]'::jsonb,
+  bill_discount NUMERIC(12, 2) DEFAULT 0,
+  base_amount NUMERIC(12, 2) NOT NULL,
+  vat_amount NUMERIC(12, 2) NOT NULL,
+  total_amount NUMERIC(12, 2) NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'cancelled')),
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+-- 1 บิลขายออกใบกำกับเต็มรูปที่ใช้งานได้ 1 ฉบับ
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tax_invoices_active_order
+  ON tax_invoices (order_number) WHERE status = 'active';
+
 -- 6. ตารางรายการสินค้าในบิล (Order Items)
 CREATE TABLE IF NOT EXISTS order_items (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -208,6 +230,10 @@ ALTER TABLE order_items ENABLE ROW LEVEL SECURITY;
 ALTER TABLE customer_payments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE billing_notes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE stock_ledger ENABLE ROW LEVEL SECURITY;
+ALTER TABLE tax_invoices ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Allow public access to tax_invoices" ON tax_invoices;
+CREATE POLICY "Allow public access to tax_invoices" ON tax_invoices FOR ALL USING (true) WITH CHECK (true);
 
 DROP POLICY IF EXISTS "Allow public access to stock_ledger" ON stock_ledger;
 CREATE POLICY "Allow public access to stock_ledger" ON stock_ledger FOR ALL USING (true) WITH CHECK (true);

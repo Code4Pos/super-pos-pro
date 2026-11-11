@@ -15,6 +15,7 @@ import SuppliersPage from './pages/SuppliersPage';
 import AccountsReceivablePage from './pages/AccountsReceivablePage';
 import StockLedgerPage from './pages/StockLedgerPage';
 import ReorderPage from './pages/ReorderPage';
+import SalesTaxReportPage from './pages/SalesTaxReportPage';
 
 const ACTIVE_TAB_STORAGE_KEY = 'siampos_active_tab_v1';
 const VALID_TABS = new Set([
@@ -30,6 +31,7 @@ const VALID_TABS = new Set([
   'receivables',
   'stock-ledger',
   'reorder',
+  'sales-tax',
 ]);
 
 function MainAppContent() {
@@ -98,6 +100,7 @@ function MainAppContent() {
           {activeTab === 'receivables' && <AccountsReceivablePage />}
           {activeTab === 'stock-ledger' && <StockLedgerPage />}
           {activeTab === 'reorder' && <ReorderPage />}
+          {activeTab === 'sales-tax' && <SalesTaxReportPage />}
         </main>
 
         {/* แถบเมนูด้านล่าง (Smartphone & Tablet Bottom Nav) */}

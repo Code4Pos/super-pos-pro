@@ -23,6 +23,7 @@ import {
   Landmark,
   History,
   ClipboardList,
+  FileSpreadsheet,
 } from 'lucide-react';
 import { usePOS } from '../../context/POSContext';
 
@@ -146,6 +147,12 @@ export const SIDEBAR_MENU_GROUPS = [
         label: 'แดชบอร์ด',
         description: 'วิเคราะห์ยอดขายและกำไร',
         icon: BarChart3,
+      },
+      {
+        id: 'sales-tax',
+        label: 'รายงานภาษีขาย',
+        description: 'ใบกำกับภาษี และยอดสำหรับ ภ.พ.30',
+        icon: FileSpreadsheet,
       },
     ],
   },

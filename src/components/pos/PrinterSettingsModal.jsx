@@ -16,6 +16,7 @@ import {
 import { printerService } from '../../services/printerService';
 import { usePOS } from '../../context/POSContext';
 import { parsePromptPayId } from '../../utils/promptpay';
+import { isValidThaiTaxId } from '../../utils/credit';
 
 export default function PrinterSettingsModal({ isOpen, onClose }) {
   const {
@@ -41,10 +42,16 @@ export default function PrinterSettingsModal({ isOpen, onClose }) {
   const promptpayIdInvalid =
     String(form.promptpayId || '').trim() !== '' && !parsePromptPayId(form.promptpayId);
 
+  const shopTaxIdInvalid = Boolean(form.vatRegistered) && !isValidThaiTaxId(form.shopTaxId);
+
   const handleSave = (e) => {
     e.preventDefault();
     if (promptpayIdInvalid) {
       showToast('หมายเลขพร้อมเพย์ต้องเป็นเบอร์มือถือ 10 หลัก หรือเลข 13 หลัก', 'error');
+      return;
+    }
+    if (shopTaxIdInvalid) {
+      showToast('ร้านที่จด VAT ต้องระบุเลขผู้เสียภาษี 13 หลักที่ถูกต้อง', 'error');
       return;
     }
     updatePrinterSettings(form);
@@ -389,6 +396,84 @@ export default function PrinterSettingsModal({ isOpen, onClose }) {
                   ทดสอบเปิดลิ้นชัก
                 </button>
               </div>
+            </div>
+          </div>
+
+          {/* 4. ข้อมูลร้านและภาษี (แสดงบนใบเสร็จ ใบกำกับภาษี และเอกสาร A4) */}
+          <div className="space-y-2">
+            <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
+              4. ข้อมูลร้าน & ภาษีมูลค่าเพิ่ม
+            </label>
+            <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200 space-y-2">
+              <input
+                type="text"
+                data-allow-scanner="false"
+                value={form.shopName || ''}
+                onChange={(e) => setForm({ ...form, shopName: e.target.value })}
+                placeholder="ชื่อร้าน / ชื่อบริษัท"
+                className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-bold"
+              />
+              <input
+                type="text"
+                data-allow-scanner="false"
+                value={form.shopAddress || ''}
+                onChange={(e) => setForm({ ...form, shopAddress: e.target.value })}
+                placeholder="ที่อยู่ร้าน (ตามที่จดทะเบียน)"
+                className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs"
+              />
+              <input
+                type="text"
+                data-allow-scanner="false"
+                value={form.shopPhone || ''}
+                onChange={(e) => setForm({ ...form, shopPhone: e.target.value })}
+                placeholder="เบอร์โทรร้าน"
+                className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs"
+              />
+              <label className="flex items-center justify-between gap-2 cursor-pointer pt-1">
+                <span className="text-xs sm:text-sm font-bold text-slate-800">
+                  ร้านจดทะเบียนภาษีมูลค่าเพิ่ม (ออกใบกำกับภาษีได้)
+                </span>
+                <input
+                  type="checkbox"
+                  checked={Boolean(form.vatRegistered)}
+                  onChange={(e) => setForm({ ...form, vatRegistered: e.target.checked })}
+                  className="w-5 h-5 accent-indigo-600 rounded shrink-0"
+                />
+              </label>
+              {form.vatRegistered && (
+                <div className="grid grid-cols-3 gap-2">
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    data-allow-scanner="false"
+                    maxLength={17}
+                    value={form.shopTaxId || ''}
+                    onChange={(e) => setForm({ ...form, shopTaxId: e.target.value.replace(/\D/g, '') })}
+                    placeholder="เลขผู้เสียภาษี 13 หลัก"
+                    className={`col-span-2 px-3 py-2 rounded-xl border bg-white text-xs font-mono ${
+                      shopTaxIdInvalid ? 'border-rose-400' : 'border-slate-300'
+                    }`}
+                  />
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    data-allow-scanner="false"
+                    maxLength={5}
+                    value={form.shopBranch || '00000'}
+                    onChange={(e) => setForm({ ...form, shopBranch: e.target.value.replace(/\D/g, '') })}
+                    placeholder="สาขา"
+                    className="px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-mono"
+                  />
+                  {shopTaxIdInvalid && (
+                    <p className="col-span-3 text-[11px] font-bold text-rose-600">
+                      เลขผู้เสียภาษีไม่ถูกต้อง (ต้องเป็น 13 หลักและผ่านการตรวจหลักสุดท้าย)
+                    </p>
+                  )}
+                  <p className="col-span-3 text-[10px] text-slate-500">
+                    ใบเสร็จความร้อนจะแสดงเป็น "ใบกำกับภาษีอย่างย่อ" อัตโนมัติ • สาขา 00000 = สำนักงานใหญ่
+                  </p>
+                </div>
+              )}
             </div>
           </div>
 

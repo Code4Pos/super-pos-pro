@@ -5,7 +5,7 @@ import { calculateEffectiveUnitPrice } from '../utils/formatters';
 import { summarizeSplitPayments } from '../utils/payments';
 import { calculateCustomerCredit, checkCreditSale } from '../utils/credit';
 
-export const APP_VERSION = 'version beta 0.2.6';
+export const APP_VERSION = 'version beta 0.2.7';
 const HELD_BILLS_STORAGE_KEY = 'siampos_held_bills_v1';
 
 const POSContext = createContext(null);
@@ -22,6 +22,7 @@ export function POSProvider({ children }) {
   const [customerPayments, setCustomerPayments] = useState([]);
   const [billingNotes, setBillingNotes] = useState([]);
   const [stockLedger, setStockLedger] = useState([]);
+  const [taxInvoices, setTaxInvoices] = useState([]);
   const [suppliers, setSuppliers] = useState([]);
   const [stockImports, setStockImports] = useState([]);
   const [orders, setOrders] = useState([]);
@@ -107,6 +108,7 @@ export function POSProvider({ children }) {
       setCustomerPayments(data.customerPayments || []);
       setBillingNotes(data.billingNotes || []);
       setStockLedger(data.stockLedger || []);
+      setTaxInvoices(data.taxInvoices || []);
       setSuppliers(data.suppliers || []);
       setStockImports(data.stockImports || []);
       setOrders(data.orders);
@@ -951,6 +953,26 @@ export function POSProvider({ children }) {
     [dbMode, showToast]
   );
 
+  // ออกใบกำกับภาษีเต็มรูปแบบจากบิลขาย
+  const createTaxInvoice = useCallback(
+    async (invoiceData) => {
+      try {
+        const { savedInvoice, updatedInvoices } = await posService.createTaxInvoice(
+          invoiceData,
+          dbMode === 'supabase',
+          taxInvoices
+        );
+        setTaxInvoices(updatedInvoices);
+        showToast(`ออกใบกำกับภาษี ${savedInvoice.invoice_number} เรียบร้อย`, 'success');
+        return savedInvoice;
+      } catch (err) {
+        showToast(err.message, 'error');
+        return null;
+      }
+    },
+    [dbMode, taxInvoices, showToast]
+  );
+
   // ออกใบวางบิล (Billing Note) ให้ลูกค้าเครดิต
   const createBillingNote = useCallback(
     async (noteData) => {
@@ -1158,6 +1180,8 @@ export function POSProvider({ children }) {
     getCustomerCredit,
     recordCustomerPayment,
     stockLedger,
+    taxInvoices,
+    createTaxInvoice,
     billingNotes,
     createBillingNote,
     saveSupplier,

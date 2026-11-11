@@ -131,6 +131,7 @@ export default function Header({
               {activeTab === 'special-pricing' && 'คลังสินค้า › ราคาพิเศษ'}
               {activeTab === 'orders' && 'รายงาน › ประวัติบิล'}
               {activeTab === 'dashboard' && 'รายงาน › แดชบอร์ด'}
+              {activeTab === 'sales-tax' && 'รายงาน › รายงานภาษีขาย'}
               {activeTab === 'customers' && 'ลูกค้า › จัดการลูกค้า'}
               {activeTab === 'suppliers' && 'บริหาร › จัดการผู้ผลิต'}
               {activeTab === 'receivables' && 'ลูกค้า › ลูกหนี้ & วางบิล'}

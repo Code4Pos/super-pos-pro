@@ -1,5 +1,6 @@
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { B2B_CUSTOMER_DEFAULTS, normalizeB2BFields } from '../utils/credit';
+import { calculateOrderVat, getNextTaxInvoiceNumber, getTaxInvoicePrefix } from '../utils/tax';
 import {
   INITIAL_CATEGORIES,
   INITIAL_UNITS,
@@ -20,6 +21,7 @@ const STORAGE_KEYS = {
   CUSTOMER_PAYMENTS: 'siampos_customer_payments_v1',
   BILLING_NOTES: 'siampos_billing_notes_v1',
   STOCK_LEDGER: 'siampos_stock_ledger_v1',
+  TAX_INVOICES: 'siampos_tax_invoices_v1',
   SUPPLIERS: 'siampos_suppliers_v1',
   STOCK_IMPORTS: 'siampos_stock_imports_v1',
   ORDERS: 'siampos_orders_v1',
@@ -589,10 +591,11 @@ export const posService = {
         );
 
         // ยอดรับชำระหนี้ และใบวางบิล (ถ้ายังไม่มีตารางในฐานข้อมูลให้ใช้ข้อมูลในเครื่อง)
-        const [customerPayments, billingNotes, stockLedger] = await Promise.all([
+        const [customerPayments, billingNotes, stockLedger, taxInvoices] = await Promise.all([
           loadRemoteWithLocal('customer_payments', STORAGE_KEYS.CUSTOMER_PAYMENTS),
           loadRemoteWithLocal('billing_notes', STORAGE_KEYS.BILLING_NOTES),
           loadRemoteWithLocal('stock_ledger', STORAGE_KEYS.STOCK_LEDGER, MAX_LOCAL_LEDGER_ENTRIES),
+          loadRemoteWithLocal('tax_invoices', STORAGE_KEYS.TAX_INVOICES, 5000),
         ]);
 
         return {
@@ -605,6 +608,7 @@ export const posService = {
           customerPayments,
           billingNotes,
           stockLedger,
+          taxInvoices,
           suppliers,
           stockImports,
           orders: ordRes.data || [],
@@ -640,6 +644,7 @@ export const posService = {
       customerPayments: getLocal(STORAGE_KEYS.CUSTOMER_PAYMENTS, []),
       billingNotes: getLocal(STORAGE_KEYS.BILLING_NOTES, []),
       stockLedger: getLocal(STORAGE_KEYS.STOCK_LEDGER, []),
+      taxInvoices: getLocal(STORAGE_KEYS.TAX_INVOICES, []),
       suppliers,
       stockImports,
       orders: getLocal(STORAGE_KEYS.ORDERS, INITIAL_ORDERS),
@@ -1408,6 +1413,90 @@ export const posService = {
       isSupabaseActive
     );
     return { savedPayment: saved, updatedPayments: updated };
+  },
+
+  /**
+   * ออกใบกำกับภาษีเต็มรูปแบบ (Full Tax Invoice) จากบิลขาย 1 บิล
+   * - เลขที่เรียงต่อเนื่องรายเดือน (TXYYYYMM-0001) ห้ามซ้ำ
+   * - โหมด Supabase อ่านเลขล่าสุดจากฐานข้อมูลก่อน และลองเลขถัดไปถ้าชนกับเครื่องอื่น (unique)
+   * - เก็บรายการสินค้าและยอด ณ วันที่ออก เพื่อให้พิมพ์ซ้ำได้ตรงเดิม
+   */
+  async createTaxInvoice(invoiceData, isSupabaseActive, existingInvoices = []) {
+    const order = invoiceData.order;
+    if (!order || order.status === 'voided') {
+      throw new Error('ออกใบกำกับภาษีได้เฉพาะบิลที่ไม่ถูกยกเลิก');
+    }
+    if (
+      existingInvoices.some((t) => t.order_number === order.order_number && t.status !== 'cancelled')
+    ) {
+      throw new Error(`บิล ${order.order_number} ออกใบกำกับภาษีเต็มรูปไปแล้ว`);
+    }
+
+    const now = new Date();
+    const vat = calculateOrderVat(order);
+    const baseRecord = {
+      order_id: String(order.id || ''),
+      order_number: order.order_number,
+      buyer_name: String(invoiceData.buyer_name || '').trim(),
+      buyer_tax_id: String(invoiceData.buyer_tax_id || '').replace(/\D/g, ''),
+      buyer_branch: String(invoiceData.buyer_branch || '00000').padStart(5, '0').slice(-5),
+      buyer_address: String(invoiceData.buyer_address || '').trim(),
+      items: (order.items || []).map((i) => ({
+        sku: i.sku || '',
+        product_name: i.product_name,
+        quantity: Number(i.quantity) || 0,
+        unit: i.unit || '',
+        unit_price: Number(i.unit_price) || 0,
+        subtotal: Number(i.subtotal) || 0,
+      })),
+      bill_discount: Number(order.bill_discount) || 0,
+      base_amount: vat.base,
+      vat_amount: vat.vat,
+      total_amount: vat.total,
+      status: 'active',
+      created_at: now.toISOString(),
+    };
+
+    const usedNumbers = existingInvoices.map((t) => t.invoice_number);
+    const remoteEnabled = isSupabaseActive && supabase;
+    if (remoteEnabled) {
+      try {
+        const { data } = await supabase
+          .from('tax_invoices')
+          .select('invoice_number')
+          .like('invoice_number', `${getTaxInvoicePrefix(now)}%`);
+        (data || []).forEach((r) => usedNumbers.push(r.invoice_number));
+      } catch {
+        // ยังไม่มีตาราง ใช้เลขจากในเครื่อง
+      }
+    }
+
+    let saved = null;
+    for (let attempt = 0; attempt < 5 && !saved; attempt += 1) {
+      const record = { ...baseRecord, invoice_number: getNextTaxInvoiceNumber(usedNumbers, now) };
+      if (!remoteEnabled) {
+        saved = { ...record, id: `tx-${Date.now()}` };
+        break;
+      }
+      try {
+        const { data, error } = await supabase.from('tax_invoices').insert([record]).select().single();
+        if (!error && data) {
+          saved = data;
+        } else if (error?.code === '23505') {
+          // เลขที่ชนกับเครื่องอื่น ลองเลขถัดไป
+          usedNumbers.push(record.invoice_number);
+        } else {
+          saved = { ...record, id: `tx-${Date.now()}` };
+        }
+      } catch {
+        saved = { ...record, id: `tx-${Date.now()}` };
+      }
+    }
+    if (!saved) throw new Error('ไม่สามารถออกเลขที่ใบกำกับภาษีได้ กรุณาลองใหม่');
+
+    const updated = [saved, ...getLocal(STORAGE_KEYS.TAX_INVOICES, [])];
+    setLocal(STORAGE_KEYS.TAX_INVOICES, updated);
+    return { savedInvoice: saved, updatedInvoices: updated };
   },
 
   /**
@@ -2185,6 +2274,7 @@ export const posService = {
     setLocal(STORAGE_KEYS.CUSTOMER_PAYMENTS, []);
     setLocal(STORAGE_KEYS.BILLING_NOTES, []);
     setLocal(STORAGE_KEYS.STOCK_LEDGER, []);
+    setLocal(STORAGE_KEYS.TAX_INVOICES, []);
     setLocal(STORAGE_KEYS.SUPPLIERS, INITIAL_SUPPLIERS);
     setLocal(STORAGE_KEYS.STOCK_IMPORTS, []);
     setLocal(STORAGE_KEYS.ORDERS, INITIAL_ORDERS);

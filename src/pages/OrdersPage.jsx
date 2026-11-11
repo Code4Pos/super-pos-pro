@@ -8,9 +8,11 @@ import {
   Sparkles,
   CheckCircle2,
   XCircle,
+  FileText,
 } from 'lucide-react';
 import { usePOS } from '../context/POSContext';
 import ReceiptModal from '../components/pos/ReceiptModal';
+import TaxInvoiceModal from '../components/pos/TaxInvoiceModal';
 import { formatCurrency, formatDateTime } from '../utils/formatters';
 import { getOrderPayments, describeOrderPayments } from '../utils/payments';
 
@@ -23,7 +25,12 @@ const PAYMENT_BADGES = {
 };
 
 export default function OrdersPage() {
-  const { orders, voidOrder } = usePOS();
+  const { orders, voidOrder, taxInvoices = [] } = usePOS();
+  const [taxInvoiceOrder, setTaxInvoiceOrder] = useState(null);
+  const invoicedOrderNumbers = useMemo(
+    () => new Set(taxInvoices.filter((t) => t.status !== 'cancelled').map((t) => t.order_number)),
+    [taxInvoices]
+  );
 
   const [searchQuery, setSearchQuery] = useState('');
   const [dateFilter, setDateFilter] = useState('all'); // 'all' | 'today' | '7days'
@@ -260,6 +267,25 @@ export default function OrdersPage() {
                           {!isVoided && (
                             <button
                               type="button"
+                              onClick={() => setTaxInvoiceOrder(order)}
+                              className={`p-1.5 rounded-lg transition-colors ${
+                                invoicedOrderNumbers.has(order.order_number)
+                                  ? 'text-emerald-600 bg-emerald-50 hover:bg-emerald-100'
+                                  : 'text-slate-400 hover:text-indigo-600 hover:bg-indigo-50'
+                              }`}
+                              title={
+                                invoicedOrderNumbers.has(order.order_number)
+                                  ? 'ออกใบกำกับภาษีแล้ว (พิมพ์ซ้ำ)'
+                                  : 'ออกใบกำกับภาษีเต็มรูป'
+                              }
+                            >
+                              <FileText className="w-4 h-4" />
+                            </button>
+                          )}
+
+                          {!isVoided && (
+                            <button
+                              type="button"
                               onClick={() => voidOrder(order)}
                               className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors"
                               title="ยกเลิกบิลและคืนสต็อกสินค้า"
@@ -283,6 +309,7 @@ export default function OrdersPage() {
         order={selectedOrder}
         onClose={() => setSelectedOrder(null)}
       />
+      <TaxInvoiceModal order={taxInvoiceOrder} onClose={() => setTaxInvoiceOrder(null)} />
     </div>
   );
 }

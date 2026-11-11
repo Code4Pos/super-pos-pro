@@ -1,5 +1,11 @@
 import { formatCurrency, formatDateTime } from '../utils/formatters';
 import { PAYMENT_METHOD_LABELS, getOrderPayments } from '../utils/payments';
+import { calculateOrderVat, bahtText } from '../utils/tax';
+
+function formatBranch(branch) {
+  const b = String(branch || '00000');
+  return b === '00000' ? 'สำนักงานใหญ่' : `สาขาที่ ${b}`;
+}
 
 const PRINTER_SETTINGS_KEY = 'siampos_printer_settings_v2';
 
@@ -17,6 +23,9 @@ const DEFAULT_PRINTER_SETTINGS = {
   promptpayId: '', // เบอร์มือถือ 10 หลัก หรือเลขผู้เสียภาษี 13 หลัก สำหรับสร้าง QR พร้อมเพย์
   cashDrawerEnabled: false, // เปิดลิ้นชักเก็บเงินอัตโนมัติเมื่อรับเงินสด
   cashDrawerPin: '2', // ขาสัญญาณลิ้นชัก '2' (Pin 2) | '5' (Pin 5)
+  vatRegistered: false, // ร้านจดทะเบียนภาษีมูลค่าเพิ่ม (ออกใบกำกับภาษีได้)
+  shopTaxId: '', // เลขประจำตัวผู้เสียภาษี 13 หลักของร้าน
+  shopBranch: '00000', // รหัสสาขา (00000 = สำนักงานใหญ่)
 };
 
 const PAYMENT_LABELS = {
@@ -229,6 +238,14 @@ function renderSlipToCanvas(order, settings, mode = 'receipt') {
     // ================= ใบเสร็จรับเงินความร้อน (ไม่มีแท็กราคาปลีก/ส่ง) =================
     drawCentered(settings.shopName, `bold ${titleFontSize}px Prompt, sans-serif`);
     drawCentered(`โทร. ${settings.shopPhone}`, `${smallFontSize}px Prompt, sans-serif`);
+    // ร้านจดทะเบียน VAT: ใบเสร็จนี้เป็นใบกำกับภาษีอย่างย่อ ต้องแสดงเลขผู้เสียภาษีของร้าน
+    if (settings.vatRegistered) {
+      drawCentered(
+        `เลขประจำตัวผู้เสียภาษี ${settings.shopTaxId} (${formatBranch(settings.shopBranch)})`,
+        `${smallFontSize - 2}px Prompt, sans-serif`
+      );
+      drawCentered('ใบเสร็จรับเงิน/ใบกำกับภาษีอย่างย่อ', `bold ${smallFontSize}px Prompt, sans-serif`);
+    }
     drawDashedDivider();
 
     drawLeftRight('เลขที่:', order.order_number, `bold ${smallFontSize}px Prompt, sans-serif`);
@@ -283,6 +300,13 @@ function renderSlipToCanvas(order, settings, mode = 'receipt') {
 
     drawDashedDivider();
     drawLeftRight('ยอดสุทธิ (TOTAL)', formatCurrency(order.grand_total), `bold ${titleFontSize}px Prompt, sans-serif`);
+    if (settings.vatRegistered && !(Number(order.tax_amount) > 0)) {
+      drawLeftRight(
+        'ราคารวม VAT 7% แล้ว',
+        formatCurrency(calculateOrderVat(order).vat),
+        `${smallFontSize - 2}px Prompt, sans-serif`
+      );
+    }
     if (paymentLines.length > 1) {
       paymentLines.forEach((line) => {
         drawLeftRight(`ชำระ ${line.label}`, formatCurrency(line.amount), `${smallFontSize}px Prompt, sans-serif`);
@@ -418,6 +442,7 @@ function buildThermalReceiptHtml(order, settings, paperSize) {
   <div class="center">
     <div style="font-size:${is58 ? '14px' : '16px'};font-weight:700;">${settings.shopName}</div>
     <div style="font-size:10.5px;">โทร. ${settings.shopPhone}</div>
+    ${settings.vatRegistered ? `<div style="font-size:10px;">เลขประจำตัวผู้เสียภาษี ${escapeHtml(settings.shopTaxId)} (${formatBranch(settings.shopBranch)})</div><div style="font-size:11px;font-weight:700;">ใบเสร็จรับเงิน/ใบกำกับภาษีอย่างย่อ</div>` : ''}
   </div>
   <div class="divider"></div>
   <div class="row"><span>เลขที่:</span><strong>${order.order_number}</strong></div>
@@ -433,6 +458,7 @@ function buildThermalReceiptHtml(order, settings, paperSize) {
   ${Number(order.bill_discount) > 0 ? `<div class="row"><span>ส่วนลดท้ายบิล</span><span>-${formatCurrency(order.bill_discount)}</span></div>` : ''}
   ${vatHtml}
   <div class="row total"><span>ยอดสุทธิ</span><span>${formatCurrency(order.grand_total)}</span></div>
+  ${settings.vatRegistered && !(Number(order.tax_amount) > 0) ? `<div class="row" style="font-size:10px;"><span>ราคารวม VAT 7% แล้ว</span><span>${formatCurrency(calculateOrderVat(order).vat)}</span></div>` : ''}
   ${getPaymentLines(order).length > 1 ? getPaymentLines(order).map((line) => `<div class="row"><span>ชำระ ${line.label}</span><span>${formatCurrency(line.amount)}</span></div>`).join('') : ''}
   <div class="row"><span>รับเงินมา</span><span>${formatCurrency(order.cash_received)}</span></div>
   <div class="row" style="font-weight:700;"><span>เงินทอน</span><span>${formatCurrency(order.change_amount)}</span></div>
@@ -956,7 +982,115 @@ function buildPurchaseOrderHtml(importDoc, supplier, settings) {
 </html>`;
 }
 
+/**
+ * ใบกำกับภาษีเต็มรูปแบบ / ใบเสร็จรับเงิน ขนาด A4 (มาตรา 86/4 ประมวลรัษฎากร)
+ */
+function buildTaxInvoiceHtml(invoice, settings, copyLabel) {
+  const rowsHtml = (invoice.items || [])
+    .map(
+      (it, idx) => `
+      <tr>
+        <td style="text-align:center;">${idx + 1}</td>
+        <td>${escapeHtml(it.product_name)}</td>
+        <td style="text-align:center;">${escapeHtml(it.quantity)} ${escapeHtml(it.unit)}</td>
+        <td style="text-align:right;">${formatCurrency(it.unit_price)}</td>
+        <td style="text-align:right;">${formatCurrency(it.subtotal)}</td>
+      </tr>`
+    )
+    .join('');
+
+  return `<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8" />
+  <title>ใบกำกับภาษี - ${escapeHtml(invoice.invoice_number)}</title>
+  <link href="https://fonts.googleapis.com/css2?family=Prompt:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    @page { size: A4 portrait; margin: 14mm; }
+    * { box-sizing: border-box; }
+    body { font-family: 'Prompt', sans-serif; font-size: 13px; color: #0f172a; margin: 0; }
+    .header { display: flex; justify-content: space-between; border-bottom: 2px solid #1e293b; padding-bottom: 10px; margin-bottom: 14px; }
+    .title { font-size: 20px; font-weight: 700; text-align: right; }
+    .copy { display: inline-block; border: 1.5px solid #0f172a; padding: 2px 10px; font-weight: 700; margin-top: 4px; }
+    .box { border: 1px solid #cbd5e1; border-radius: 6px; padding: 10px 12px; }
+    .grid { display: grid; grid-template-columns: 1.4fr 1fr; gap: 12px; margin-bottom: 14px; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { border: 1px solid #cbd5e1; padding: 7px 8px; }
+    th { background: #f1f5f9; font-weight: 600; }
+    .sum td { background: #f8fafc; }
+    .total td { font-weight: 700; font-size: 15px; }
+    .sign { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; margin-top: 56px; text-align: center; }
+    .sign div { border-top: 1px dotted #475569; padding-top: 6px; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div>
+      <div style="font-size:18px;font-weight:700;">${escapeHtml(settings.shopName)}</div>
+      <div>${escapeHtml(settings.shopAddress)}</div>
+      <div>โทร. ${escapeHtml(settings.shopPhone)}</div>
+      <div><strong>เลขประจำตัวผู้เสียภาษี:</strong> ${escapeHtml(settings.shopTaxId)} (${formatBranch(settings.shopBranch)})</div>
+    </div>
+    <div style="text-align:right;">
+      <div class="title">ใบกำกับภาษี / ใบเสร็จรับเงิน</div>
+      <div>TAX INVOICE / RECEIPT</div>
+      <div class="copy">${escapeHtml(copyLabel)}</div>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="box">
+      <div><strong>ผู้ซื้อ:</strong> ${escapeHtml(invoice.buyer_name)}</div>
+      <div><strong>เลขประจำตัวผู้เสียภาษี:</strong> ${escapeHtml(invoice.buyer_tax_id || '-')} (${formatBranch(invoice.buyer_branch)})</div>
+      <div><strong>ที่อยู่:</strong> ${escapeHtml(invoice.buyer_address || '-')}</div>
+    </div>
+    <div class="box">
+      <div><strong>เลขที่:</strong> <span style="font-family:monospace;font-weight:700;">${escapeHtml(invoice.invoice_number)}</span></div>
+      <div><strong>วันที่:</strong> ${formatDateOnly(invoice.created_at)}</div>
+      <div><strong>อ้างอิงบิลขาย:</strong> ${escapeHtml(invoice.order_number)}</div>
+    </div>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th style="width:45px;">ลำดับ</th>
+        <th>รายการ</th>
+        <th style="width:110px;">จำนวน</th>
+        <th style="width:110px;">ราคา/หน่วย</th>
+        <th style="width:120px;">จำนวนเงิน</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${rowsHtml}
+      ${Number(invoice.bill_discount) > 0 ? `<tr class="sum"><td colspan="4" style="text-align:right;">ส่วนลดท้ายบิล</td><td style="text-align:right;">-${formatCurrency(invoice.bill_discount)}</td></tr>` : ''}
+      <tr class="sum"><td colspan="4" style="text-align:right;">มูลค่าสินค้า/บริการ (ไม่รวมภาษี)</td><td style="text-align:right;">${formatCurrency(invoice.base_amount)}</td></tr>
+      <tr class="sum"><td colspan="4" style="text-align:right;">ภาษีมูลค่าเพิ่ม 7%</td><td style="text-align:right;">${formatCurrency(invoice.vat_amount)}</td></tr>
+      <tr class="sum total">
+        <td colspan="4" style="text-align:right;">จำนวนเงินรวมทั้งสิ้น <span style="font-weight:400;font-size:12px;">(${bahtText(invoice.total_amount)})</span></td>
+        <td style="text-align:right;">${formatCurrency(invoice.total_amount)}</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="sign">
+    <div>ผู้รับเงิน / ผู้ออกใบกำกับภาษี</div>
+    <div>ผู้รับสินค้า / ผู้ซื้อ</div>
+  </div>
+</body>
+</html>`;
+}
+
 export const printerService = {
+  /**
+   * พิมพ์ใบกำกับภาษีเต็มรูปแบบ ขนาด A4 (copyLabel: 'ต้นฉบับ' หรือ 'สำเนา')
+   */
+  printTaxInvoice(invoice, copyLabel = 'ต้นฉบับ') {
+    if (!invoice) return false;
+    printHtmlViaHiddenIframe(buildTaxInvoiceHtml(invoice, this.getSettings(), copyLabel));
+    return true;
+  },
+
   /**
    * พิมพ์ใบสั่งซื้อ (Purchase Order) ขนาด A4
    */
