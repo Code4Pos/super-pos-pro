@@ -17,6 +17,8 @@ import PromptPayQR from './PromptPayQR';
 import SplitPaymentPanel, { createSplitLine } from './SplitPaymentPanel';
 import { formatCurrency } from '../../utils/formatters';
 import { summarizeSplitPayments } from '../../utils/payments';
+import { checkCreditSale } from '../../utils/credit';
+import CreditStatusBox from './CreditStatusBox';
 
 const PAYMENT_TABS = [
   { id: 'cash', label: 'เงินสด', icon: Banknote },
@@ -34,7 +36,7 @@ const PAYMENT_TABS = [
  * - ชำระแบบเครดิตบังคับเลือกลูกค้าก่อนเสมอ
  */
 export default function CheckoutModal({ isOpen, onClose, onOrderSuccess }) {
-  const { cartSummary, selectedCustomer, checkoutOrder } = usePOS();
+  const { cartSummary, selectedCustomer, checkoutOrder, getCustomerCredit } = usePOS();
   const { grandTotal, totalItemsCount, wholesaleSavings, vatMode, taxAmount } =
     cartSummary;
 
@@ -102,11 +104,27 @@ export default function CheckoutModal({ isOpen, onClose, onOrderSuccess }) {
   const splitSummary = summarizeSplitPayments(splitLines, grandTotal);
   const splitHasCredit = splitLines.some((l) => l.method === 'credit' && Number(l.amount) > 0);
 
+  // ยอดที่ขายเชื่อในบิลนี้ ใช้ตรวจวงเงินเครดิตของลูกค้า
+  const creditAmount =
+    paymentMethod === 'credit'
+      ? grandTotal
+      : isSplit
+      ? splitLines
+          .filter((l) => l.method === 'credit')
+          .reduce((sum, l) => sum + (Number(l.amount) || 0), 0)
+      : 0;
+  const creditCheck = checkCreditSale(
+    selectedCustomer,
+    creditAmount,
+    getCustomerCredit(selectedCustomer)
+  );
+
   const isCashValid = paymentMethod !== 'cash' || numericCash >= grandTotal;
   const isCreditValid =
     (paymentMethod !== 'credit' && !(isSplit && splitHasCredit)) || Boolean(selectedCustomer);
   const isSplitValid = !isSplit || splitSummary.isComplete;
-  const canSubmit = isCashValid && isCreditValid && isSplitValid && !submitting;
+  const canSubmit =
+    isCashValid && isCreditValid && creditCheck.ok && isSplitValid && !submitting;
 
   const handleConfirmCheckout = async (e) => {
     if (e) e.preventDefault();
@@ -453,7 +471,12 @@ export default function CheckoutModal({ isOpen, onClose, onOrderSuccess }) {
                     placeholder="พิมพ์ค้นหา หรือสแกนรหัสลูกค้าเพื่อเปิดบิลเครดิต..."
                     requiredWarning={!selectedCustomer}
                   />
+                  <CreditStatusBox customer={selectedCustomer} creditAmount={creditAmount} />
                 </div>
+              )}
+
+              {isSplit && splitHasCredit && (
+                <CreditStatusBox customer={selectedCustomer} creditAmount={creditAmount} />
               )}
 
               <input
@@ -483,6 +506,8 @@ export default function CheckoutModal({ isOpen, onClose, onOrderSuccess }) {
                   <span>
                     {!isCreditValid
                       ? 'กรุณาเลือกลูกค้าก่อนชำระแบบเครดิต'
+                      : !creditCheck.ok
+                      ? 'ขายเชื่อไม่ได้: ตรวจวงเงินไม่ผ่าน'
                       : !isSplitValid
                       ? 'ยอดแบ่งจ่ายยังไม่ครบ'
                       : submitting

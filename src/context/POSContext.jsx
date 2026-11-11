@@ -3,8 +3,9 @@ import { posService, normalizeAndSyncProducts } from '../services/posService';
 import { printerService } from '../services/printerService';
 import { calculateEffectiveUnitPrice } from '../utils/formatters';
 import { summarizeSplitPayments } from '../utils/payments';
+import { calculateCustomerCredit, checkCreditSale } from '../utils/credit';
 
-export const APP_VERSION = 'version beta 0.2.2';
+export const APP_VERSION = 'version beta 0.2.3';
 const HELD_BILLS_STORAGE_KEY = 'siampos_held_bills_v1';
 
 const POSContext = createContext(null);
@@ -18,6 +19,7 @@ export function POSProvider({ children }) {
   const [products, setProducts] = useState([]);
   const [trashedProducts, setTrashedProducts] = useState([]);
   const [customers, setCustomers] = useState([]);
+  const [customerPayments, setCustomerPayments] = useState([]);
   const [suppliers, setSuppliers] = useState([]);
   const [stockImports, setStockImports] = useState([]);
   const [orders, setOrders] = useState([]);
@@ -100,6 +102,7 @@ export function POSProvider({ children }) {
       setProducts(data.products);
       setTrashedProducts(data.trashedProducts || []);
       setCustomers(data.customers);
+      setCustomerPayments(data.customerPayments || []);
       setSuppliers(data.suppliers || []);
       setStockImports(data.stockImports || []);
       setOrders(data.orders);
@@ -457,6 +460,12 @@ export function POSProvider({ children }) {
     [showToast]
   );
 
+  // สรุปเครดิตลูกค้า: ยอดค้างชำระ วงเงินคงเหลือ และยอดเกินกำหนด
+  const getCustomerCredit = useCallback(
+    (customer) => calculateCustomerCredit(customer, orders, customerPayments),
+    [orders, customerPayments]
+  );
+
   // บันทึกการขาย (Checkout)
   const checkoutOrder = useCallback(
     async ({ payment_method, cash_received, note, payments = null }) => {
@@ -493,7 +502,28 @@ export function POSProvider({ children }) {
         changeVal = split.change;
       }
 
+      // ตรวจสอบวงเงินเครดิต (Credit Limit Check) ก่อนยืนยันการขายเชื่อ
+      const creditAmount = orderPayments
+        .filter((p) => p.method === 'credit')
+        .reduce((sum, p) => sum + p.amount, 0);
+      let creditDueDate = null;
+      if (creditAmount > 0) {
+        const creditCheck = checkCreditSale(
+          selectedCustomer,
+          creditAmount,
+          getCustomerCredit(selectedCustomer)
+        );
+        if (!creditCheck.ok) {
+          showToast(creditCheck.message, 'error');
+          return null;
+        }
+        const due = new Date();
+        due.setDate(due.getDate() + (Number(selectedCustomer.credit_term_days) || 0));
+        creditDueDate = due.toISOString();
+      }
+
       const orderPayload = {
+        credit_due_date: creditDueDate,
         customer: selectedCustomer,
         pricing_mode: pricingMode,
         subtotal: cartSummary.subtotal,
@@ -562,6 +592,7 @@ export function POSProvider({ children }) {
       clearCart,
       showToast,
       printerSettings,
+      getCustomerCredit,
     ]
   );
 
@@ -886,6 +917,23 @@ export function POSProvider({ children }) {
     [dbMode, showToast]
   );
 
+  // รับชำระหนี้จากลูกค้าเครดิต
+  const recordCustomerPayment = useCallback(
+    async (paymentData) => {
+      const { savedPayment, updatedPayments } = await posService.recordCustomerPayment(
+        paymentData,
+        dbMode === 'supabase'
+      );
+      setCustomerPayments(updatedPayments);
+      showToast(
+        `รับชำระหนี้ ${savedPayment.receipt_number} จำนวน ${savedPayment.amount.toLocaleString('th-TH', { minimumFractionDigits: 2 })} บาท แล้ว`,
+        'success'
+      );
+      return savedPayment;
+    },
+    [dbMode, showToast]
+  );
+
   // บันทึก/ลบ ผู้ผลิต (Supplier)
   const saveSupplier = useCallback(
     async (supplierData) => {
@@ -1057,6 +1105,9 @@ export function POSProvider({ children }) {
     updateUnit,
     deleteUnit,
     saveCustomer,
+    customerPayments,
+    getCustomerCredit,
+    recordCustomerPayment,
     saveSupplier,
     deleteSupplier,
     createStockImport,

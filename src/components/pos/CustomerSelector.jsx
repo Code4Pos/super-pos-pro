@@ -54,7 +54,8 @@ export default function CustomerSelector({
         c.name?.toLowerCase().includes(q) ||
         c.phone?.toLowerCase().includes(q) ||
         c.code?.toLowerCase().includes(q) ||
-        c.shop_name?.toLowerCase().includes(q)
+        c.shop_name?.toLowerCase().includes(q) ||
+        (c.tax_id && c.tax_id.includes(q.replace(/\D/g, '') || '-'))
     );
   }, [customers, query]);
 
@@ -243,6 +244,7 @@ export default function CustomerSelector({
                     </div>
                     <div className="text-[11px] text-slate-400 font-mono">
                       รหัส: {c.code} • โทร: {c.phone || '-'}
+                      {c.tax_id && ` • ภาษี: ${c.tax_id}`}
                     </div>
                   </div>
                   {isSelected && (

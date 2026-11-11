@@ -1,4 +1,5 @@
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import { B2B_CUSTOMER_DEFAULTS, normalizeB2BFields } from '../utils/credit';
 import {
   INITIAL_CATEGORIES,
   INITIAL_UNITS,
@@ -16,6 +17,7 @@ const STORAGE_KEYS = {
   UNITS: 'siampos_units_v1',
   CUSTOMERS: 'siampos_customers_v1',
   CUSTOMER_META: 'siampos_customer_meta_v1',
+  CUSTOMER_PAYMENTS: 'siampos_customer_payments_v1',
   SUPPLIERS: 'siampos_suppliers_v1',
   STOCK_IMPORTS: 'siampos_stock_imports_v1',
   ORDERS: 'siampos_orders_v1',
@@ -244,6 +246,27 @@ export const STOCK_IMPORT_TRANSITIONS = {
 /**
  * เติมค่าเริ่มต้นให้ใบนำเข้า (ใบเก่าก่อน beta 0.2.1 ไม่มีสถานะ ถือว่านำเข้าสำเร็จแล้ว)
  */
+/**
+ * รวมข้อมูลลูกค้ากับข้อมูลเสริมที่เก็บในเครื่อง (ราคาพิเศษ และข้อมูล B2B/เครดิต)
+ * ใช้ค่าจากฐานข้อมูลก่อน ถ้าฐานข้อมูลยังไม่มีคอลัมน์นั้นจึงใช้ค่าในเครื่อง
+ */
+function mergeCustomerMeta(customer, customerMeta = {}) {
+  const cMeta = customerMeta[customer.id] || customerMeta[customer.code] || {};
+  const pick = (key) => (customer[key] !== undefined && customer[key] !== null ? customer[key] : cMeta[key]);
+  return {
+    ...customer,
+    special_price_tier: Number(pick('special_price_tier')) || 0,
+    ...normalizeB2BFields({
+      ...B2B_CUSTOMER_DEFAULTS,
+      tax_id: pick('tax_id'),
+      branch_number: pick('branch_number'),
+      credit_limit: pick('credit_limit'),
+      credit_term_days: pick('credit_term_days'),
+      is_blocked: pick('is_blocked'),
+    }),
+  };
+}
+
 export function normalizeStockImports(list = []) {
   return list.map((imp) => {
     const status = imp.status || STOCK_IMPORT_STATUS.COMPLETED;
@@ -434,16 +457,23 @@ export const posService = {
           rawWholesaleRules
         );
 
-        const mergedCustomers = (cusRes.data || []).map((c) => {
-          const cMeta = localCustomerMeta[c.id] || localCustomerMeta[c.code] || {};
-          return {
-            ...c,
-            special_price_tier:
-              c.special_price_tier !== undefined
-                ? Number(c.special_price_tier) || 0
-                : Number(cMeta.special_price_tier) || 0,
-          };
-        });
+        const mergedCustomers = (cusRes.data || []).map((c) =>
+          mergeCustomerMeta(c, localCustomerMeta)
+        );
+
+        // ยอดรับชำระหนี้ลูกค้า (ถ้ายังไม่มีตาราง customer_payments ให้ใช้ข้อมูลในเครื่อง)
+        let customerPayments = getLocal(STORAGE_KEYS.CUSTOMER_PAYMENTS, []);
+        const payRes = await supabase
+          .from('customer_payments')
+          .select('*')
+          .order('created_at', { ascending: false });
+        if (!payRes.error && Array.isArray(payRes.data)) {
+          const remoteIds = new Set(payRes.data.map((p) => p.id));
+          customerPayments = [
+            ...payRes.data,
+            ...customerPayments.filter((p) => !remoteIds.has(p.id)),
+          ];
+        }
 
         return {
           mode: 'supabase',
@@ -452,6 +482,7 @@ export const posService = {
           products: syncedSupaProducts,
           trashedProducts: localTrash,
           customers: mergedCustomers,
+          customerPayments,
           suppliers,
           stockImports,
           orders: ordRes.data || [],
@@ -474,16 +505,7 @@ export const posService = {
     );
 
     const localCustomers = getLocal(STORAGE_KEYS.CUSTOMERS, INITIAL_CUSTOMERS).map(
-      (c) => {
-        const cMeta = localCustomerMeta[c.id] || localCustomerMeta[c.code] || {};
-        return {
-          ...c,
-          special_price_tier:
-            c.special_price_tier !== undefined
-              ? Number(c.special_price_tier) || 0
-              : Number(cMeta.special_price_tier) || 0,
-        };
-      }
+      (c) => mergeCustomerMeta(c, localCustomerMeta)
     );
 
     return {
@@ -493,6 +515,7 @@ export const posService = {
       products: normalized,
       trashedProducts: localTrash,
       customers: localCustomers,
+      customerPayments: getLocal(STORAGE_KEYS.CUSTOMER_PAYMENTS, []),
       suppliers,
       stockImports,
       orders: getLocal(STORAGE_KEYS.ORDERS, INITIAL_ORDERS),
@@ -1084,15 +1107,18 @@ export const posService = {
       shop_name: (customerData.shop_name || '').trim(),
       address: (customerData.address || '').trim(),
     };
+    // ข้อมูลนิติบุคคลและเครดิต (B2B) เก็บสำรองในเครื่องด้วย เผื่อฐานข้อมูลยังไม่มีคอลัมน์
+    const b2bFields = normalizeB2BFields(customerData);
+    const metaEntry = { special_price_tier: specialTier, ...b2bFields };
     const payload = {
       ...basePayload,
-      special_price_tier: specialTier,
+      ...metaEntry,
     };
 
     const customerMeta = getLocal(STORAGE_KEYS.CUSTOMER_META, {});
-    customerMeta[basePayload.code] = { special_price_tier: specialTier };
+    customerMeta[basePayload.code] = metaEntry;
     if (customerData.id) {
-      customerMeta[customerData.id] = { special_price_tier: specialTier };
+      customerMeta[customerData.id] = metaEntry;
     }
     setLocal(STORAGE_KEYS.CUSTOMER_META, customerMeta);
 
@@ -1115,9 +1141,9 @@ export const posService = {
             if (!retry.error) data = retry.data;
           }
           if (data) {
-            customerMeta[data.id] = { special_price_tier: specialTier };
+            customerMeta[data.id] = metaEntry;
             setLocal(STORAGE_KEYS.CUSTOMER_META, customerMeta);
-            return { ...data, special_price_tier: specialTier };
+            return { ...data, ...metaEntry };
           }
         } else {
           let { data, error } = await supabase
@@ -1134,9 +1160,9 @@ export const posService = {
             if (!retry.error) data = retry.data;
           }
           if (data) {
-            customerMeta[data.id] = { special_price_tier: specialTier };
+            customerMeta[data.id] = metaEntry;
             setLocal(STORAGE_KEYS.CUSTOMER_META, customerMeta);
-            return { ...data, special_price_tier: specialTier };
+            return { ...data, ...metaEntry };
           }
         }
       } catch (err) {
@@ -1160,12 +1186,55 @@ export const posService = {
         points: 0,
         created_at: new Date().toISOString(),
       };
-      customerMeta[newCustomer.id] = { special_price_tier: specialTier };
+      customerMeta[newCustomer.id] = metaEntry;
       setLocal(STORAGE_KEYS.CUSTOMER_META, customerMeta);
       const updated = [newCustomer, ...customers];
       setLocal(STORAGE_KEYS.CUSTOMERS, updated);
       return newCustomer;
     }
+  },
+
+  /**
+   * บันทึกการรับชำระหนี้จากลูกค้าเครดิต (Payment Receipt)
+   * รองรับทั้งชำระเต็มจำนวนและทยอยชำระ ยอดจะถูกนำไปหักยอดค้างแบบ FIFO
+   */
+  async recordCustomerPayment(paymentData, isSupabaseActive) {
+    const nowIso = new Date().toISOString();
+    const datePart = nowIso.slice(2, 10).replace(/-/g, '');
+    const randomPart = Math.floor(100 + Math.random() * 900);
+    const record = {
+      receipt_number: `RCV-${datePart}-${randomPart}`,
+      customer_id: paymentData.customer_id,
+      customer_name: paymentData.customer_name || '',
+      amount: Math.round((Number(paymentData.amount) || 0) * 100) / 100,
+      method: paymentData.method || 'cash',
+      note: String(paymentData.note || '').trim(),
+      created_at: nowIso,
+    };
+
+    let saved = { ...record, id: `rcv-${Date.now()}` };
+    if (
+      isSupabaseActive &&
+      supabase &&
+      record.customer_id &&
+      !String(record.customer_id).startsWith('cus-')
+    ) {
+      try {
+        const { data, error } = await supabase
+          .from('customer_payments')
+          .insert([record])
+          .select()
+          .single();
+        if (!error && data) saved = data;
+      } catch (err) {
+        console.warn('Supabase customer payment fallback:', err.message);
+      }
+    }
+
+    const existing = getLocal(STORAGE_KEYS.CUSTOMER_PAYMENTS, []);
+    const updated = [saved, ...existing];
+    setLocal(STORAGE_KEYS.CUSTOMER_PAYMENTS, updated);
+    return { savedPayment: saved, updatedPayments: updated };
   },
 
   /**
@@ -1190,6 +1259,7 @@ export const posService = {
       total_cost: Number(orderPayload.total_cost) || 0,
       payment_method: orderPayload.payment_method || 'cash',
       payments: Array.isArray(orderPayload.payments) ? orderPayload.payments : [],
+      credit_due_date: orderPayload.credit_due_date || null,
       cash_received: Number(orderPayload.cash_received) || 0,
       change_amount: Number(orderPayload.change_amount) || 0,
       status: 'completed',
@@ -1239,6 +1309,7 @@ export const posService = {
           const mainPayment = [...fullOrder.payments].sort((a, b) => b.amount - a.amount)[0];
           const legacyOrderData = { ...supabaseOrderData };
           delete legacyOrderData.payments;
+          delete legacyOrderData.credit_due_date;
           legacyOrderData.payment_method =
             fullOrder.payment_method === 'split'
               ? mainPayment?.method || 'cash'
@@ -1831,6 +1902,7 @@ export const posService = {
     setLocal(STORAGE_KEYS.TRASH_PRODUCTS, []);
     setLocal(STORAGE_KEYS.CUSTOMERS, INITIAL_CUSTOMERS);
     setLocal(STORAGE_KEYS.CUSTOMER_META, {});
+    setLocal(STORAGE_KEYS.CUSTOMER_PAYMENTS, []);
     setLocal(STORAGE_KEYS.SUPPLIERS, INITIAL_SUPPLIERS);
     setLocal(STORAGE_KEYS.STOCK_IMPORTS, []);
     setLocal(STORAGE_KEYS.ORDERS, INITIAL_ORDERS);

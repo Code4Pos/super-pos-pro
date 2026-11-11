@@ -107,6 +107,27 @@ ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_payment_method_check;
 ALTER TABLE orders ADD CONSTRAINT orders_payment_method_check
   CHECK (payment_method IN ('cash', 'promptpay', 'transfer', 'credit', 'split'));
 
+-- beta 0.2.3: ลูกค้า B2B และระบบเครดิต (Credit Limit / Credit Term)
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS special_price_tier INTEGER DEFAULT 0;
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS tax_id VARCHAR(13);
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS branch_number VARCHAR(5) DEFAULT '00000';
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS credit_limit NUMERIC(12, 2) DEFAULT 0;
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS credit_term_days INTEGER DEFAULT 0;
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS is_blocked BOOLEAN DEFAULT FALSE;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS credit_due_date TIMESTAMPTZ;
+
+-- การรับชำระหนี้จากลูกค้าเครดิต (Payment Receipt)
+CREATE TABLE IF NOT EXISTS customer_payments (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  receipt_number TEXT UNIQUE NOT NULL,
+  customer_id UUID REFERENCES customers(id) ON DELETE CASCADE,
+  customer_name TEXT,
+  amount NUMERIC(12, 2) NOT NULL CHECK (amount > 0),
+  method TEXT NOT NULL DEFAULT 'cash' CHECK (method IN ('cash', 'promptpay', 'transfer')),
+  note TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- 6. ตารางรายการสินค้าในบิล (Order Items)
 CREATE TABLE IF NOT EXISTS order_items (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -141,6 +162,10 @@ ALTER TABLE products ENABLE ROW LEVEL SECURITY;
 ALTER TABLE customers ENABLE ROW LEVEL SECURITY;
 ALTER TABLE orders ENABLE ROW LEVEL SECURITY;
 ALTER TABLE order_items ENABLE ROW LEVEL SECURITY;
+ALTER TABLE customer_payments ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Allow public access to customer_payments" ON customer_payments;
+CREATE POLICY "Allow public access to customer_payments" ON customer_payments FOR ALL USING (true) WITH CHECK (true);
 
 DROP POLICY IF EXISTS "Allow public access to categories" ON categories;
 CREATE POLICY "Allow public access to categories" ON categories FOR ALL USING (true) WITH CHECK (true);
