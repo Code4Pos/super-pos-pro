@@ -23,6 +23,7 @@ import {
   Landmark,
   History,
   ClipboardList,
+  ClipboardCheck,
   FileSpreadsheet,
   Settings,
   Percent,
@@ -118,6 +119,12 @@ export const SIDEBAR_MENU_GROUPS = [
         label: 'ความเคลื่อนไหวสต็อก',
         description: 'ประวัติรับเข้า-จ่ายออก และการปรับสต็อก',
         icon: History,
+      },
+      {
+        id: 'stock-count',
+        label: 'ตรวจนับสต็อก',
+        description: 'นับสต็อกแบบ Blind Count และอนุมัติผลต่าง',
+        icon: ClipboardCheck,
       },
       {
         id: 'wholesale-pricing',

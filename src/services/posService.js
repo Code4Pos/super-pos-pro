@@ -25,6 +25,7 @@ const STORAGE_KEYS = {
   TAX_INVOICES: 'siampos_tax_invoices_v1',
   USERS: 'siampos_users_v1',
   TAX_NOTES: 'siampos_tax_notes_v1',
+  STOCK_COUNTS: 'siampos_stock_counts_v1',
   SUPPLIERS: 'siampos_suppliers_v1',
   STOCK_IMPORTS: 'siampos_stock_imports_v1',
   ORDERS: 'siampos_orders_v1',
@@ -354,8 +355,8 @@ async function insertWithRunningNumber({
   return { saved, updated };
 }
 
-// รวมรายชื่อผู้ใช้จากฐานข้อมูลกับในเครื่อง โดยยึดข้อมูลที่แก้ไขล่าสุด (updated_at)
-function mergeUsersById(remoteUsers = [], localUsers = []) {
+// รวมข้อมูลจากฐานข้อมูลกับในเครื่องตาม id โดยยึดฉบับที่แก้ไขล่าสุด (updated_at) เช่น ผู้ใช้งาน ใบตรวจนับ
+function mergeByLatestUpdate(remoteUsers = [], localUsers = []) {
   const byId = new Map();
   [...localUsers, ...remoteUsers].forEach((u) => {
     const prev = byId.get(u.id);
@@ -661,16 +662,20 @@ export const posService = {
         );
 
         // ยอดรับชำระหนี้ และใบวางบิล (ถ้ายังไม่มีตารางในฐานข้อมูลให้ใช้ข้อมูลในเครื่อง)
-        const [customerPayments, billingNotes, stockLedger, taxInvoices, remoteUsers, taxNotes] = await Promise.all([
-          loadRemoteWithLocal('customer_payments', STORAGE_KEYS.CUSTOMER_PAYMENTS),
-          loadRemoteWithLocal('billing_notes', STORAGE_KEYS.BILLING_NOTES),
-          loadRemoteWithLocal('stock_ledger', STORAGE_KEYS.STOCK_LEDGER, MAX_LOCAL_LEDGER_ENTRIES),
-          loadRemoteWithLocal('tax_invoices', STORAGE_KEYS.TAX_INVOICES, 5000),
-          loadRemoteWithLocal('app_users', STORAGE_KEYS.USERS),
-          loadRemoteWithLocal('tax_notes', STORAGE_KEYS.TAX_NOTES, 5000),
-        ]);
+        const [customerPayments, billingNotes, stockLedger, taxInvoices, remoteUsers, taxNotes, remoteCounts] =
+          await Promise.all([
+            loadRemoteWithLocal('customer_payments', STORAGE_KEYS.CUSTOMER_PAYMENTS),
+            loadRemoteWithLocal('billing_notes', STORAGE_KEYS.BILLING_NOTES),
+            loadRemoteWithLocal('stock_ledger', STORAGE_KEYS.STOCK_LEDGER, MAX_LOCAL_LEDGER_ENTRIES),
+            loadRemoteWithLocal('tax_invoices', STORAGE_KEYS.TAX_INVOICES, 5000),
+            loadRemoteWithLocal('app_users', STORAGE_KEYS.USERS),
+            loadRemoteWithLocal('tax_notes', STORAGE_KEYS.TAX_NOTES, 5000),
+            loadRemoteWithLocal('stock_counts', STORAGE_KEYS.STOCK_COUNTS, 500),
+          ]);
+        // ใบตรวจนับแก้ไขได้หลายครั้ง จึงยึดฉบับที่อัปเดตล่าสุด
+        const stockCounts = mergeByLatestUpdate(remoteCounts, getLocal(STORAGE_KEYS.STOCK_COUNTS, []));
         // ผู้ใช้จากฐานข้อมูลเป็นค่าหลัก (แก้จากเครื่องอื่นได้) เก็บสำเนาในเครื่องไว้ใช้ตอน Offline
-        const users = mergeUsersById(remoteUsers, getLocal(STORAGE_KEYS.USERS, []));
+        const users = mergeByLatestUpdate(remoteUsers, getLocal(STORAGE_KEYS.USERS, []));
         setLocal(STORAGE_KEYS.USERS, users);
 
         return {
@@ -685,6 +690,7 @@ export const posService = {
           stockLedger,
           taxInvoices,
           taxNotes,
+          stockCounts,
           users,
           suppliers,
           stockImports,
@@ -723,6 +729,7 @@ export const posService = {
       stockLedger: getLocal(STORAGE_KEYS.STOCK_LEDGER, []),
       taxInvoices: getLocal(STORAGE_KEYS.TAX_INVOICES, []),
       taxNotes: getLocal(STORAGE_KEYS.TAX_NOTES, []),
+      stockCounts: getLocal(STORAGE_KEYS.STOCK_COUNTS, []),
       users: getLocal(STORAGE_KEYS.USERS, []),
       suppliers,
       stockImports,
@@ -1222,6 +1229,84 @@ export const posService = {
 
     const updated = baseProducts.map((p) => (p.id === productId ? { ...p, ...patch } : p));
     setLocal(STORAGE_KEYS.PRODUCTS, updated);
+    return updated;
+  },
+
+  /**
+   * บันทึกใบตรวจนับสต็อก (Cycle Count) ทั้งสร้างใหม่และอัปเดตสถานะ
+   * ใบตรวจนับใช้ id จากฝั่งแอป เพื่อ upsert ได้ทั้งในเครื่องและ Supabase
+   */
+  async saveStockCount(record, isSupabaseActive) {
+    const saved = { ...record, updated_at: new Date().toISOString() };
+    if (isSupabaseActive && supabase) {
+      try {
+        await supabase.from('stock_counts').upsert([saved]);
+      } catch (err) {
+        console.warn('Supabase stock count fallback:', err.message);
+      }
+    }
+    const counts = getLocal(STORAGE_KEYS.STOCK_COUNTS, []);
+    const exists = counts.some((c) => c.id === saved.id);
+    const updated = exists ? counts.map((c) => (c.id === saved.id ? saved : c)) : [saved, ...counts];
+    setLocal(STORAGE_KEYS.STOCK_COUNTS, updated);
+    return { savedCount: saved, updatedCounts: updated };
+  },
+
+  /**
+   * อนุมัติผลตรวจนับ: ปรับสต็อกตามผลต่าง (นับได้ - ยอดในระบบตอนส่งผลนับ)
+   * บวกผลต่างเข้ากับยอดปัจจุบัน เพื่อไม่ทับยอดขายที่เกิดขึ้นระหว่างรออนุมัติ
+   */
+  async applyStockCountAdjustments(count, approvedBy, isSupabaseActive, currentProducts = null) {
+    const nowIso = new Date().toISOString();
+    const deltas = new Map();
+    (count.items || []).forEach((it) => {
+      if (it.counted_qty === null || it.counted_qty === undefined || it.counted_qty === '') return;
+      const delta = (Number(it.counted_qty) || 0) - (Number(it.system_qty) || 0);
+      if (delta !== 0) deltas.set(it.product_id, delta);
+    });
+
+    const baseProducts =
+      Array.isArray(currentProducts) && currentProducts.length > 0
+        ? currentProducts
+        : getLocal(STORAGE_KEYS.PRODUCTS, INITIAL_PRODUCTS);
+    if (deltas.size === 0) return baseProducts;
+
+    if (isSupabaseActive && supabase) {
+      const remoteIds = [...deltas.keys()].filter((id) => !String(id).startsWith('prod-'));
+      if (remoteIds.length > 0) {
+        try {
+          const { data: rows } = await supabase.from('products').select('id, stock').in('id', remoteIds);
+          for (const row of rows || []) {
+            await supabase
+              .from('products')
+              .update({ stock: Math.max(0, (Number(row.stock) || 0) + deltas.get(row.id)), updated_at: nowIso })
+              .eq('id', row.id);
+          }
+        } catch (err) {
+          console.warn('Supabase cycle count fallback:', err.message);
+        }
+      }
+    }
+
+    const updated = normalizeAndSyncProducts(
+      baseProducts.map((p) =>
+        deltas.has(p.id)
+          ? { ...p, stock: Math.max(0, (Number(p.stock) || 0) + deltas.get(p.id)), updated_at: nowIso }
+          : p
+      )
+    );
+    setLocal(STORAGE_KEYS.PRODUCTS, updated);
+    await recordStockMovements(
+      baseProducts,
+      updated,
+      {
+        movement_type: 'ADJUST',
+        reason: 'ตรวจนับสต็อก (Cycle Count)',
+        reference_doc: count.count_number,
+        approved_by: approvedBy,
+      },
+      isSupabaseActive
+    );
     return updated;
   },
 
@@ -2484,6 +2569,7 @@ export const posService = {
     setLocal(STORAGE_KEYS.STOCK_LEDGER, []);
     setLocal(STORAGE_KEYS.TAX_INVOICES, []);
     setLocal(STORAGE_KEYS.TAX_NOTES, []);
+    setLocal(STORAGE_KEYS.STOCK_COUNTS, []);
     setLocal(STORAGE_KEYS.SUPPLIERS, INITIAL_SUPPLIERS);
     setLocal(STORAGE_KEYS.STOCK_IMPORTS, []);
     setLocal(STORAGE_KEYS.ORDERS, INITIAL_ORDERS);

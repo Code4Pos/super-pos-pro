@@ -8,7 +8,7 @@ import { hasPermission, canAccessTab } from '../utils/rbac';
 
 const SESSION_STORAGE_KEY = 'siampos_session_v1';
 
-export const APP_VERSION = 'version beta 0.2.9';
+export const APP_VERSION = 'version beta 0.3.0';
 const HELD_BILLS_STORAGE_KEY = 'siampos_held_bills_v1';
 
 const POSContext = createContext(null);
@@ -27,6 +27,7 @@ export function POSProvider({ children }) {
   const [stockLedger, setStockLedger] = useState([]);
   const [taxInvoices, setTaxInvoices] = useState([]);
   const [taxNotes, setTaxNotes] = useState([]);
+  const [stockCounts, setStockCounts] = useState([]);
 
   // ผู้ใช้งานและสิทธิ์ (RBAC): ถ้ายังไม่มีผู้ใช้ที่เปิดใช้งาน ระบบจะเปิดทุกเมนูแบบไม่ต้องล็อกอิน
   // โหลดรายชื่อผู้ใช้จากเครื่องทันที เพื่อไม่ให้หน้าจอเปิดทุกเมนูชั่วขณะก่อนโหลดข้อมูลเสร็จ
@@ -141,6 +142,7 @@ export function POSProvider({ children }) {
       setStockLedger(data.stockLedger || []);
       setTaxInvoices(data.taxInvoices || []);
       setTaxNotes(data.taxNotes || []);
+      setStockCounts(data.stockCounts || []);
       setUsers(data.users || []);
       setSuppliers(data.suppliers || []);
       setStockImports(data.stockImports || []);
@@ -1008,6 +1010,103 @@ export function POSProvider({ children }) {
     [dbMode, taxInvoices, showToast]
   );
 
+  // ตรวจนับสต็อกแบบ Blind Count: สร้างใบนับ > บันทึกผลนับ > ส่งผล (บันทึกยอดในระบบ ณ ตอนส่ง) > อนุมัติปรับสต็อก
+  const persistStockCount = useCallback(
+    async (record) => {
+      const { savedCount, updatedCounts } = await posService.saveStockCount(record, dbMode === 'supabase');
+      setStockCounts(updatedCounts);
+      return savedCount;
+    },
+    [dbMode]
+  );
+
+  const createStockCount = useCallback(
+    async ({ scopeLabel, productIds }) => {
+      const nowIso = new Date().toISOString();
+      const items = products
+        .filter((p) => !p.linked_product_id && productIds.includes(p.id))
+        .map((p) => ({
+          product_id: p.id,
+          product_name: p.name,
+          sku: p.sku || '',
+          barcode: p.barcode || '',
+          unit: p.unit || 'ชิ้น',
+          cost_price: Number(p.cost_price) || 0,
+          counted_qty: null,
+          system_qty: null,
+        }));
+      if (items.length === 0) {
+        showToast('ไม่มีสินค้าให้ตรวจนับ', 'error');
+        return null;
+      }
+      const record = {
+        id: `cc-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        count_number: `CC-${nowIso.slice(2, 10).replace(/-/g, '')}-${Math.floor(100 + Math.random() * 900)}`,
+        scope_label: scopeLabel,
+        status: 'counting',
+        items,
+        created_by: currentUser?.name || '',
+        created_at: nowIso,
+      };
+      const saved = await persistStockCount(record);
+      showToast(`สร้างใบตรวจนับ ${saved.count_number} (${items.length} รายการ)`, 'success');
+      return saved;
+    },
+    [products, currentUser, persistStockCount, showToast]
+  );
+
+  const saveStockCountProgress = useCallback(
+    (count, items) => persistStockCount({ ...count, items }),
+    [persistStockCount]
+  );
+
+  const submitStockCount = useCallback(
+    async (count, items) => {
+      const stockById = new Map(products.map((p) => [p.id, Number(p.stock) || 0]));
+      const saved = await persistStockCount({
+        ...count,
+        items: items.map((it) => ({ ...it, system_qty: stockById.get(it.product_id) ?? 0 })),
+        status: 'submitted',
+        submitted_by: currentUser?.name || '',
+        submitted_at: new Date().toISOString(),
+      });
+      showToast(`ส่งผลตรวจนับ ${saved.count_number} รออนุมัติ`, 'info');
+      return saved;
+    },
+    [products, currentUser, persistStockCount, showToast]
+  );
+
+  const approveStockCount = useCallback(
+    async (count) => {
+      const approvedBy = currentUser?.name || 'ผู้ดูแล';
+      const updatedProducts = await posService.applyStockCountAdjustments(
+        count,
+        approvedBy,
+        dbMode === 'supabase',
+        products
+      );
+      setProducts(updatedProducts);
+      const saved = await persistStockCount({
+        ...count,
+        status: 'approved',
+        approved_by: approvedBy,
+        approved_at: new Date().toISOString(),
+      });
+      showToast(`อนุมัติผลตรวจนับ ${saved.count_number} และปรับสต็อกแล้ว`, 'success');
+      return saved;
+    },
+    [currentUser, dbMode, products, persistStockCount, showToast]
+  );
+
+  const cancelStockCount = useCallback(
+    async (count) => {
+      const saved = await persistStockCount({ ...count, status: 'cancelled' });
+      showToast(`ยกเลิกใบตรวจนับ ${saved.count_number}`, 'warning');
+      return saved;
+    },
+    [persistStockCount, showToast]
+  );
+
   // ออกใบลดหนี้ / ใบเพิ่มหนี้ อ้างอิงใบกำกับภาษีเต็มรูป
   const createTaxNote = useCallback(
     async (noteData) => {
@@ -1328,6 +1427,12 @@ export function POSProvider({ children }) {
     createTaxInvoice,
     taxNotes,
     createTaxNote,
+    stockCounts,
+    createStockCount,
+    saveStockCountProgress,
+    submitStockCount,
+    approveStockCount,
+    cancelStockCount,
     billingNotes,
     createBillingNote,
     saveSupplier,

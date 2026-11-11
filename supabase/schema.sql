@@ -229,6 +229,23 @@ CREATE TABLE IF NOT EXISTS tax_notes (
   status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'cancelled')),
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
+-- beta 0.3.0: ใบตรวจนับสต็อกแบบ Blind Count (id สร้างจากฝั่งแอปเพื่อ upsert ได้)
+-- items: [{product_id, product_name, sku, barcode, unit, cost_price, counted_qty, system_qty}]
+CREATE TABLE IF NOT EXISTS stock_counts (
+  id TEXT PRIMARY KEY,
+  count_number TEXT UNIQUE NOT NULL,
+  scope_label TEXT,
+  status TEXT NOT NULL DEFAULT 'counting' CHECK (status IN ('counting', 'submitted', 'approved', 'cancelled')),
+  items JSONB NOT NULL DEFAULT '[]'::jsonb,
+  created_by TEXT,
+  submitted_by TEXT,
+  submitted_at TIMESTAMPTZ,
+  approved_by TEXT,
+  approved_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- รับคืนสินค้าจากใบลดหนี้บันทึกใน Stock Ledger เป็นประเภท RETURN
 ALTER TABLE stock_ledger DROP CONSTRAINT IF EXISTS stock_ledger_movement_type_check;
 ALTER TABLE stock_ledger ADD CONSTRAINT stock_ledger_movement_type_check
@@ -274,6 +291,10 @@ ALTER TABLE stock_ledger ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tax_invoices ENABLE ROW LEVEL SECURITY;
 ALTER TABLE app_users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tax_notes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE stock_counts ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Allow public access to stock_counts" ON stock_counts;
+CREATE POLICY "Allow public access to stock_counts" ON stock_counts FOR ALL USING (true) WITH CHECK (true);
 
 DROP POLICY IF EXISTS "Allow public access to tax_notes" ON tax_notes;
 CREATE POLICY "Allow public access to tax_notes" ON tax_notes FOR ALL USING (true) WITH CHECK (true);
