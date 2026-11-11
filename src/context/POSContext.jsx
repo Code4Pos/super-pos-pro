@@ -5,7 +5,7 @@ import { calculateEffectiveUnitPrice } from '../utils/formatters';
 import { summarizeSplitPayments } from '../utils/payments';
 import { calculateCustomerCredit, checkCreditSale } from '../utils/credit';
 
-export const APP_VERSION = 'version beta 0.2.3';
+export const APP_VERSION = 'version beta 0.2.4';
 const HELD_BILLS_STORAGE_KEY = 'siampos_held_bills_v1';
 
 const POSContext = createContext(null);
@@ -20,6 +20,7 @@ export function POSProvider({ children }) {
   const [trashedProducts, setTrashedProducts] = useState([]);
   const [customers, setCustomers] = useState([]);
   const [customerPayments, setCustomerPayments] = useState([]);
+  const [billingNotes, setBillingNotes] = useState([]);
   const [suppliers, setSuppliers] = useState([]);
   const [stockImports, setStockImports] = useState([]);
   const [orders, setOrders] = useState([]);
@@ -103,6 +104,7 @@ export function POSProvider({ children }) {
       setTrashedProducts(data.trashedProducts || []);
       setCustomers(data.customers);
       setCustomerPayments(data.customerPayments || []);
+      setBillingNotes(data.billingNotes || []);
       setSuppliers(data.suppliers || []);
       setStockImports(data.stockImports || []);
       setOrders(data.orders);
@@ -917,6 +919,20 @@ export function POSProvider({ children }) {
     [dbMode, showToast]
   );
 
+  // ออกใบวางบิล (Billing Note) ให้ลูกค้าเครดิต
+  const createBillingNote = useCallback(
+    async (noteData) => {
+      const { savedNote, updatedNotes } = await posService.createBillingNote(
+        noteData,
+        dbMode === 'supabase'
+      );
+      setBillingNotes(updatedNotes);
+      showToast(`ออกใบวางบิล ${savedNote.billing_number} เรียบร้อย`, 'success');
+      return savedNote;
+    },
+    [dbMode, showToast]
+  );
+
   // รับชำระหนี้จากลูกค้าเครดิต
   const recordCustomerPayment = useCallback(
     async (paymentData) => {
@@ -1108,6 +1124,8 @@ export function POSProvider({ children }) {
     customerPayments,
     getCustomerCredit,
     recordCustomerPayment,
+    billingNotes,
+    createBillingNote,
     saveSupplier,
     deleteSupplier,
     createStockImport,

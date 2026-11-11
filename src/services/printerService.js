@@ -731,7 +731,131 @@ function buildOrderSlipHtml(order, settings, paperSize = '80mm') {
 </html>`;
 }
 
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function formatDateOnly(dateInput) {
+  if (!dateInput) return '-';
+  return new Date(dateInput).toLocaleDateString('th-TH', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+  });
+}
+
+/**
+ * ใบวางบิล / ใบแจ้งหนี้รวม (Billing Note) ขนาด A4
+ */
+function buildBillingNoteHtml(note, settings) {
+  const rowsHtml = (note.bills || [])
+    .map(
+      (b, idx) => `
+      <tr>
+        <td style="text-align:center;">${idx + 1}</td>
+        <td style="font-family:monospace;">${escapeHtml(b.order_number)}</td>
+        <td style="text-align:center;">${formatDateOnly(b.order_date)}</td>
+        <td style="text-align:center;">${formatDateOnly(b.due_date)}</td>
+        <td style="text-align:right;font-weight:600;">${formatCurrency(b.amount)}</td>
+      </tr>`
+    )
+    .join('');
+  const branch = note.customer_branch && note.customer_branch !== '00000'
+    ? `สาขาที่ ${escapeHtml(note.customer_branch)}`
+    : 'สำนักงานใหญ่';
+
+  return `<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8" />
+  <title>ใบวางบิล - ${escapeHtml(note.billing_number)}</title>
+  <link href="https://fonts.googleapis.com/css2?family=Prompt:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    @page { size: A4 portrait; margin: 14mm; }
+    * { box-sizing: border-box; }
+    body { font-family: 'Prompt', sans-serif; font-size: 13px; color: #0f172a; margin: 0; }
+    .header { display: flex; justify-content: space-between; border-bottom: 2px solid #1e293b; padding-bottom: 10px; margin-bottom: 14px; }
+    .title { font-size: 22px; font-weight: 700; text-align: right; }
+    .box { border: 1px solid #cbd5e1; border-radius: 6px; padding: 10px 12px; }
+    .grid { display: grid; grid-template-columns: 1.4fr 1fr; gap: 12px; margin-bottom: 14px; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { border: 1px solid #cbd5e1; padding: 7px 8px; }
+    th { background: #f1f5f9; font-weight: 600; }
+    .total td { font-weight: 700; font-size: 15px; background: #f8fafc; }
+    .sign { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; margin-top: 60px; text-align: center; }
+    .sign div { border-top: 1px dotted #475569; padding-top: 6px; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div>
+      <div style="font-size:18px;font-weight:700;">${escapeHtml(settings.shopName)}</div>
+      <div>${escapeHtml(settings.shopAddress)}</div>
+      <div>โทร. ${escapeHtml(settings.shopPhone)}</div>
+    </div>
+    <div>
+      <div class="title">ใบวางบิล / ใบแจ้งหนี้</div>
+      <div style="text-align:right;">BILLING NOTE</div>
+      <div style="text-align:right;margin-top:4px;font-family:monospace;font-weight:700;">เลขที่: ${escapeHtml(note.billing_number)}</div>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="box">
+      <div><strong>ลูกค้า:</strong> ${escapeHtml(note.customer_name)}</div>
+      ${note.customer_tax_id ? `<div><strong>เลขประจำตัวผู้เสียภาษี:</strong> ${escapeHtml(note.customer_tax_id)} (${branch})</div>` : ''}
+      ${note.customer_address ? `<div><strong>ที่อยู่:</strong> ${escapeHtml(note.customer_address)}</div>` : ''}
+    </div>
+    <div class="box">
+      <div><strong>วันที่วางบิล:</strong> ${formatDateOnly(note.created_at)}</div>
+      <div><strong>กำหนดชำระ:</strong> ${formatDateOnly(note.payment_due_date)}</div>
+      <div><strong>จำนวนบิล:</strong> ${(note.bills || []).length} ฉบับ</div>
+    </div>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th style="width:50px;">ลำดับ</th>
+        <th>เลขที่บิล / ใบส่งของ</th>
+        <th style="width:120px;">วันที่บิล</th>
+        <th style="width:120px;">ครบกำหนด</th>
+        <th style="width:140px;">ยอดค้างชำระ</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${rowsHtml}
+      <tr class="total">
+        <td colspan="4" style="text-align:right;">รวมยอดที่ต้องชำระทั้งสิ้น</td>
+        <td style="text-align:right;">${formatCurrency(note.total)}</td>
+      </tr>
+    </tbody>
+  </table>
+
+  ${note.note ? `<div class="box" style="margin-top:12px;"><strong>หมายเหตุ:</strong> ${escapeHtml(note.note)}</div>` : ''}
+
+  <div class="sign">
+    <div>ผู้วางบิล<br/>วันที่ ........../........../..........</div>
+    <div>ผู้รับวางบิล<br/>วันที่ ........../........../..........</div>
+  </div>
+</body>
+</html>`;
+}
+
 export const printerService = {
+  /**
+   * พิมพ์ใบวางบิล (Billing Note) ขนาด A4
+   */
+  printBillingNote(note) {
+    if (!note) return false;
+    printHtmlViaHiddenIframe(buildBillingNoteHtml(note, this.getSettings()));
+    return true;
+  },
+
   getSettings() {
     try {
       const raw = localStorage.getItem(PRINTER_SETTINGS_KEY);

@@ -138,3 +138,62 @@ export function checkCreditSale(customer, creditAmount, creditSummary) {
   }
   return { ok: true, message: '' };
 }
+
+// ช่วงอายุลูกหนี้ (Aging Buckets) นับจากวันที่ออกบิล
+export const AGING_BUCKETS = [
+  { id: 'd0_30', label: '0-30 วัน', min: 0, max: 30 },
+  { id: 'd31_60', label: '31-60 วัน', min: 31, max: 60 },
+  { id: 'd61_90', label: '61-90 วัน', min: 61, max: 90 },
+  { id: 'd90_plus', label: 'เกิน 90 วัน', min: 91, max: Infinity },
+];
+
+export function getAgingBucketId(billDate, now = new Date()) {
+  const ageDays = Math.max(0, Math.floor((now - new Date(billDate)) / 86400000));
+  return AGING_BUCKETS.find((b) => ageDays >= b.min && ageDays <= b.max).id;
+}
+
+/**
+ * รายงานวิเคราะห์อายุลูกหนี้ (Aging Report) แยกตามลูกค้า
+ * ใช้ยอดคงค้างของแต่ละบิลหลังตัดชำระแบบ FIFO แล้ว
+ */
+export function calculateAgingReport(customers = [], orders = [], customerPayments = [], now = new Date()) {
+  const emptyBuckets = () => Object.fromEntries(AGING_BUCKETS.map((b) => [b.id, 0]));
+  const round2 = (n) => Math.round(n * 100) / 100;
+  const totals = { ...emptyBuckets(), total: 0, overdue: 0 };
+
+  const rows = customers
+    .map((customer) => {
+      const credit = calculateCustomerCredit(customer, orders, customerPayments, now);
+      const buckets = emptyBuckets();
+      credit.openBills.forEach((bill) => {
+        const bucketId = getAgingBucketId(bill.order.created_at, now);
+        buckets[bucketId] = round2(buckets[bucketId] + bill.remaining);
+      });
+      return { customer, credit, buckets, total: credit.outstanding, overdue: credit.overdue };
+    })
+    .filter((row) => row.total > 0)
+    .sort((a, b) => b.total - a.total);
+
+  rows.forEach((row) => {
+    AGING_BUCKETS.forEach((b) => {
+      totals[b.id] = round2(totals[b.id] + row.buckets[b.id]);
+    });
+    totals.total = round2(totals.total + row.total);
+    totals.overdue = round2(totals.overdue + row.overdue);
+  });
+
+  return { rows, totals };
+}
+
+/**
+ * สถานะใบวางบิล: ชำระครบเมื่อทุกบิลในใบวางบิลไม่มียอดค้างแล้ว
+ */
+export function getBillingNoteStatus(note, customer, orders = [], customerPayments = [], now = new Date()) {
+  if (!customer) return { paid: false, remaining: Number(note.total) || 0 };
+  const credit = calculateCustomerCredit(customer, orders, customerPayments, now);
+  const noteOrderIds = new Set(note.order_ids || []);
+  const remaining = credit.openBills
+    .filter((b) => noteOrderIds.has(b.order.id))
+    .reduce((sum, b) => sum + b.remaining, 0);
+  return { paid: remaining <= 0.001, remaining: Math.round(remaining * 100) / 100 };
+}

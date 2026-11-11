@@ -131,6 +131,7 @@ export default function Header({
               {activeTab === 'dashboard' && 'รายงาน › แดชบอร์ด'}
               {activeTab === 'customers' && 'ลูกค้า › จัดการลูกค้า'}
               {activeTab === 'suppliers' && 'บริหาร › จัดการผู้ผลิต'}
+              {activeTab === 'receivables' && 'ลูกค้า › ลูกหนี้ & วางบิล'}
             </h2>
 
             {/* ป้าย Version Beta 0.1.3 */}

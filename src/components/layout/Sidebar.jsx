@@ -20,6 +20,7 @@ import {
   Truck,
   Briefcase,
   Building2,
+  Landmark,
 } from 'lucide-react';
 import { usePOS } from '../../context/POSContext';
 
@@ -146,6 +147,12 @@ export const SIDEBAR_MENU_GROUPS = [
         label: 'จัดการลูกค้า',
         description: 'เพิ่ม/แก้ไขข้อมูลลูกค้าและยี่ปั๊ว',
         icon: UserCog,
+      },
+      {
+        id: 'receivables',
+        label: 'ลูกหนี้ & วางบิล',
+        description: 'อายุลูกหนี้ ใบวางบิล รับชำระหนี้',
+        icon: Landmark,
       },
     ],
   },

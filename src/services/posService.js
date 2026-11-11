@@ -18,6 +18,7 @@ const STORAGE_KEYS = {
   CUSTOMERS: 'siampos_customers_v1',
   CUSTOMER_META: 'siampos_customer_meta_v1',
   CUSTOMER_PAYMENTS: 'siampos_customer_payments_v1',
+  BILLING_NOTES: 'siampos_billing_notes_v1',
   SUPPLIERS: 'siampos_suppliers_v1',
   STOCK_IMPORTS: 'siampos_stock_imports_v1',
   ORDERS: 'siampos_orders_v1',
@@ -247,6 +248,46 @@ export const STOCK_IMPORT_TRANSITIONS = {
  * เติมค่าเริ่มต้นให้ใบนำเข้า (ใบเก่าก่อน beta 0.2.1 ไม่มีสถานะ ถือว่านำเข้าสำเร็จแล้ว)
  */
 /**
+ * โหลดเอกสารจากตารางใน Supabase แล้วรวมกับรายการที่บันทึกไว้ในเครื่อง (ไม่ซ้ำ id)
+ * ถ้ายังไม่ได้สร้างตาราง (ยังไม่รัน Migration) จะใช้ข้อมูลในเครื่องอย่างเดียว
+ */
+async function loadRemoteWithLocal(table, storageKey) {
+  const localRows = getLocal(storageKey, []);
+  try {
+    const res = await supabase.from(table).select('*').order('created_at', { ascending: false });
+    if (res.error || !Array.isArray(res.data)) return localRows;
+    const remoteIds = new Set(res.data.map((r) => r.id));
+    return [...res.data, ...localRows.filter((r) => !remoteIds.has(r.id))];
+  } catch {
+    return localRows;
+  }
+}
+
+/**
+ * บันทึกเอกสารลง Supabase (ถ้าใช้งานอยู่) แล้วเก็บสำเนาในเครื่องเสมอ
+ * คืนค่าเอกสารที่บันทึก และรายการทั้งหมดในเครื่อง
+ */
+async function insertRemoteWithLocal(table, storageKey, record, localIdPrefix, isSupabaseActive) {
+  let saved = { ...record, id: `${localIdPrefix}-${Date.now()}` };
+  if (
+    isSupabaseActive &&
+    supabase &&
+    record.customer_id &&
+    !String(record.customer_id).startsWith('cus-')
+  ) {
+    try {
+      const { data, error } = await supabase.from(table).insert([record]).select().single();
+      if (!error && data) saved = data;
+    } catch (err) {
+      console.warn(`Supabase ${table} fallback:`, err.message);
+    }
+  }
+  const updated = [saved, ...getLocal(storageKey, [])];
+  setLocal(storageKey, updated);
+  return { saved, updated };
+}
+
+/**
  * รวมข้อมูลลูกค้ากับข้อมูลเสริมที่เก็บในเครื่อง (ราคาพิเศษ และข้อมูล B2B/เครดิต)
  * ใช้ค่าจากฐานข้อมูลก่อน ถ้าฐานข้อมูลยังไม่มีคอลัมน์นั้นจึงใช้ค่าในเครื่อง
  */
@@ -461,19 +502,11 @@ export const posService = {
           mergeCustomerMeta(c, localCustomerMeta)
         );
 
-        // ยอดรับชำระหนี้ลูกค้า (ถ้ายังไม่มีตาราง customer_payments ให้ใช้ข้อมูลในเครื่อง)
-        let customerPayments = getLocal(STORAGE_KEYS.CUSTOMER_PAYMENTS, []);
-        const payRes = await supabase
-          .from('customer_payments')
-          .select('*')
-          .order('created_at', { ascending: false });
-        if (!payRes.error && Array.isArray(payRes.data)) {
-          const remoteIds = new Set(payRes.data.map((p) => p.id));
-          customerPayments = [
-            ...payRes.data,
-            ...customerPayments.filter((p) => !remoteIds.has(p.id)),
-          ];
-        }
+        // ยอดรับชำระหนี้ และใบวางบิล (ถ้ายังไม่มีตารางในฐานข้อมูลให้ใช้ข้อมูลในเครื่อง)
+        const [customerPayments, billingNotes] = await Promise.all([
+          loadRemoteWithLocal('customer_payments', STORAGE_KEYS.CUSTOMER_PAYMENTS),
+          loadRemoteWithLocal('billing_notes', STORAGE_KEYS.BILLING_NOTES),
+        ]);
 
         return {
           mode: 'supabase',
@@ -483,6 +516,7 @@ export const posService = {
           trashedProducts: localTrash,
           customers: mergedCustomers,
           customerPayments,
+          billingNotes,
           suppliers,
           stockImports,
           orders: ordRes.data || [],
@@ -516,6 +550,7 @@ export const posService = {
       trashedProducts: localTrash,
       customers: localCustomers,
       customerPayments: getLocal(STORAGE_KEYS.CUSTOMER_PAYMENTS, []),
+      billingNotes: getLocal(STORAGE_KEYS.BILLING_NOTES, []),
       suppliers,
       stockImports,
       orders: getLocal(STORAGE_KEYS.ORDERS, INITIAL_ORDERS),
@@ -1212,29 +1247,55 @@ export const posService = {
       created_at: nowIso,
     };
 
-    let saved = { ...record, id: `rcv-${Date.now()}` };
-    if (
-      isSupabaseActive &&
-      supabase &&
-      record.customer_id &&
-      !String(record.customer_id).startsWith('cus-')
-    ) {
-      try {
-        const { data, error } = await supabase
-          .from('customer_payments')
-          .insert([record])
-          .select()
-          .single();
-        if (!error && data) saved = data;
-      } catch (err) {
-        console.warn('Supabase customer payment fallback:', err.message);
-      }
-    }
-
-    const existing = getLocal(STORAGE_KEYS.CUSTOMER_PAYMENTS, []);
-    const updated = [saved, ...existing];
-    setLocal(STORAGE_KEYS.CUSTOMER_PAYMENTS, updated);
+    const { saved, updated } = await insertRemoteWithLocal(
+      'customer_payments',
+      STORAGE_KEYS.CUSTOMER_PAYMENTS,
+      record,
+      'rcv',
+      isSupabaseActive
+    );
     return { savedPayment: saved, updatedPayments: updated };
+  },
+
+  /**
+   * ออกใบวางบิล (Billing Note) รวมบิลเครดิตที่ค้างชำระของลูกค้า
+   * บันทึกยอดคงค้างของแต่ละบิล ณ วันที่ออกใบวางบิล
+   */
+  async createBillingNote(noteData, isSupabaseActive) {
+    const nowIso = new Date().toISOString();
+    const datePart = nowIso.slice(2, 10).replace(/-/g, '');
+    const randomPart = Math.floor(100 + Math.random() * 900);
+    const bills = (noteData.bills || []).map((b) => ({
+      order_id: b.order_id,
+      order_number: b.order_number,
+      order_date: b.order_date,
+      due_date: b.due_date,
+      amount: Math.round((Number(b.amount) || 0) * 100) / 100,
+    }));
+    const customer = noteData.customer || {};
+    const record = {
+      billing_number: `BN-${datePart}-${randomPart}`,
+      customer_id: customer.id,
+      customer_name: customer.name || '',
+      customer_tax_id: customer.tax_id || '',
+      customer_branch: customer.branch_number || '00000',
+      customer_address: [customer.shop_name, customer.address].filter(Boolean).join(' '),
+      order_ids: bills.map((b) => b.order_id),
+      bills,
+      total: Math.round(bills.reduce((sum, b) => sum + b.amount, 0) * 100) / 100,
+      payment_due_date: noteData.payment_due_date,
+      note: String(noteData.note || '').trim(),
+      created_at: nowIso,
+    };
+
+    const { saved, updated } = await insertRemoteWithLocal(
+      'billing_notes',
+      STORAGE_KEYS.BILLING_NOTES,
+      record,
+      'bn',
+      isSupabaseActive
+    );
+    return { savedNote: saved, updatedNotes: updated };
   },
 
   /**
@@ -1903,6 +1964,7 @@ export const posService = {
     setLocal(STORAGE_KEYS.CUSTOMERS, INITIAL_CUSTOMERS);
     setLocal(STORAGE_KEYS.CUSTOMER_META, {});
     setLocal(STORAGE_KEYS.CUSTOMER_PAYMENTS, []);
+    setLocal(STORAGE_KEYS.BILLING_NOTES, []);
     setLocal(STORAGE_KEYS.SUPPLIERS, INITIAL_SUPPLIERS);
     setLocal(STORAGE_KEYS.STOCK_IMPORTS, []);
     setLocal(STORAGE_KEYS.ORDERS, INITIAL_ORDERS);

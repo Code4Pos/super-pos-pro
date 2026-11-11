@@ -128,6 +128,24 @@ CREATE TABLE IF NOT EXISTS customer_payments (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- beta 0.2.4: ใบวางบิล (Billing Note) รวมบิลเครดิตค้างชำระของลูกค้า
+-- bills เก็บรายการบิลและยอดค้าง ณ วันที่วางบิล [{order_id, order_number, order_date, due_date, amount}]
+CREATE TABLE IF NOT EXISTS billing_notes (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  billing_number TEXT UNIQUE NOT NULL,
+  customer_id UUID REFERENCES customers(id) ON DELETE CASCADE,
+  customer_name TEXT,
+  customer_tax_id VARCHAR(13),
+  customer_branch VARCHAR(5) DEFAULT '00000',
+  customer_address TEXT,
+  order_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+  bills JSONB NOT NULL DEFAULT '[]'::jsonb,
+  total NUMERIC(12, 2) NOT NULL DEFAULT 0,
+  payment_due_date TIMESTAMPTZ,
+  note TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- 6. ตารางรายการสินค้าในบิล (Order Items)
 CREATE TABLE IF NOT EXISTS order_items (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -163,6 +181,10 @@ ALTER TABLE customers ENABLE ROW LEVEL SECURITY;
 ALTER TABLE orders ENABLE ROW LEVEL SECURITY;
 ALTER TABLE order_items ENABLE ROW LEVEL SECURITY;
 ALTER TABLE customer_payments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE billing_notes ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Allow public access to billing_notes" ON billing_notes;
+CREATE POLICY "Allow public access to billing_notes" ON billing_notes FOR ALL USING (true) WITH CHECK (true);
 
 DROP POLICY IF EXISTS "Allow public access to customer_payments" ON customer_payments;
 CREATE POLICY "Allow public access to customer_payments" ON customer_payments FOR ALL USING (true) WITH CHECK (true);
