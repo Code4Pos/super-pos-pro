@@ -22,6 +22,7 @@ import {
   Building2,
   Landmark,
   History,
+  ClipboardList,
 } from 'lucide-react';
 import { usePOS } from '../../context/POSContext';
 
@@ -100,6 +101,12 @@ export const SIDEBAR_MENU_GROUPS = [
         label: 'นำเข้าสินค้า',
         description: 'รับสินค้าเข้าคลังจากผู้ผลิต',
         icon: Truck,
+      },
+      {
+        id: 'reorder',
+        label: 'แนะนำสั่งซื้อ (PO)',
+        description: 'จุดสั่งซื้อซ้ำ และสร้างใบสั่งซื้อ',
+        icon: ClipboardList,
       },
       {
         id: 'stock-ledger',

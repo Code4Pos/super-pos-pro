@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
-import { X, FileText, Edit3, Truck, PackageCheck, XCircle, Check } from 'lucide-react';
+import { X, FileText, Edit3, Truck, PackageCheck, XCircle, Check, Printer } from 'lucide-react';
 import ConfirmModal from '../common/ConfirmModal';
+import { usePOS } from '../../context/POSContext';
+import { printerService } from '../../services/printerService';
 import ImportStatusBadge, { IMPORT_STATUS_META, IMPORT_STATUS_FLOW } from './ImportStatusBadge';
 import { formatCurrency, formatDateTime, formatNumber } from '../../utils/formatters';
 
@@ -30,6 +32,7 @@ const STATUS_ACTION_CONFIRM = {
  * Modal ตรวจสอบใบนำเข้า: แสดงรายละเอียด ขั้นตอนสถานะ และปุ่มเปลี่ยนสถานะ
  */
 export default function ImportDetailModal({ importDoc, onClose, onEdit, onChangeStatus }) {
+  const { suppliers = [] } = usePOS();
   const [pendingAction, setPendingAction] = useState(null);
 
   if (!importDoc) return null;
@@ -48,13 +51,29 @@ export default function ImportDetailModal({ importDoc, onClose, onEdit, onChange
             <h3 className="text-sm font-bold font-mono">{importDoc.import_number}</h3>
             <ImportStatusBadge status={status} />
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white shrink-0"
-          >
-            <X className="w-4 h-4" />
-          </button>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <button
+              type="button"
+              onClick={() =>
+                printerService.printPurchaseOrder(
+                  importDoc,
+                  suppliers.find((s) => s.id === importDoc.supplier_id) || null
+                )
+              }
+              className="px-2.5 py-1.5 rounded-lg bg-slate-800 text-slate-200 hover:text-white text-xs font-bold flex items-center gap-1"
+              title="พิมพ์ใบสั่งซื้อ (PO) ขนาด A4"
+            >
+              <Printer className="w-4 h-4" />
+              <span className="hidden sm:inline">พิมพ์ PO</span>
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
         </div>
 
         <div className="p-5 overflow-y-auto space-y-4">

@@ -5,7 +5,7 @@ import { calculateEffectiveUnitPrice } from '../utils/formatters';
 import { summarizeSplitPayments } from '../utils/payments';
 import { calculateCustomerCredit, checkCreditSale } from '../utils/credit';
 
-export const APP_VERSION = 'version beta 0.2.5';
+export const APP_VERSION = 'version beta 0.2.6';
 const HELD_BILLS_STORAGE_KEY = 'siampos_held_bills_v1';
 
 const POSContext = createContext(null);
@@ -773,6 +773,20 @@ export function POSProvider({ children }) {
     [dbMode, products, showToast]
   );
 
+  // ตั้งค่าจุดสั่งซื้อ (ระยะเวลารอสินค้า / สต็อกสำรอง) ของสินค้า
+  const updateReorderSettings = useCallback(
+    async (productId, settings) => {
+      const updated = await posService.updateReorderSettings(
+        productId,
+        settings,
+        dbMode === 'supabase',
+        products
+      );
+      setProducts(updated);
+    },
+    [dbMode, products]
+  );
+
   // บันทึก/ลบ ราคาขายส่งหลายระดับ (สูงสุด 10 ขั้น) พร้อมซิงก์กับข้อมูลราคาขายส่งของตัวสินค้า
   const saveWholesaleRule = useCallback(
     async (ruleData) => {
@@ -1128,6 +1142,7 @@ export function POSProvider({ children }) {
     permanentDeleteProduct,
     emptyTrash,
     updateProductStock,
+    updateReorderSettings,
     saveWholesaleRule,
     deleteWholesaleRule,
     saveSpecialRule,

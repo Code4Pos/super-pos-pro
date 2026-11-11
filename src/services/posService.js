@@ -556,6 +556,8 @@ export const posService = {
                 p.linked_product_id || meta.linked_product_id || null,
               linked_deduct_qty:
                 p.linked_deduct_qty || meta.linked_deduct_qty || 1,
+              lead_time_days: p.lead_time_days ?? meta.lead_time_days,
+              safety_stock: p.safety_stock ?? meta.safety_stock,
             };
           });
 
@@ -799,8 +801,9 @@ export const posService = {
       linked_product_id: linkedProductId,
       linked_deduct_qty: linkedDeductQty,
     };
-    localMeta[targetId] = metaEntry;
-    localMeta[cleanPayload.sku] = metaEntry;
+    // รวมกับข้อมูลเดิม เพื่อไม่ให้ค่าที่ตั้งจากหน้าอื่น (เช่น จุดสั่งซื้อ) หายไป
+    localMeta[targetId] = { ...(localMeta[targetId] || {}), ...metaEntry };
+    localMeta[cleanPayload.sku] = { ...(localMeta[cleanPayload.sku] || {}), ...metaEntry };
     setLocal(STORAGE_KEYS.PRODUCT_META, localMeta);
 
     const mergedProduct = {
@@ -810,9 +813,16 @@ export const posService = {
       created_at: savedSupaRow?.created_at || productData.created_at || nowIso,
     };
 
+    // ค่าจุดสั่งซื้อไม่ได้อยู่ในฟอร์มสินค้า จึงคงค่าเดิมไว้
+    const keepReorderFields = (p) => ({
+      ...mergedProduct,
+      lead_time_days: mergedProduct.lead_time_days ?? p.lead_time_days,
+      safety_stock: mergedProduct.safety_stock ?? p.safety_stock,
+    });
+
     if (productData.id && updatedList.some((p) => p.id === productData.id)) {
       updatedList = updatedList.map((p) =>
-        p.id === productData.id ? mergedProduct : p
+        p.id === productData.id ? keepReorderFields(p) : p
       );
     } else if (updatedList.some((p) => p.id === targetId)) {
       updatedList = updatedList.map((p) =>
@@ -1094,6 +1104,41 @@ export const posService = {
       isSupabaseActive
     );
     return synced;
+  },
+
+  /**
+   * ตั้งค่าจุดสั่งซื้อของสินค้า: ระยะเวลารอสินค้า (วัน) และสต็อกสำรอง
+   * ค่า null = ใช้ค่าเริ่มต้น / เก็บสำรองใน PRODUCT_META เผื่อฐานข้อมูลยังไม่มีคอลัมน์
+   */
+  async updateReorderSettings(productId, settings, isSupabaseActive, currentProducts = null) {
+    const toNullableNumber = (v) =>
+      v === null || v === undefined || v === '' ? null : Math.max(0, Number(v) || 0);
+    const patch = {
+      lead_time_days: toNullableNumber(settings.lead_time_days),
+      safety_stock: toNullableNumber(settings.safety_stock),
+    };
+
+    if (isSupabaseActive && supabase && !String(productId).startsWith('prod-')) {
+      try {
+        await supabase.from('products').update(patch).eq('id', productId);
+      } catch {
+        // ฐานข้อมูลยังไม่มีคอลัมน์ ใช้ค่าในเครื่องแทน
+      }
+    }
+
+    const baseProducts =
+      Array.isArray(currentProducts) && currentProducts.length > 0
+        ? currentProducts
+        : getLocal(STORAGE_KEYS.PRODUCTS, INITIAL_PRODUCTS);
+    const target = baseProducts.find((p) => p.id === productId);
+    const localMeta = getLocal(STORAGE_KEYS.PRODUCT_META, {});
+    localMeta[productId] = { ...(localMeta[productId] || {}), ...patch };
+    if (target?.sku) localMeta[target.sku] = { ...(localMeta[target.sku] || {}), ...patch };
+    setLocal(STORAGE_KEYS.PRODUCT_META, localMeta);
+
+    const updated = baseProducts.map((p) => (p.id === productId ? { ...p, ...patch } : p));
+    setLocal(STORAGE_KEYS.PRODUCTS, updated);
+    return updated;
   },
 
   /**

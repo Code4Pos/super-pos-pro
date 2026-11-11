@@ -846,7 +846,126 @@ function buildBillingNoteHtml(note, settings) {
 </html>`;
 }
 
+/**
+ * ใบสั่งซื้อ (Purchase Order) ขนาด A4 จากใบนำเข้าสินค้า
+ */
+function buildPurchaseOrderHtml(importDoc, supplier, settings) {
+  const rowsHtml = (importDoc.items || [])
+    .map(
+      (it, idx) => `
+      <tr>
+        <td style="text-align:center;">${idx + 1}</td>
+        <td style="font-family:monospace;">${escapeHtml(it.barcode_or_sku || it.sku)}</td>
+        <td>${escapeHtml(it.product_name)}</td>
+        <td style="text-align:center;font-weight:600;">${escapeHtml(it.quantity)}</td>
+        <td style="text-align:center;">${escapeHtml(it.unit)}</td>
+        <td style="text-align:right;">${formatCurrency(it.import_price)}</td>
+        <td style="text-align:right;">${Number(it.total_discount) > 0 ? `-${formatCurrency(it.total_discount)}` : '-'}</td>
+        <td style="text-align:right;font-weight:600;">${formatCurrency(it.line_total)}</td>
+      </tr>`
+    )
+    .join('');
+  const supplierAddress = supplier
+    ? [
+        supplier.address,
+        supplier.tambon && `ต.${supplier.tambon}`,
+        supplier.amphoe && `อ.${supplier.amphoe}`,
+        supplier.province && `จ.${supplier.province}`,
+        supplier.zipcode,
+      ]
+        .filter(Boolean)
+        .join(' ')
+    : '';
+
+  return `<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8" />
+  <title>ใบสั่งซื้อ - ${escapeHtml(importDoc.import_number)}</title>
+  <link href="https://fonts.googleapis.com/css2?family=Prompt:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    @page { size: A4 portrait; margin: 14mm; }
+    * { box-sizing: border-box; }
+    body { font-family: 'Prompt', sans-serif; font-size: 13px; color: #0f172a; margin: 0; }
+    .header { display: flex; justify-content: space-between; border-bottom: 2px solid #1e293b; padding-bottom: 10px; margin-bottom: 14px; }
+    .title { font-size: 22px; font-weight: 700; text-align: right; }
+    .box { border: 1px solid #cbd5e1; border-radius: 6px; padding: 10px 12px; }
+    .grid { display: grid; grid-template-columns: 1.4fr 1fr; gap: 12px; margin-bottom: 14px; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { border: 1px solid #cbd5e1; padding: 7px 8px; }
+    th { background: #f1f5f9; font-weight: 600; }
+    .total td { font-weight: 700; font-size: 15px; background: #f8fafc; }
+    .sign { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; margin-top: 60px; text-align: center; }
+    .sign div { border-top: 1px dotted #475569; padding-top: 6px; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div>
+      <div style="font-size:18px;font-weight:700;">${escapeHtml(settings.shopName)}</div>
+      <div>${escapeHtml(settings.shopAddress)}</div>
+      <div>โทร. ${escapeHtml(settings.shopPhone)}</div>
+    </div>
+    <div>
+      <div class="title">ใบสั่งซื้อ</div>
+      <div style="text-align:right;">PURCHASE ORDER</div>
+      <div style="text-align:right;margin-top:4px;font-family:monospace;font-weight:700;">เลขที่: ${escapeHtml(importDoc.import_number)}</div>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="box">
+      <div><strong>ผู้ขาย / ผู้ผลิต:</strong> ${escapeHtml(importDoc.supplier_name)}</div>
+      ${supplierAddress ? `<div><strong>ที่อยู่:</strong> ${escapeHtml(supplierAddress)}</div>` : ''}
+      ${importDoc.supplier_phone ? `<div><strong>โทร:</strong> ${escapeHtml(importDoc.supplier_phone)}</div>` : ''}
+    </div>
+    <div class="box">
+      <div><strong>วันที่สั่งซื้อ:</strong> ${formatDateOnly(importDoc.created_at)}</div>
+      <div><strong>จำนวนรายการ:</strong> ${(importDoc.items || []).length} รายการ</div>
+      ${importDoc.note ? `<div><strong>หมายเหตุ:</strong> ${escapeHtml(importDoc.note)}</div>` : ''}
+    </div>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th style="width:45px;">ลำดับ</th>
+        <th style="width:120px;">รหัสสินค้า</th>
+        <th>รายการสินค้า</th>
+        <th style="width:70px;">จำนวน</th>
+        <th style="width:60px;">หน่วย</th>
+        <th style="width:95px;">ราคา/หน่วย</th>
+        <th style="width:85px;">ส่วนลด</th>
+        <th style="width:110px;">จำนวนเงิน</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${rowsHtml}
+      <tr class="total">
+        <td colspan="7" style="text-align:right;">รวมเป็นเงินทั้งสิ้น</td>
+        <td style="text-align:right;">${formatCurrency(importDoc.grand_total)}</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="sign">
+    <div>ผู้สั่งซื้อ<br/>วันที่ ........../........../..........</div>
+    <div>ผู้อนุมัติ<br/>วันที่ ........../........../..........</div>
+  </div>
+</body>
+</html>`;
+}
+
 export const printerService = {
+  /**
+   * พิมพ์ใบสั่งซื้อ (Purchase Order) ขนาด A4
+   */
+  printPurchaseOrder(importDoc, supplier = null) {
+    if (!importDoc) return false;
+    printHtmlViaHiddenIframe(buildPurchaseOrderHtml(importDoc, supplier, this.getSettings()));
+    return true;
+  },
+
   /**
    * พิมพ์ใบวางบิล (Billing Note) ขนาด A4
    */

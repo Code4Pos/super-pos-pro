@@ -167,6 +167,10 @@ CREATE INDEX IF NOT EXISTS idx_stock_ledger_product ON stock_ledger (product_id,
 -- ต้นทุนแบบเฉลี่ยเคลื่อนที่ต้องการทศนิยมมากกว่า 2 ตำแหน่ง
 ALTER TABLE products ALTER COLUMN cost_price TYPE NUMERIC(12, 4);
 
+-- beta 0.2.6: จุดสั่งซื้อซ้ำ (Reorder Point) ต่อสินค้า (NULL = ใช้ค่าเริ่มต้น: รอสินค้า 7 วัน / สต็อกสำรอง = min_stock)
+ALTER TABLE products ADD COLUMN IF NOT EXISTS lead_time_days INTEGER;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS safety_stock NUMERIC(12, 2);
+
 -- 6. ตารางรายการสินค้าในบิล (Order Items)
 CREATE TABLE IF NOT EXISTS order_items (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),

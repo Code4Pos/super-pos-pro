@@ -14,6 +14,7 @@ import DashboardPage from './pages/DashboardPage';
 import SuppliersPage from './pages/SuppliersPage';
 import AccountsReceivablePage from './pages/AccountsReceivablePage';
 import StockLedgerPage from './pages/StockLedgerPage';
+import ReorderPage from './pages/ReorderPage';
 
 const ACTIVE_TAB_STORAGE_KEY = 'siampos_active_tab_v1';
 const VALID_TABS = new Set([
@@ -28,6 +29,7 @@ const VALID_TABS = new Set([
   'suppliers',
   'receivables',
   'stock-ledger',
+  'reorder',
 ]);
 
 function MainAppContent() {
@@ -95,6 +97,7 @@ function MainAppContent() {
           {activeTab === 'suppliers' && <SuppliersPage />}
           {activeTab === 'receivables' && <AccountsReceivablePage />}
           {activeTab === 'stock-ledger' && <StockLedgerPage />}
+          {activeTab === 'reorder' && <ReorderPage />}
         </main>
 
         {/* แถบเมนูด้านล่าง (Smartphone & Tablet Bottom Nav) */}
