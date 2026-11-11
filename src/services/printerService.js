@@ -1081,7 +1081,118 @@ function buildTaxInvoiceHtml(invoice, settings, copyLabel) {
 </html>`;
 }
 
+/**
+ * ใบลดหนี้ / ใบเพิ่มหนี้ ขนาด A4 (มาตรา 86/9 และ 86/10 ประมวลรัษฎากร)
+ * แสดงใบกำกับเดิมที่อ้างอิง มูลค่าเดิม มูลค่าที่ถูกต้อง ผลต่าง ภาษีของผลต่าง และเหตุผล
+ */
+function buildTaxNoteHtml(note, settings, copyLabel) {
+  const isCredit = note.note_type === 'credit';
+  const original = Number(note.original_total) || 0;
+  const correct = isCredit ? original - (Number(note.total_amount) || 0) : original + (Number(note.total_amount) || 0);
+  const rowsHtml = (note.items || [])
+    .map(
+      (it, idx) => `
+      <tr>
+        <td style="text-align:center;">${idx + 1}</td>
+        <td>${escapeHtml(it.product_name)}</td>
+        <td style="text-align:center;">${escapeHtml(it.quantity)} ${escapeHtml(it.unit)}</td>
+        <td style="text-align:right;">${formatCurrency(it.unit_price)}</td>
+        <td style="text-align:right;">${formatCurrency(it.subtotal)}</td>
+      </tr>`
+    )
+    .join('');
+
+  return `<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8" />
+  <title>${isCredit ? 'ใบลดหนี้' : 'ใบเพิ่มหนี้'} - ${escapeHtml(note.note_number)}</title>
+  <link href="https://fonts.googleapis.com/css2?family=Prompt:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    @page { size: A4 portrait; margin: 14mm; }
+    * { box-sizing: border-box; }
+    body { font-family: 'Prompt', sans-serif; font-size: 13px; color: #0f172a; margin: 0; }
+    .header { display: flex; justify-content: space-between; border-bottom: 2px solid #1e293b; padding-bottom: 10px; margin-bottom: 14px; }
+    .title { font-size: 20px; font-weight: 700; text-align: right; }
+    .copy { display: inline-block; border: 1.5px solid #0f172a; padding: 2px 10px; font-weight: 700; margin-top: 4px; }
+    .box { border: 1px solid #cbd5e1; border-radius: 6px; padding: 10px 12px; }
+    .grid { display: grid; grid-template-columns: 1.4fr 1fr; gap: 12px; margin-bottom: 14px; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { border: 1px solid #cbd5e1; padding: 7px 8px; }
+    th { background: #f1f5f9; font-weight: 600; }
+    .sum td { background: #f8fafc; }
+    .total td { font-weight: 700; font-size: 15px; }
+    .sign { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; margin-top: 56px; text-align: center; }
+    .sign div { border-top: 1px dotted #475569; padding-top: 6px; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div>
+      <div style="font-size:18px;font-weight:700;">${escapeHtml(settings.shopName)}</div>
+      <div>${escapeHtml(settings.shopAddress)}</div>
+      <div>โทร. ${escapeHtml(settings.shopPhone)}</div>
+      <div><strong>เลขประจำตัวผู้เสียภาษี:</strong> ${escapeHtml(settings.shopTaxId)} (${formatBranch(settings.shopBranch)})</div>
+    </div>
+    <div style="text-align:right;">
+      <div class="title">${isCredit ? 'ใบลดหนี้' : 'ใบเพิ่มหนี้'}</div>
+      <div>${isCredit ? 'CREDIT NOTE' : 'DEBIT NOTE'}</div>
+      <div class="copy">${escapeHtml(copyLabel)}</div>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="box">
+      <div><strong>ผู้ซื้อ:</strong> ${escapeHtml(note.buyer_name)}</div>
+      <div><strong>เลขประจำตัวผู้เสียภาษี:</strong> ${escapeHtml(note.buyer_tax_id || '-')} (${formatBranch(note.buyer_branch)})</div>
+      <div><strong>ที่อยู่:</strong> ${escapeHtml(note.buyer_address || '-')}</div>
+    </div>
+    <div class="box">
+      <div><strong>เลขที่:</strong> <span style="font-family:monospace;font-weight:700;">${escapeHtml(note.note_number)}</span></div>
+      <div><strong>วันที่:</strong> ${formatDateOnly(note.created_at)}</div>
+      <div><strong>อ้างอิงใบกำกับภาษี:</strong> ${escapeHtml(note.invoice_number)} (${formatDateOnly(note.invoice_date)})</div>
+    </div>
+  </div>
+
+  <div class="box" style="margin-bottom:12px;"><strong>เหตุผล:</strong> ${escapeHtml(note.reason)}</div>
+
+  <table>
+    ${
+      rowsHtml
+        ? `<thead><tr><th style="width:45px;">ลำดับ</th><th>รายการ</th><th style="width:110px;">จำนวน</th><th style="width:110px;">ราคา/หน่วย</th><th style="width:120px;">จำนวนเงิน</th></tr></thead>`
+        : ''
+    }
+    <tbody>
+      ${rowsHtml}
+      <tr class="sum"><td colspan="4" style="text-align:right;">มูลค่าตามใบกำกับภาษีเดิม</td><td style="text-align:right;">${formatCurrency(original)}</td></tr>
+      <tr class="sum"><td colspan="4" style="text-align:right;">มูลค่าที่ถูกต้อง</td><td style="text-align:right;">${formatCurrency(correct)}</td></tr>
+      <tr class="sum"><td colspan="4" style="text-align:right;">ผลต่าง (ไม่รวมภาษี)</td><td style="text-align:right;">${formatCurrency(note.base_amount)}</td></tr>
+      <tr class="sum"><td colspan="4" style="text-align:right;">ภาษีมูลค่าเพิ่ม 7% ของผลต่าง</td><td style="text-align:right;">${formatCurrency(note.vat_amount)}</td></tr>
+      <tr class="sum total">
+        <td colspan="4" style="text-align:right;">${isCredit ? 'รวมยอดลดหนี้' : 'รวมยอดเพิ่มหนี้'} <span style="font-weight:400;font-size:12px;">(${bahtText(note.total_amount)})</span></td>
+        <td style="text-align:right;">${formatCurrency(note.total_amount)}</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="sign">
+    <div>ผู้ออกเอกสาร</div>
+    <div>ผู้รับเอกสาร</div>
+  </div>
+</body>
+</html>`;
+}
+
 export const printerService = {
+  /**
+   * พิมพ์ใบลดหนี้ / ใบเพิ่มหนี้ ขนาด A4
+   */
+  printTaxNote(note, copyLabel = 'ต้นฉบับ') {
+    if (!note) return false;
+    printHtmlViaHiddenIframe(buildTaxNoteHtml(note, this.getSettings(), copyLabel));
+    return true;
+  },
+
   /**
    * พิมพ์ใบกำกับภาษีเต็มรูปแบบ ขนาด A4 (copyLabel: 'ต้นฉบับ' หรือ 'สำเนา')
    */

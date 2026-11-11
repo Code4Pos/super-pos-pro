@@ -8,7 +8,7 @@ import { hasPermission, canAccessTab } from '../utils/rbac';
 
 const SESSION_STORAGE_KEY = 'siampos_session_v1';
 
-export const APP_VERSION = 'version beta 0.2.8';
+export const APP_VERSION = 'version beta 0.2.9';
 const HELD_BILLS_STORAGE_KEY = 'siampos_held_bills_v1';
 
 const POSContext = createContext(null);
@@ -26,6 +26,7 @@ export function POSProvider({ children }) {
   const [billingNotes, setBillingNotes] = useState([]);
   const [stockLedger, setStockLedger] = useState([]);
   const [taxInvoices, setTaxInvoices] = useState([]);
+  const [taxNotes, setTaxNotes] = useState([]);
 
   // ผู้ใช้งานและสิทธิ์ (RBAC): ถ้ายังไม่มีผู้ใช้ที่เปิดใช้งาน ระบบจะเปิดทุกเมนูแบบไม่ต้องล็อกอิน
   // โหลดรายชื่อผู้ใช้จากเครื่องทันที เพื่อไม่ให้หน้าจอเปิดทุกเมนูชั่วขณะก่อนโหลดข้อมูลเสร็จ
@@ -139,6 +140,7 @@ export function POSProvider({ children }) {
       setBillingNotes(data.billingNotes || []);
       setStockLedger(data.stockLedger || []);
       setTaxInvoices(data.taxInvoices || []);
+      setTaxNotes(data.taxNotes || []);
       setUsers(data.users || []);
       setSuppliers(data.suppliers || []);
       setStockImports(data.stockImports || []);
@@ -1006,6 +1008,31 @@ export function POSProvider({ children }) {
     [dbMode, taxInvoices, showToast]
   );
 
+  // ออกใบลดหนี้ / ใบเพิ่มหนี้ อ้างอิงใบกำกับภาษีเต็มรูป
+  const createTaxNote = useCallback(
+    async (noteData) => {
+      try {
+        const { savedNote, updatedNotes, updatedProducts } = await posService.createTaxNote(
+          noteData,
+          dbMode === 'supabase',
+          taxNotes,
+          products
+        );
+        setTaxNotes(updatedNotes);
+        if (updatedProducts) setProducts(updatedProducts);
+        showToast(
+          `ออก${savedNote.note_type === 'credit' ? 'ใบลดหนี้' : 'ใบเพิ่มหนี้'} ${savedNote.note_number} เรียบร้อย`,
+          'success'
+        );
+        return savedNote;
+      } catch (err) {
+        showToast(err.message, 'error');
+        return null;
+      }
+    },
+    [dbMode, taxNotes, products, showToast]
+  );
+
   // ออกใบวางบิล (Billing Note) ให้ลูกค้าเครดิต
   const createBillingNote = useCallback(
     async (noteData) => {
@@ -1299,6 +1326,8 @@ export function POSProvider({ children }) {
     stockLedger,
     taxInvoices,
     createTaxInvoice,
+    taxNotes,
+    createTaxNote,
     billingNotes,
     createBillingNote,
     saveSupplier,

@@ -24,6 +24,7 @@ const STORAGE_KEYS = {
   STOCK_LEDGER: 'siampos_stock_ledger_v1',
   TAX_INVOICES: 'siampos_tax_invoices_v1',
   USERS: 'siampos_users_v1',
+  TAX_NOTES: 'siampos_tax_notes_v1',
   SUPPLIERS: 'siampos_suppliers_v1',
   STOCK_IMPORTS: 'siampos_stock_imports_v1',
   ORDERS: 'siampos_orders_v1',
@@ -291,6 +292,63 @@ async function insertRemoteWithLocal(table, storageKey, record, localIdPrefix, i
       console.warn(`Supabase ${table} fallback:`, err.message);
     }
   }
+  const updated = [saved, ...getLocal(storageKey, [])];
+  setLocal(storageKey, updated);
+  return { saved, updated };
+}
+
+/**
+ * บันทึกเอกสารภาษีพร้อมออกเลขที่เรียงต่อเนื่องรายเดือน (ห้ามซ้ำ)
+ * โหมด Supabase อ่านเลขล่าสุดจากฐานข้อมูลก่อน และลองเลขถัดไปเมื่อชน unique กับเครื่องอื่น
+ */
+async function insertWithRunningNumber({
+  table,
+  storageKey,
+  numberField,
+  code,
+  baseRecord,
+  existingNumbers = [],
+  isSupabaseActive,
+  now = new Date(),
+}) {
+  const usedNumbers = [...existingNumbers];
+  const remoteEnabled = isSupabaseActive && supabase;
+  if (remoteEnabled) {
+    try {
+      const { data } = await supabase
+        .from(table)
+        .select(numberField)
+        .like(numberField, `${getTaxInvoicePrefix(now, code)}%`);
+      (data || []).forEach((r) => usedNumbers.push(r[numberField]));
+    } catch {
+      // ยังไม่มีตาราง ใช้เลขจากในเครื่อง
+    }
+  }
+
+  const localId = () => `${code.toLowerCase()}-${Date.now()}`;
+  let saved = null;
+  for (let attempt = 0; attempt < 5 && !saved; attempt += 1) {
+    const record = { ...baseRecord, [numberField]: getNextTaxInvoiceNumber(usedNumbers, now, code) };
+    if (!remoteEnabled) {
+      saved = { ...record, id: localId() };
+      break;
+    }
+    try {
+      const { data, error } = await supabase.from(table).insert([record]).select().single();
+      if (!error && data) {
+        saved = data;
+      } else if (error?.code === '23505') {
+        // เลขที่ชนกับเครื่องอื่น ลองเลขถัดไป
+        usedNumbers.push(record[numberField]);
+      } else {
+        saved = { ...record, id: localId() };
+      }
+    } catch {
+      saved = { ...record, id: localId() };
+    }
+  }
+  if (!saved) throw new Error('ไม่สามารถออกเลขที่เอกสารได้ กรุณาลองใหม่');
+
   const updated = [saved, ...getLocal(storageKey, [])];
   setLocal(storageKey, updated);
   return { saved, updated };
@@ -603,12 +661,13 @@ export const posService = {
         );
 
         // ยอดรับชำระหนี้ และใบวางบิล (ถ้ายังไม่มีตารางในฐานข้อมูลให้ใช้ข้อมูลในเครื่อง)
-        const [customerPayments, billingNotes, stockLedger, taxInvoices, remoteUsers] = await Promise.all([
+        const [customerPayments, billingNotes, stockLedger, taxInvoices, remoteUsers, taxNotes] = await Promise.all([
           loadRemoteWithLocal('customer_payments', STORAGE_KEYS.CUSTOMER_PAYMENTS),
           loadRemoteWithLocal('billing_notes', STORAGE_KEYS.BILLING_NOTES),
           loadRemoteWithLocal('stock_ledger', STORAGE_KEYS.STOCK_LEDGER, MAX_LOCAL_LEDGER_ENTRIES),
           loadRemoteWithLocal('tax_invoices', STORAGE_KEYS.TAX_INVOICES, 5000),
           loadRemoteWithLocal('app_users', STORAGE_KEYS.USERS),
+          loadRemoteWithLocal('tax_notes', STORAGE_KEYS.TAX_NOTES, 5000),
         ]);
         // ผู้ใช้จากฐานข้อมูลเป็นค่าหลัก (แก้จากเครื่องอื่นได้) เก็บสำเนาในเครื่องไว้ใช้ตอน Offline
         const users = mergeUsersById(remoteUsers, getLocal(STORAGE_KEYS.USERS, []));
@@ -625,6 +684,7 @@ export const posService = {
           billingNotes,
           stockLedger,
           taxInvoices,
+          taxNotes,
           users,
           suppliers,
           stockImports,
@@ -662,6 +722,7 @@ export const posService = {
       billingNotes: getLocal(STORAGE_KEYS.BILLING_NOTES, []),
       stockLedger: getLocal(STORAGE_KEYS.STOCK_LEDGER, []),
       taxInvoices: getLocal(STORAGE_KEYS.TAX_INVOICES, []),
+      taxNotes: getLocal(STORAGE_KEYS.TAX_NOTES, []),
       users: getLocal(STORAGE_KEYS.USERS, []),
       suppliers,
       stockImports,
@@ -1517,6 +1578,7 @@ export const posService = {
       buyer_branch: String(invoiceData.buyer_branch || '00000').padStart(5, '0').slice(-5),
       buyer_address: String(invoiceData.buyer_address || '').trim(),
       items: (order.items || []).map((i) => ({
+        product_id: i.product_id || null,
         sku: i.sku || '',
         product_name: i.product_name,
         quantity: Number(i.quantity) || 0,
@@ -1532,46 +1594,115 @@ export const posService = {
       created_at: now.toISOString(),
     };
 
-    const usedNumbers = existingInvoices.map((t) => t.invoice_number);
-    const remoteEnabled = isSupabaseActive && supabase;
-    if (remoteEnabled) {
-      try {
-        const { data } = await supabase
-          .from('tax_invoices')
-          .select('invoice_number')
-          .like('invoice_number', `${getTaxInvoicePrefix(now)}%`);
-        (data || []).forEach((r) => usedNumbers.push(r.invoice_number));
-      } catch {
-        // ยังไม่มีตาราง ใช้เลขจากในเครื่อง
-      }
-    }
-
-    let saved = null;
-    for (let attempt = 0; attempt < 5 && !saved; attempt += 1) {
-      const record = { ...baseRecord, invoice_number: getNextTaxInvoiceNumber(usedNumbers, now) };
-      if (!remoteEnabled) {
-        saved = { ...record, id: `tx-${Date.now()}` };
-        break;
-      }
-      try {
-        const { data, error } = await supabase.from('tax_invoices').insert([record]).select().single();
-        if (!error && data) {
-          saved = data;
-        } else if (error?.code === '23505') {
-          // เลขที่ชนกับเครื่องอื่น ลองเลขถัดไป
-          usedNumbers.push(record.invoice_number);
-        } else {
-          saved = { ...record, id: `tx-${Date.now()}` };
-        }
-      } catch {
-        saved = { ...record, id: `tx-${Date.now()}` };
-      }
-    }
-    if (!saved) throw new Error('ไม่สามารถออกเลขที่ใบกำกับภาษีได้ กรุณาลองใหม่');
-
-    const updated = [saved, ...getLocal(STORAGE_KEYS.TAX_INVOICES, [])];
-    setLocal(STORAGE_KEYS.TAX_INVOICES, updated);
+    const { saved, updated } = await insertWithRunningNumber({
+      table: 'tax_invoices',
+      storageKey: STORAGE_KEYS.TAX_INVOICES,
+      numberField: 'invoice_number',
+      code: 'TX',
+      baseRecord,
+      existingNumbers: existingInvoices.map((t) => t.invoice_number),
+      isSupabaseActive,
+      now,
+    });
     return { savedInvoice: saved, updatedInvoices: updated };
+  },
+
+  /**
+   * ออกใบลดหนี้ (Credit Note) หรือใบเพิ่มหนี้ (Debit Note) อ้างอิงใบกำกับภาษีเต็มรูป
+   * - เลขที่ CNYYYYMM-0001 / DNYYYYMM-0001 เรียงต่อเนื่องรายเดือน
+   * - ใบลดหนี้ที่ติ๊กคืนสินค้า จะบวกสต็อกกลับและบันทึก Stock Ledger ประเภท RETURN
+   */
+  async createTaxNote(noteData, isSupabaseActive, existingNotes = [], currentProducts = null) {
+    const invoice = noteData.invoice;
+    const isCredit = noteData.note_type === 'credit';
+    if (!invoice) throw new Error('ไม่พบใบกำกับภาษีที่อ้างอิง');
+    if (!String(noteData.reason || '').trim()) throw new Error('กรุณาระบุเหตุผลการออกเอกสาร');
+    const amounts = noteData.amounts;
+    if (!(amounts?.total > 0)) throw new Error('ยอดเงินต้องมากกว่า 0');
+
+    const now = new Date();
+    const baseRecord = {
+      note_type: isCredit ? 'credit' : 'debit',
+      invoice_number: invoice.invoice_number,
+      invoice_date: invoice.created_at,
+      order_number: invoice.order_number,
+      buyer_name: invoice.buyer_name,
+      buyer_tax_id: invoice.buyer_tax_id || '',
+      buyer_branch: invoice.buyer_branch || '00000',
+      buyer_address: invoice.buyer_address || '',
+      reason: String(noteData.reason).trim(),
+      items: isCredit ? amounts.items || [] : [],
+      original_total: Number(invoice.total_amount) || 0,
+      base_amount: amounts.base,
+      vat_amount: amounts.vat,
+      total_amount: amounts.total,
+      restocked: Boolean(isCredit && noteData.restock),
+      status: 'active',
+      created_at: now.toISOString(),
+    };
+
+    const { saved, updated } = await insertWithRunningNumber({
+      table: 'tax_notes',
+      storageKey: STORAGE_KEYS.TAX_NOTES,
+      numberField: 'note_number',
+      code: isCredit ? 'CN' : 'DN',
+      baseRecord,
+      existingNumbers: existingNotes.map((n) => n.note_number),
+      isSupabaseActive,
+      now,
+    });
+
+    // คืนสินค้าเข้าสต็อก (หน่วยของสินค้ารองแปลงกลับไปที่สินค้าหลัก)
+    let updatedProducts = null;
+    if (baseRecord.restocked) {
+      const baseProducts =
+        Array.isArray(currentProducts) && currentProducts.length > 0
+          ? currentProducts
+          : getLocal(STORAGE_KEYS.PRODUCTS, INITIAL_PRODUCTS);
+      const prodMap = new Map(baseProducts.map((p) => [p.id, p]));
+      const restoreById = new Map();
+      baseRecord.items.forEach((it) => {
+        const prod = prodMap.get(it.product_id);
+        if (!prod) return;
+        const targetId = prod.linked_product_id || prod.id;
+        const mult = prod.linked_product_id ? Math.max(1, Number(prod.linked_deduct_qty) || 1) : 1;
+        restoreById.set(targetId, (restoreById.get(targetId) || 0) + (Number(it.quantity) || 0) * mult);
+      });
+
+      if (isSupabaseActive && supabase) {
+        const remoteIds = [...restoreById.keys()].filter((id) => !String(id).startsWith('prod-'));
+        if (remoteIds.length > 0) {
+          try {
+            const { data: rows } = await supabase.from('products').select('id, stock').in('id', remoteIds);
+            for (const row of rows || []) {
+              await supabase
+                .from('products')
+                .update({ stock: (Number(row.stock) || 0) + restoreById.get(row.id), updated_at: now.toISOString() })
+                .eq('id', row.id);
+            }
+          } catch (err) {
+            console.warn('Supabase credit note restock fallback:', err.message);
+          }
+        }
+      }
+
+      updatedProducts = normalizeAndSyncProducts(
+        baseProducts.map((p) =>
+          restoreById.has(p.id)
+            ? { ...p, stock: (Number(p.stock) || 0) + restoreById.get(p.id), updated_at: now.toISOString() }
+            : p
+        )
+      );
+      setLocal(STORAGE_KEYS.PRODUCTS, updatedProducts);
+      await recordStockMovements(
+        baseProducts,
+        updatedProducts,
+        { movement_type: 'RETURN', reference_doc: saved.note_number, reason: baseRecord.reason },
+        isSupabaseActive
+      );
+    }
+
+    return { savedNote: saved, updatedNotes: updated, updatedProducts };
   },
 
   /**
@@ -2352,6 +2483,7 @@ export const posService = {
     setLocal(STORAGE_KEYS.BILLING_NOTES, []);
     setLocal(STORAGE_KEYS.STOCK_LEDGER, []);
     setLocal(STORAGE_KEYS.TAX_INVOICES, []);
+    setLocal(STORAGE_KEYS.TAX_NOTES, []);
     setLocal(STORAGE_KEYS.SUPPLIERS, INITIAL_SUPPLIERS);
     setLocal(STORAGE_KEYS.STOCK_IMPORTS, []);
     setLocal(STORAGE_KEYS.ORDERS, INITIAL_ORDERS);

@@ -18,12 +18,12 @@ function formatDateOnly(dateStr) {
  * แยกใบกำกับภาษีเต็มรูป (รายฉบับ) และใบกำกับภาษีอย่างย่อ (บิลขายปลีกรวมยอด)
  */
 export default function SalesTaxReportPage() {
-  const { orders, taxInvoices = [], printerSettings, dbMode } = usePOS();
+  const { orders, taxInvoices = [], taxNotes = [], printerSettings, dbMode } = usePOS();
   const [month, setMonth] = useState(currentMonthValue());
 
   const report = useMemo(
-    () => buildSalesTaxReport(orders, taxInvoices, month),
-    [orders, taxInvoices, month]
+    () => buildSalesTaxReport(orders, taxInvoices, month, taxNotes),
+    [orders, taxInvoices, month, taxNotes]
   );
 
   // ส่งออก CSV (มี BOM ให้ Excel อ่านภาษาไทยได้)
@@ -44,6 +44,21 @@ export default function SalesTaxReportPage() {
     rows.push([]);
     rows.push(['', '', 'รวมใบกำกับภาษีเต็มรูป', '', '', '', report.fullTotals.base, report.fullTotals.vat, report.fullTotals.total, '']);
     rows.push(['', '', `ใบกำกับภาษีอย่างย่อ (${report.abbreviatedTotals.count} บิล)`, '', '', '', report.abbreviatedTotals.base, report.abbreviatedTotals.vat, report.abbreviatedTotals.total, '']);
+    report.notes.forEach((n) => {
+      const sign = n.note_type === 'credit' ? -1 : 1;
+      rows.push([
+        '',
+        new Date(n.created_at).toLocaleDateString('th-TH'),
+        n.note_number,
+        n.buyer_name,
+        n.buyer_tax_id || '',
+        n.buyer_branch || '00000',
+        sign * n.base_amount,
+        sign * n.vat_amount,
+        sign * n.total_amount,
+        `อ้างอิง ${n.invoice_number}`,
+      ]);
+    });
     rows.push(['', '', 'รวมทั้งเดือน', '', '', '', report.grandTotals.base, report.grandTotals.vat, report.grandTotals.total, '']);
 
     const escapeCsv = (v) => {
@@ -104,11 +119,20 @@ export default function SalesTaxReportPage() {
       )}
 
       {/* สรุปยอดสำหรับกรอก ภ.พ.30 */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
         {[
           { label: `ใบกำกับภาษีเต็มรูป (${formatNumber(report.fullTotals.count)} ฉบับ)`, t: report.fullTotals, cls: 'bg-white border-slate-200' },
           { label: `ใบกำกับภาษีอย่างย่อ (${formatNumber(report.abbreviatedTotals.count)} บิล)`, t: report.abbreviatedTotals, cls: 'bg-white border-slate-200' },
-          { label: 'รวมยอดขายทั้งเดือน', t: report.grandTotals, cls: 'bg-indigo-50 border-indigo-200' },
+          {
+            label: `ใบลดหนี้ (${formatNumber(report.creditTotals.count)}) / ใบเพิ่มหนี้ (${formatNumber(report.debitTotals.count)})`,
+            t: {
+              base: report.debitTotals.base - report.creditTotals.base,
+              vat: report.debitTotals.vat - report.creditTotals.vat,
+              total: report.debitTotals.total - report.creditTotals.total,
+            },
+            cls: 'bg-white border-slate-200',
+          },
+          { label: 'รวมยอดขายสุทธิทั้งเดือน', t: report.grandTotals, cls: 'bg-indigo-50 border-indigo-200' },
         ].map((card) => (
           <div key={card.label} className={`p-3.5 rounded-2xl border text-xs space-y-1 ${card.cls}`}>
             <div className="font-bold text-slate-700">{card.label}</div>
@@ -174,6 +198,48 @@ export default function SalesTaxReportPage() {
           </tbody>
         </table>
       </div>
+
+      {/* ใบลดหนี้ / ใบเพิ่มหนี้ ของเดือนนี้ */}
+      {report.notes.length > 0 && (
+        <div className="bg-white rounded-2xl border border-slate-200 overflow-auto shadow-2xs">
+          <table className="w-full text-left border-collapse min-w-[860px] text-xs">
+            <thead className="bg-slate-100 border-b border-slate-200 text-[11px] font-extrabold text-slate-600">
+              <tr>
+                <th className="py-2.5 px-3">วันที่</th>
+                <th className="py-2.5 px-3">เลขที่</th>
+                <th className="py-2.5 px-3">อ้างอิงใบกำกับ</th>
+                <th className="py-2.5 px-3">ผู้ซื้อ / เหตุผล</th>
+                <th className="py-2.5 px-3 text-right">มูลค่าสินค้า</th>
+                <th className="py-2.5 px-3 text-right">ภาษี</th>
+                <th className="py-2.5 px-3 text-right">รวม</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-200/70">
+              {report.notes.map((n) => {
+                const sign = n.note_type === 'credit' ? -1 : 1;
+                const cls = n.note_type === 'credit' ? 'text-rose-600' : 'text-amber-700';
+                return (
+                  <tr key={n.id} className="hover:bg-indigo-50/30">
+                    <td className="py-2 px-3 whitespace-nowrap">{formatDateOnly(n.created_at)}</td>
+                    <td className={`py-2 px-3 font-mono font-bold ${cls}`}>
+                      {n.note_number}
+                      <div className="text-[10px] font-sans">{n.note_type === 'credit' ? 'ใบลดหนี้' : 'ใบเพิ่มหนี้'}</div>
+                    </td>
+                    <td className="py-2 px-3 font-mono text-slate-600">{n.invoice_number}</td>
+                    <td className="py-2 px-3">
+                      <div className="font-bold text-slate-900">{n.buyer_name}</div>
+                      <div className="text-[10px] text-slate-500">{n.reason}</div>
+                    </td>
+                    <td className={`py-2 px-3 text-right ${cls}`}>{formatCurrency(sign * n.base_amount)}</td>
+                    <td className={`py-2 px-3 text-right font-bold ${cls}`}>{formatCurrency(sign * n.vat_amount)}</td>
+                    <td className={`py-2 px-3 text-right font-bold ${cls}`}>{formatCurrency(sign * n.total_amount)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }

@@ -154,7 +154,7 @@ CREATE TABLE IF NOT EXISTS stock_ledger (
   product_name TEXT,
   sku TEXT,
   unit TEXT,
-  movement_type TEXT NOT NULL CHECK (movement_type IN ('SALE', 'VOID', 'IMPORT', 'ADJUST', 'EDIT', 'OPENING')),
+  movement_type TEXT NOT NULL CHECK (movement_type IN ('SALE', 'VOID', 'IMPORT', 'ADJUST', 'EDIT', 'OPENING', 'RETURN')),
   change_qty NUMERIC(12, 4) NOT NULL,
   balance_after NUMERIC(12, 4) NOT NULL,
   reference_doc TEXT,
@@ -207,6 +207,33 @@ CREATE TABLE IF NOT EXISTS app_users (
 );
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS created_by_name TEXT;
 
+-- beta 0.2.9: ใบลดหนี้ (CN) / ใบเพิ่มหนี้ (DN) อ้างอิงใบกำกับภาษีเต็มรูป เลขที่เรียงต่อเนื่องรายเดือน ห้ามซ้ำ
+CREATE TABLE IF NOT EXISTS tax_notes (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  note_number TEXT UNIQUE NOT NULL,
+  note_type TEXT NOT NULL CHECK (note_type IN ('credit', 'debit')),
+  invoice_number TEXT NOT NULL,
+  invoice_date TIMESTAMPTZ,
+  order_number TEXT,
+  buyer_name TEXT,
+  buyer_tax_id VARCHAR(13),
+  buyer_branch VARCHAR(5) DEFAULT '00000',
+  buyer_address TEXT,
+  reason TEXT NOT NULL,
+  items JSONB NOT NULL DEFAULT '[]'::jsonb,
+  original_total NUMERIC(12, 2) NOT NULL,
+  base_amount NUMERIC(12, 2) NOT NULL,
+  vat_amount NUMERIC(12, 2) NOT NULL,
+  total_amount NUMERIC(12, 2) NOT NULL,
+  restocked BOOLEAN DEFAULT FALSE,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'cancelled')),
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+-- รับคืนสินค้าจากใบลดหนี้บันทึกใน Stock Ledger เป็นประเภท RETURN
+ALTER TABLE stock_ledger DROP CONSTRAINT IF EXISTS stock_ledger_movement_type_check;
+ALTER TABLE stock_ledger ADD CONSTRAINT stock_ledger_movement_type_check
+  CHECK (movement_type IN ('SALE', 'VOID', 'IMPORT', 'ADJUST', 'EDIT', 'OPENING', 'RETURN'));
+
 -- 6. ตารางรายการสินค้าในบิล (Order Items)
 CREATE TABLE IF NOT EXISTS order_items (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -246,6 +273,10 @@ ALTER TABLE billing_notes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE stock_ledger ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tax_invoices ENABLE ROW LEVEL SECURITY;
 ALTER TABLE app_users ENABLE ROW LEVEL SECURITY;
+ALTER TABLE tax_notes ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Allow public access to tax_notes" ON tax_notes;
+CREATE POLICY "Allow public access to tax_notes" ON tax_notes FOR ALL USING (true) WITH CHECK (true);
 
 DROP POLICY IF EXISTS "Allow public access to app_users" ON app_users;
 CREATE POLICY "Allow public access to app_users" ON app_users FOR ALL USING (true) WITH CHECK (true);

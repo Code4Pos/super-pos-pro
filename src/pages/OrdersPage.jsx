@@ -264,7 +264,9 @@ export default function OrdersPage() {
                             <span>สั่งพิมพ์</span>
                           </button>
 
-                          {!isVoided && can('issue_tax_invoice') && (
+                          {/* บิลที่ยกเลิกแต่มีใบกำกับแล้ว ยังเปิดได้เพื่อออกใบลดหนี้ */}
+                          {(!isVoided || invoicedOrderNumbers.has(order.order_number)) &&
+                            can('issue_tax_invoice') && (
                             <button
                               type="button"
                               onClick={() => setTaxInvoiceOrder(order)}

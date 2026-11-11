@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { X, FileText, Printer, AlertTriangle } from 'lucide-react';
+import { X, FileText, Printer, AlertTriangle, FileMinus, FilePlus } from 'lucide-react';
 import { usePOS } from '../../context/POSContext';
+import TaxNoteModal from './TaxNoteModal';
 import { printerService } from '../../services/printerService';
 import { calculateOrderVat } from '../../utils/tax';
 import { isValidThaiTaxId } from '../../utils/credit';
@@ -11,7 +12,8 @@ import { formatCurrency } from '../../utils/formatters';
  * บิลหนึ่งออกใบกำกับเต็มรูปได้ครั้งเดียว ครั้งต่อไปจะเป็นการพิมพ์ซ้ำ (ต้นฉบับ/สำเนา)
  */
 export default function TaxInvoiceModal({ order, onClose }) {
-  const { customers, taxInvoices = [], createTaxInvoice, printerSettings } = usePOS();
+  const { customers, taxInvoices = [], createTaxInvoice, printerSettings, taxNotes = [] } = usePOS();
+  const [noteType, setNoteType] = useState(null); // 'credit' | 'debit' | null
   const [form, setForm] = useState({ buyer_name: '', buyer_tax_id: '', buyer_branch: '00000', buyer_address: '' });
   const [saving, setSaving] = useState(false);
 
@@ -116,6 +118,60 @@ export default function TaxInvoiceModal({ order, onClose }) {
                   <span>พิมพ์สำเนา</span>
                 </button>
               </div>
+
+              {/* ใบลดหนี้ / ใบเพิ่มหนี้ ที่อ้างอิงใบกำกับนี้ */}
+              {order.status === 'voided' && (
+                <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-xs font-bold text-rose-700">
+                  บิลนี้ถูกยกเลิกแล้ว ต้องออกใบลดหนี้เต็มจำนวนเพื่อยกเลิกภาษีขาย
+                </div>
+              )}
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setNoteType('credit')}
+                  className="py-2.5 rounded-xl border border-rose-300 bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-bold flex items-center justify-center gap-1.5"
+                >
+                  <FileMinus className="w-4 h-4" />
+                  <span>ออกใบลดหนี้</span>
+                </button>
+                <button
+                  type="button"
+                  disabled={order.status === 'voided'}
+                  onClick={() => setNoteType('debit')}
+                  className="py-2.5 rounded-xl border border-amber-300 bg-amber-50 hover:bg-amber-100 disabled:opacity-40 text-amber-800 text-xs font-bold flex items-center justify-center gap-1.5"
+                >
+                  <FilePlus className="w-4 h-4" />
+                  <span>ออกใบเพิ่มหนี้</span>
+                </button>
+              </div>
+              {taxNotes.filter((n) => n.invoice_number === existing.invoice_number).length > 0 && (
+                <div className="border border-slate-200 rounded-xl divide-y divide-slate-100 text-xs">
+                  {taxNotes
+                    .filter((n) => n.invoice_number === existing.invoice_number)
+                    .map((n) => (
+                      <div key={n.id} className="px-3 py-2 flex items-center justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="font-mono font-bold text-slate-900">{n.note_number}</div>
+                          <div className="text-slate-500 truncate">
+                            {n.note_type === 'credit' ? 'ใบลดหนี้' : 'ใบเพิ่มหนี้'} • {n.reason}
+                          </div>
+                        </div>
+                        <span className={`font-extrabold ${n.note_type === 'credit' ? 'text-rose-600' : 'text-amber-700'}`}>
+                          {n.note_type === 'credit' ? '-' : '+'}
+                          {formatCurrency(n.total_amount)}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => printerService.printTaxNote(n, 'สำเนา')}
+                          className="p-1.5 rounded-lg border border-slate-200 hover:bg-indigo-600 hover:text-white text-slate-600"
+                          title="พิมพ์สำเนา"
+                        >
+                          <Printer className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    ))}
+                </div>
+              )}
             </div>
           ) : (
             <div className="space-y-3">
@@ -191,6 +247,10 @@ export default function TaxInvoiceModal({ order, onClose }) {
           )}
         </div>
       </div>
+
+      {existing && noteType && (
+        <TaxNoteModal invoice={existing} noteType={noteType} onClose={() => setNoteType(null)} />
+      )}
     </div>
   );
 }

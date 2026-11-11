@@ -17,14 +17,14 @@ export function calculateOrderVat(order) {
   return { base: round2(total - vat), vat, total };
 }
 
-// เลขที่ใบกำกับภาษีเต็มรูปแบบเรียงต่อเนื่องรายเดือน เช่น TX202611-0001
-export function getTaxInvoicePrefix(date = new Date()) {
+// เลขที่เอกสารภาษีเรียงต่อเนื่องรายเดือน: TX = ใบกำกับภาษี, CN = ใบลดหนี้, DN = ใบเพิ่มหนี้ เช่น TX202611-0001
+export function getTaxInvoicePrefix(date = new Date(), code = 'TX') {
   const d = new Date(date);
-  return `TX${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}-`;
+  return `${code}${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}-`;
 }
 
-export function getNextTaxInvoiceNumber(existingNumbers = [], date = new Date()) {
-  const prefix = getTaxInvoicePrefix(date);
+export function getNextTaxInvoiceNumber(existingNumbers = [], date = new Date(), code = 'TX') {
+  const prefix = getTaxInvoicePrefix(date, code);
   const maxSeq = existingNumbers
     .filter((n) => String(n || '').startsWith(prefix))
     .map((n) => Number(String(n).slice(prefix.length)) || 0)
@@ -77,7 +77,7 @@ export function bahtText(amount) {
  * รายงานภาษีขายประจำเดือน (สำหรับยื่น ภ.พ.30)
  * month รูปแบบ "YYYY-MM" / ใช้เฉพาะบิลที่ไม่ถูกยกเลิก
  */
-export function buildSalesTaxReport(orders = [], taxInvoices = [], month) {
+export function buildSalesTaxReport(orders = [], taxInvoices = [], month, taxNotes = []) {
   const inMonth = (dateStr) => {
     const d = new Date(dateStr);
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}` === month;
@@ -114,14 +114,105 @@ export function buildSalesTaxReport(orders = [], taxInvoices = [], month) {
     total: sum(abbreviatedVat, (v) => v.total),
   };
 
+  // ใบลดหนี้ลดภาษีขาย / ใบเพิ่มหนี้เพิ่มภาษีขาย ในเดือนที่ออกเอกสาร
+  const notes = taxNotes
+    .filter((n) => n.status !== 'cancelled' && inMonth(n.created_at))
+    .sort((a, b) => String(a.note_number).localeCompare(String(b.note_number)));
+  const noteTotals = (type) => {
+    const rows = notes.filter((n) => n.note_type === type);
+    return {
+      count: rows.length,
+      base: sum(rows, (n) => Number(n.base_amount) || 0),
+      vat: sum(rows, (n) => Number(n.vat_amount) || 0),
+      total: sum(rows, (n) => Number(n.total_amount) || 0),
+    };
+  };
+  const creditTotals = noteTotals('credit');
+  const debitTotals = noteTotals('debit');
+  const net = (key) =>
+    round2(fullTotals[key] + abbreviatedTotals[key] - creditTotals[key] + debitTotals[key]);
+
   return {
     fullInvoices,
     fullTotals,
     abbreviatedTotals,
-    grandTotals: {
-      base: round2(fullTotals.base + abbreviatedTotals.base),
-      vat: round2(fullTotals.vat + abbreviatedTotals.vat),
-      total: round2(fullTotals.total + abbreviatedTotals.total),
-    },
+    notes,
+    creditTotals,
+    debitTotals,
+    grandTotals: { base: net('base'), vat: net('vat'), total: net('total') },
   };
+}
+
+export const CREDIT_NOTE_REASONS = [
+  'ลูกค้าคืนสินค้า',
+  'สินค้าชำรุดเสียหาย',
+  'ลดราคาสินค้าหลังขาย',
+  'ยกเลิกการขาย',
+  'คิดราคาสูงกว่าที่ตกลง',
+];
+
+export const DEBIT_NOTE_REASONS = ['คิดราคาต่ำกว่าที่ตกลง', 'ส่งสินค้าเกินจำนวน', 'ปรับราคาเพิ่มตามสัญญา'];
+
+// สัดส่วนภาษีของใบกำกับต้นทาง (ใช้แยก VAT ของยอดลด/เพิ่มหนี้ให้สอดคล้องกับใบเดิม)
+function vatRatioOf(invoice) {
+  const total = Number(invoice?.total_amount) || 0;
+  return total > 0 ? (Number(invoice.vat_amount) || 0) / total : VAT_RATE / (1 + VAT_RATE);
+}
+
+/**
+ * จำนวนที่ลดหนี้ไปแล้วต่อรายการ (index ในใบกำกับ) และยอดลดหนี้สะสมของใบกำกับ
+ */
+export function getCreditedSummary(invoice, notes = []) {
+  const creditedQty = {};
+  let creditedTotal = 0;
+  notes
+    .filter((n) => n.note_type === 'credit' && n.status !== 'cancelled' && n.invoice_number === invoice?.invoice_number)
+    .forEach((n) => {
+      creditedTotal += Number(n.total_amount) || 0;
+      (n.items || []).forEach((it) => {
+        creditedQty[it.index] = (creditedQty[it.index] || 0) + (Number(it.quantity) || 0);
+      });
+    });
+  return { creditedQty, creditedTotal: round2(creditedTotal) };
+}
+
+/**
+ * คำนวณใบลดหนี้จากจำนวนสินค้าที่คืน/ลดราคา
+ * ยอดจะปรับตามส่วนลดท้ายบิลของใบกำกับเดิม (สัดส่วนยอดสุทธิ / ยอดรวมรายการ)
+ * lines: [{ index, quantity }] และ extraAmount = ยอดลดราคาเพิ่มเติม (รวม VAT) ที่ไม่ผูกกับรายการสินค้า
+ */
+export function calculateCreditNote(invoice, lines = [], extraAmount = 0) {
+  const items = invoice?.items || [];
+  const itemsGross = items.reduce((s, it) => s + (Number(it.subtotal) || 0), 0);
+  const scale = itemsGross > 0 ? (Number(invoice.total_amount) || 0) / itemsGross : 1;
+
+  const noteItems = lines
+    .filter((l) => Number(l.quantity) > 0 && items[l.index])
+    .map((l) => {
+      const src = items[l.index];
+      const qty = Number(l.quantity) || 0;
+      return {
+        index: l.index,
+        product_id: src.product_id || null,
+        sku: src.sku || '',
+        product_name: src.product_name,
+        unit: src.unit || '',
+        quantity: qty,
+        unit_price: Number(src.unit_price) || 0,
+        subtotal: round2(qty * (Number(src.unit_price) || 0) * scale),
+      };
+    });
+
+  const total = round2(noteItems.reduce((s, it) => s + it.subtotal, 0) + (Number(extraAmount) || 0));
+  const vat = round2(total * vatRatioOf(invoice));
+  return { items: noteItems, base: round2(total - vat), vat, total };
+}
+
+/**
+ * คำนวณใบเพิ่มหนี้จากยอดที่ต้องเรียกเก็บเพิ่ม (รวม VAT)
+ */
+export function calculateDebitNote(invoice, amount) {
+  const total = round2(Math.max(0, Number(amount) || 0));
+  const vat = round2(total * vatRatioOf(invoice));
+  return { base: round2(total - vat), vat, total };
 }

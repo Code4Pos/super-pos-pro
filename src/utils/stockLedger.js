@@ -8,6 +8,7 @@ export const MOVEMENT_TYPE_META = {
   ADJUST: { label: 'ปรับสต็อก', className: 'bg-amber-50 text-amber-700 border-amber-200' },
   EDIT: { label: 'แก้ไขข้อมูลสินค้า', className: 'bg-sky-50 text-sky-700 border-sky-200' },
   OPENING: { label: 'ยอดยกมา (สินค้าใหม่)', className: 'bg-violet-50 text-violet-700 border-violet-200' },
+  RETURN: { label: 'รับคืนสินค้า (ใบลดหนี้)', className: 'bg-teal-50 text-teal-700 border-teal-200' },
 };
 
 // เหตุผลการปรับสต็อกตามโหมด (บังคับเลือกทุกครั้ง)
