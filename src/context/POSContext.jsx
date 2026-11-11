@@ -5,7 +5,7 @@ import { calculateEffectiveUnitPrice } from '../utils/formatters';
 import { summarizeSplitPayments } from '../utils/payments';
 import { calculateCustomerCredit, checkCreditSale } from '../utils/credit';
 
-export const APP_VERSION = 'version beta 0.2.4';
+export const APP_VERSION = 'version beta 0.2.5';
 const HELD_BILLS_STORAGE_KEY = 'siampos_held_bills_v1';
 
 const POSContext = createContext(null);
@@ -21,6 +21,7 @@ export function POSProvider({ children }) {
   const [customers, setCustomers] = useState([]);
   const [customerPayments, setCustomerPayments] = useState([]);
   const [billingNotes, setBillingNotes] = useState([]);
+  const [stockLedger, setStockLedger] = useState([]);
   const [suppliers, setSuppliers] = useState([]);
   const [stockImports, setStockImports] = useState([]);
   const [orders, setOrders] = useState([]);
@@ -105,6 +106,7 @@ export function POSProvider({ children }) {
       setCustomers(data.customers);
       setCustomerPayments(data.customerPayments || []);
       setBillingNotes(data.billingNotes || []);
+      setStockLedger(data.stockLedger || []);
       setSuppliers(data.suppliers || []);
       setStockImports(data.stockImports || []);
       setOrders(data.orders);
@@ -709,8 +711,21 @@ export function POSProvider({ children }) {
   }, [dbMode, showToast]);
 
   // ปรับสต็อกด่วน (ซิงค์สต็อกและราคาต้นทุนไปยังสินค้ารองที่เชื่อมสินค้าสัมพันธ์ โดยใช้รายการสินค้าปัจจุบันเสมอเพื่อป้องกันสินค้าหาย)
+  // ทุกครั้งที่สต็อกสินค้าเปลี่ยน (ขาย, ยกเลิกบิล, นำเข้า, ปรับสต็อก) ให้ดึงรายการเคลื่อนไหวใหม่จากเครื่อง
+  // แล้วรวมกับรายการที่โหลดจากฐานข้อมูลไว้แล้ว (ไม่ซ้ำ id)
+  useEffect(() => {
+    const localLedger = posService.getStockLedger();
+    setStockLedger((prev) => {
+      const localIds = new Set(localLedger.map((e) => e.id));
+      return [...localLedger, ...prev.filter((e) => !localIds.has(e.id))].sort(
+        (a, b) => new Date(b.created_at) - new Date(a.created_at)
+      );
+    });
+  }, [products]);
+
+  // movementMeta: { reason, approved_by, reference_doc } สำหรับบันทึก Stock Ledger
   const updateProductStock = useCallback(
-    async (productId, newStock, newCostPrice = undefined) => {
+    async (productId, newStock, newCostPrice = undefined, movementMeta = {}) => {
       const safeStock = Math.max(0, Number(newStock) || 0);
       const hasNewCost =
         newCostPrice !== undefined && newCostPrice !== null && newCostPrice !== '';
@@ -740,8 +755,11 @@ export function POSProvider({ children }) {
         safeStock,
         dbMode === 'supabase',
         safeCostPrice,
-        products
+        products,
+        movementMeta
       );
+      // ตั้งค่าตามผลลัพธ์จากชั้นข้อมูลอีกครั้ง เพื่อให้รายการเคลื่อนไหวสต็อกถูกดึงหลังบันทึกแล้ว
+      setProducts(syncedList);
       const finalTarget =
         syncedList.find((p) => p.id === productId) || updatedTarget;
       if (finalTarget) {
@@ -1124,6 +1142,7 @@ export function POSProvider({ children }) {
     customerPayments,
     getCustomerCredit,
     recordCustomerPayment,
+    stockLedger,
     billingNotes,
     createBillingNote,
     saveSupplier,

@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { usePOS } from '../../context/POSContext';
 import { formatCurrency } from '../../utils/formatters';
+import { ADJUST_REASONS, requiresApprover } from '../../utils/stockLedger';
 
 export default function StockModal({ product, onClose }) {
   const { products, updateProductStock } = usePOS();
@@ -18,6 +19,10 @@ export default function StockModal({ product, onClose }) {
   const [remainderAmount, setRemainderAmount] = useState(0);
   const [costPrice, setCostPrice] = useState(0);
   const [saving, setSaving] = useState(false);
+  // เหตุผลและผู้อนุมัติการปรับสต็อก (บันทึกลง Stock Ledger)
+  const [reason, setReason] = useState(ADJUST_REASONS.add[0]);
+  const [reasonDetail, setReasonDetail] = useState('');
+  const [approvedBy, setApprovedBy] = useState('');
 
   const masterProd = product?.linked_product_id
     ? products.find((p) => p.id === product.linked_product_id)
@@ -55,8 +60,17 @@ export default function StockModal({ product, onClose }) {
       setAmount(product.wholesale_min_qty || 12);
       setRemainderAmount(rem);
       setCostPrice(product.cost_price ?? 0);
+      setReason(ADJUST_REASONS.add[0]);
+      setReasonDetail('');
+      setApprovedBy('');
     }
   }, [product?.id]);
+
+  // เปลี่ยนโหมดแล้วเลือกเหตุผลแรกของโหมดนั้นให้อัตโนมัติ
+  useEffect(() => {
+    setReason(ADJUST_REASONS[mode][0]);
+    setReasonDetail('');
+  }, [mode]);
 
   if (!product) return null;
 
@@ -95,11 +109,22 @@ export default function StockModal({ product, onClose }) {
     ? nextMasterStock % multiplier
     : 0;
 
+  const needsApprover = requiresApprover(mode);
+  const finalReason = reason === 'อื่นๆ' ? reasonDetail.trim() : reason;
+  const canSubmit =
+    !saving && Boolean(finalReason) && (!needsApprover || approvedBy.trim() !== '');
+
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (!canSubmit) return;
     setSaving(true);
     try {
       const hasCostUpdate = mode === 'add' || mode === 'set';
+      const movementMeta = {
+        reason: finalReason,
+        approved_by: approvedBy.trim(),
+        reference_doc: 'ปรับสต็อกด้วยมือ',
+      };
       if (isSecondaryLinked && masterProd) {
         const nextMasterCost = hasCostUpdate
           ? Number(((Number(costPrice) || 0) / multiplier).toFixed(2))
@@ -107,11 +132,12 @@ export default function StockModal({ product, onClose }) {
         await updateProductStock(
           masterProd.id,
           nextMasterStock,
-          nextMasterCost
+          nextMasterCost,
+          movementMeta
         );
       } else {
         const nextCost = hasCostUpdate ? Number(costPrice) || 0 : undefined;
-        await updateProductStock(product.id, previewStock, nextCost);
+        await updateProductStock(product.id, previewStock, nextCost, movementMeta);
       }
       onClose();
     } finally {
@@ -121,8 +147,8 @@ export default function StockModal({ product, onClose }) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
-      <div className="bg-white w-full max-w-md rounded-3xl shadow-2xl border border-slate-200 overflow-hidden">
-        <div className="px-5 py-3.5 bg-slate-900 text-white flex items-center justify-between">
+      <div className="bg-white w-full max-w-md rounded-3xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[94dvh]">
+        <div className="px-5 py-3.5 bg-slate-900 text-white flex items-center justify-between shrink-0">
           <div className="min-w-0">
             <h3 className="font-bold text-base">ปรับสต็อกสินค้า</h3>
             <p className="text-xs text-slate-400 truncate">{product.name}</p>
@@ -136,7 +162,7 @@ export default function StockModal({ product, onClose }) {
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="p-5 space-y-4">
+        <form onSubmit={handleSubmit} className="p-5 space-y-4 overflow-y-auto">
           {isSecondaryLinked && masterProd && (
             <div className="px-3.5 py-2.5 rounded-2xl bg-violet-50/80 border border-violet-200/80 flex items-center justify-between gap-2 text-xs">
               <div className="flex items-center gap-2 min-w-0 text-violet-900 font-semibold truncate">
@@ -319,6 +345,49 @@ export default function StockModal({ product, onClose }) {
             </div>
           </div>
 
+          {/* เหตุผลการปรับสต็อก (บังคับ) และผู้อนุมัติ (บังคับเมื่อลด/กำหนดยอดใหม่) */}
+          <div className="grid grid-cols-2 gap-2.5">
+            <div className={reason === 'อื่นๆ' ? 'col-span-2 sm:col-span-1' : ''}>
+              <label className="block text-xs font-bold text-slate-700 mb-1">เหตุผล *</label>
+              <select
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+                className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-bold"
+              >
+                {ADJUST_REASONS[mode].map((r) => (
+                  <option key={r} value={r}>
+                    {r}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">
+                ผู้อนุมัติ {needsApprover ? '*' : '(ไม่บังคับ)'}
+              </label>
+              <input
+                type="text"
+                data-allow-scanner="false"
+                value={approvedBy}
+                onChange={(e) => setApprovedBy(e.target.value)}
+                placeholder="ชื่อผู้อนุมัติ"
+                className={`w-full px-3 py-2 rounded-xl border text-xs ${
+                  needsApprover && !approvedBy.trim() ? 'border-amber-400 bg-amber-50/40' : 'border-slate-300'
+                }`}
+              />
+            </div>
+            {reason === 'อื่นๆ' && (
+              <input
+                type="text"
+                data-allow-scanner="false"
+                value={reasonDetail}
+                onChange={(e) => setReasonDetail(e.target.value)}
+                placeholder="ระบุเหตุผล *"
+                className="col-span-2 w-full px-3 py-2 rounded-xl border border-slate-300 text-xs"
+              />
+            )}
+          </div>
+
           <div className="flex gap-2.5 pt-1">
             <button
               type="button"
@@ -329,8 +398,8 @@ export default function StockModal({ product, onClose }) {
             </button>
             <button
               type="submit"
-              disabled={saving}
-              className={`flex-1 py-2.5 rounded-xl text-white text-xs font-bold flex items-center justify-center gap-1.5 shadow-md transition-all ${
+              disabled={!canSubmit}
+              className={`flex-1 py-2.5 rounded-xl text-white text-xs font-bold flex items-center justify-center gap-1.5 shadow-md transition-all disabled:opacity-50 ${
                 mode === 'reduce'
                   ? 'bg-rose-600 hover:bg-rose-700 shadow-rose-600/20'
                   : 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-600/20'

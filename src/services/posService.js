@@ -19,6 +19,7 @@ const STORAGE_KEYS = {
   CUSTOMER_META: 'siampos_customer_meta_v1',
   CUSTOMER_PAYMENTS: 'siampos_customer_payments_v1',
   BILLING_NOTES: 'siampos_billing_notes_v1',
+  STOCK_LEDGER: 'siampos_stock_ledger_v1',
   SUPPLIERS: 'siampos_suppliers_v1',
   STOCK_IMPORTS: 'siampos_stock_imports_v1',
   ORDERS: 'siampos_orders_v1',
@@ -251,10 +252,14 @@ export const STOCK_IMPORT_TRANSITIONS = {
  * โหลดเอกสารจากตารางใน Supabase แล้วรวมกับรายการที่บันทึกไว้ในเครื่อง (ไม่ซ้ำ id)
  * ถ้ายังไม่ได้สร้างตาราง (ยังไม่รัน Migration) จะใช้ข้อมูลในเครื่องอย่างเดียว
  */
-async function loadRemoteWithLocal(table, storageKey) {
+async function loadRemoteWithLocal(table, storageKey, limit = 1000) {
   const localRows = getLocal(storageKey, []);
   try {
-    const res = await supabase.from(table).select('*').order('created_at', { ascending: false });
+    const res = await supabase
+      .from(table)
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(limit);
     if (res.error || !Array.isArray(res.data)) return localRows;
     const remoteIds = new Set(res.data.map((r) => r.id));
     return [...res.data, ...localRows.filter((r) => !remoteIds.has(r.id))];
@@ -285,6 +290,62 @@ async function insertRemoteWithLocal(table, storageKey, record, localIdPrefix, i
   const updated = [saved, ...getLocal(storageKey, [])];
   setLocal(storageKey, updated);
   return { saved, updated };
+}
+
+// จำนวนรายการ Stock Ledger สูงสุดที่เก็บในเครื่อง (กันพื้นที่ LocalStorage เต็ม)
+const MAX_LOCAL_LEDGER_ENTRIES = 3000;
+
+/**
+ * เปรียบเทียบสต็อกก่อน-หลังทำรายการ แล้วสร้างรายการเคลื่อนไหวสต็อก (Stock Ledger)
+ * บันทึกเฉพาะสินค้าที่ถือสต็อกจริง (ไม่ใช่สินค้ารองที่เชื่อมกับสินค้าหลัก) และมีจำนวนเปลี่ยน
+ */
+function buildStockMovements(beforeProducts = [], afterProducts = [], meta = {}) {
+  const beforeMap = new Map(beforeProducts.map((p) => [p.id, p]));
+  const nowIso = new Date().toISOString();
+  return afterProducts
+    .filter((p) => !p.linked_product_id)
+    .map((p, idx) => {
+      const before = beforeMap.get(p.id);
+      const beforeStock = before ? Number(before.stock) || 0 : 0;
+      const afterStock = Number(p.stock) || 0;
+      return {
+        id: `stk-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 6)}`,
+        product_id: p.id,
+        product_name: p.name,
+        sku: p.sku || '',
+        unit: p.unit || 'ชิ้น',
+        movement_type: before ? meta.movement_type || 'ADJUST' : 'OPENING',
+        change_qty: Math.round((afterStock - beforeStock) * 10000) / 10000,
+        balance_after: afterStock,
+        reference_doc: meta.reference_doc || '',
+        reason: meta.reason || '',
+        approved_by: meta.approved_by || '',
+        created_at: nowIso,
+      };
+    })
+    .filter((m) => m.change_qty !== 0);
+}
+
+/**
+ * บันทึกรายการเคลื่อนไหวสต็อกลงเครื่อง (และ Supabase ถ้าใช้งานอยู่และมีตาราง stock_ledger)
+ */
+async function recordStockMovements(beforeProducts, afterProducts, meta, isSupabaseActive) {
+  const entries = buildStockMovements(beforeProducts, afterProducts, meta);
+  if (entries.length === 0) return entries;
+
+  const ledger = getLocal(STORAGE_KEYS.STOCK_LEDGER, []);
+  setLocal(STORAGE_KEYS.STOCK_LEDGER, [...entries, ...ledger].slice(0, MAX_LOCAL_LEDGER_ENTRIES));
+
+  // ใช้ id เดียวกับในเครื่อง เพื่อรวมข้อมูลจากฐานข้อมูลกับในเครื่องโดยไม่ซ้ำกัน
+  const remoteEntries = entries.filter((e) => !String(e.product_id).startsWith('prod-'));
+  if (isSupabaseActive && supabase && remoteEntries.length > 0) {
+    try {
+      await supabase.from('stock_ledger').insert(remoteEntries);
+    } catch (err) {
+      console.warn('Supabase stock ledger fallback:', err.message);
+    }
+  }
+  return entries;
 }
 
 /**
@@ -336,14 +397,30 @@ function calculateImportTotals(items = []) {
 }
 
 /**
- * เพิ่มสต็อกและอัปเดตราคาต้นทุนจากรายการในใบนำเข้า
+ * ต้นทุนเฉลี่ยเคลื่อนที่ (Moving Average Cost)
+ * = (สต็อกเดิม x ต้นทุนเดิม + มูลค่าที่รับเข้า) / (สต็อกเดิม + จำนวนที่รับเข้า)
+ * ถ้าสต็อกเดิมเป็น 0 หรือติดลบ ใช้ต้นทุนของล็อตที่รับเข้าใหม่
+ */
+export function calculateMovingAverageCost(oldStock, oldCost, addQty, addValue) {
+  const prevQty = Math.max(0, Number(oldStock) || 0);
+  const qty = Math.max(0, Number(addQty) || 0);
+  if (qty <= 0) return Number(oldCost) || 0;
+  const totalQty = prevQty + qty;
+  const totalValue = prevQty * (Number(oldCost) || 0) + (Number(addValue) || 0);
+  return Number((totalValue / totalQty).toFixed(4));
+}
+
+/**
+ * เพิ่มสต็อกและอัปเดตต้นทุนเฉลี่ยเคลื่อนที่จากรายการในใบนำเข้า
  * พร้อมแปลงจำนวนของสินค้ารองกลับไปบวกเข้าสินค้าหลัก แล้วซิงค์สต็อกสินค้าสัมพันธ์
+ * มูลค่ารับเข้าใช้ยอดรวมหลังหักส่วนลดของแต่ละแถว (line_total)
  */
 async function applyImportItemsToStock(
   items = [],
   currentProducts = null,
   isSupabaseActive = false,
-  nowIso = new Date().toISOString()
+  nowIso = new Date().toISOString(),
+  referenceDoc = ''
 ) {
   const baseProducts =
     Array.isArray(currentProducts) && currentProducts.length > 0
@@ -352,34 +429,35 @@ async function applyImportItemsToStock(
   const prodMap = new Map(baseProducts.map((p) => [p.id, p]));
 
   const addStockByProductId = new Map();
-  const newCostByProductId = new Map();
+  const addValueByProductId = new Map();
 
   for (const item of items) {
     const targetProd = prodMap.get(item.product_id);
     if (!targetProd) continue;
     const qty = Math.max(1, Number(item.quantity) || 1);
     const importPrice = Math.max(0, Number(item.import_price) || 0);
+    const lineValue =
+      item.line_total !== undefined && item.line_total !== null
+        ? Math.max(0, Number(item.line_total) || 0)
+        : qty * importPrice;
 
-    if (targetProd.linked_product_id) {
-      // กรณีนำเข้าสินค้ารองที่เชื่อมกับสินค้าหลัก ให้แปลงจำนวนกลับไปบวกเข้าสินค้าหลัก
-      const masterId = targetProd.linked_product_id;
-      const mult = Math.max(1, Number(targetProd.linked_deduct_qty) || 1);
-      addStockByProductId.set(
-        masterId,
-        (addStockByProductId.get(masterId) || 0) + qty * mult
-      );
-      if (importPrice > 0) {
-        newCostByProductId.set(masterId, Number((importPrice / mult).toFixed(2)));
-      }
-    } else {
-      addStockByProductId.set(
-        targetProd.id,
-        (addStockByProductId.get(targetProd.id) || 0) + qty
-      );
-      if (importPrice > 0) {
-        newCostByProductId.set(targetProd.id, importPrice);
-      }
-    }
+    // กรณีนำเข้าสินค้ารองที่เชื่อมกับสินค้าหลัก ให้แปลงจำนวนกลับไปบวกเข้าสินค้าหลัก
+    const targetId = targetProd.linked_product_id || targetProd.id;
+    const mult = targetProd.linked_product_id
+      ? Math.max(1, Number(targetProd.linked_deduct_qty) || 1)
+      : 1;
+    addStockByProductId.set(targetId, (addStockByProductId.get(targetId) || 0) + qty * mult);
+    addValueByProductId.set(targetId, (addValueByProductId.get(targetId) || 0) + lineValue);
+  }
+
+  const newCostByProductId = new Map();
+  for (const [pid, addQty] of addStockByProductId.entries()) {
+    const prod = prodMap.get(pid);
+    if (!prod) continue;
+    newCostByProductId.set(
+      pid,
+      calculateMovingAverageCost(prod.stock, prod.cost_price, addQty, addValueByProductId.get(pid))
+    );
   }
 
   if (isSupabaseActive && supabase) {
@@ -414,6 +492,12 @@ async function applyImportItemsToStock(
 
   const syncedProducts = normalizeAndSyncProducts(updatedProducts);
   setLocal(STORAGE_KEYS.PRODUCTS, syncedProducts);
+  await recordStockMovements(
+    baseProducts,
+    syncedProducts,
+    { movement_type: 'IMPORT', reference_doc: referenceDoc },
+    isSupabaseActive
+  );
   return syncedProducts;
 }
 
@@ -503,9 +587,10 @@ export const posService = {
         );
 
         // ยอดรับชำระหนี้ และใบวางบิล (ถ้ายังไม่มีตารางในฐานข้อมูลให้ใช้ข้อมูลในเครื่อง)
-        const [customerPayments, billingNotes] = await Promise.all([
+        const [customerPayments, billingNotes, stockLedger] = await Promise.all([
           loadRemoteWithLocal('customer_payments', STORAGE_KEYS.CUSTOMER_PAYMENTS),
           loadRemoteWithLocal('billing_notes', STORAGE_KEYS.BILLING_NOTES),
+          loadRemoteWithLocal('stock_ledger', STORAGE_KEYS.STOCK_LEDGER, MAX_LOCAL_LEDGER_ENTRIES),
         ]);
 
         return {
@@ -517,6 +602,7 @@ export const posService = {
           customers: mergedCustomers,
           customerPayments,
           billingNotes,
+          stockLedger,
           suppliers,
           stockImports,
           orders: ordRes.data || [],
@@ -551,6 +637,7 @@ export const posService = {
       customers: localCustomers,
       customerPayments: getLocal(STORAGE_KEYS.CUSTOMER_PAYMENTS, []),
       billingNotes: getLocal(STORAGE_KEYS.BILLING_NOTES, []),
+      stockLedger: getLocal(STORAGE_KEYS.STOCK_LEDGER, []),
       suppliers,
       stockImports,
       orders: getLocal(STORAGE_KEYS.ORDERS, INITIAL_ORDERS),
@@ -737,6 +824,13 @@ export const posService = {
 
     const syncedList = normalizeAndSyncProducts(updatedList);
     setLocal(STORAGE_KEYS.PRODUCTS, syncedList);
+    // สินค้าใหม่ที่มีสต็อกตั้งต้น = OPENING, แก้จำนวนสต็อกในฟอร์มสินค้า = EDIT
+    await recordStockMovements(
+      baseProducts,
+      syncedList,
+      { movement_type: 'EDIT', reference_doc: 'แก้ไขข้อมูลสินค้า' },
+      isSupabaseActive
+    );
 
     // ซิงก์ราคาขายส่งใน Modal แก้ไขข้อมูลสินค้า กับระบบขายส่งหลายระดับ (wholesaleRules)
     const currentWsRules = getLocal(STORAGE_KEYS.WHOLESALE_RULES, []);
@@ -957,7 +1051,8 @@ export const posService = {
     newStock,
     isSupabaseActive,
     newCostPrice = undefined,
-    currentProducts = null
+    currentProducts = null,
+    movementMeta = {}
   ) {
     const safeStock = Math.max(0, Number(newStock) || 0);
     const hasNewCost =
@@ -992,7 +1087,20 @@ export const posService = {
     });
     const synced = normalizeAndSyncProducts(updated);
     setLocal(STORAGE_KEYS.PRODUCTS, synced);
+    await recordStockMovements(
+      baseProducts,
+      synced,
+      { movement_type: 'ADJUST', ...movementMeta },
+      isSupabaseActive
+    );
     return synced;
+  },
+
+  /**
+   * รายการเคลื่อนไหวสต็อกที่บันทึกไว้ในเครื่อง (ล่าสุดก่อน)
+   */
+  getStockLedger() {
+    return getLocal(STORAGE_KEYS.STOCK_LEDGER, []);
   },
 
   /**
@@ -1416,6 +1524,12 @@ export const posService = {
     });
     const syncedProducts = normalizeAndSyncProducts(updatedProducts);
     setLocal(STORAGE_KEYS.PRODUCTS, syncedProducts);
+    await recordStockMovements(
+      products,
+      syncedProducts,
+      { movement_type: 'SALE', reference_doc: fullOrder.order_number },
+      isSupabaseActive
+    );
 
     if (orderPayload.customer?.id) {
       const customers = getLocal(STORAGE_KEYS.CUSTOMERS, INITIAL_CUSTOMERS);
@@ -1464,11 +1578,61 @@ export const posService = {
       );
     }
 
+    // ยกเลิกบิลและคืนสต็อกใน Supabase
+    // - อ้างอิงบิลด้วย order_number เพราะบิลที่เพิ่งขายในเครื่องนี้มี id ในเครื่อง (ord-...) ไม่ใช่ id ในฐานข้อมูล
+    // - เปลี่ยนสถานะเฉพาะบิลที่ยัง completed เพื่อกันการคืนสต็อกซ้ำ ถ้าเครื่องอื่นยกเลิกไปแล้ว
+    // - อ่านสต็อกล่าสุดจากฐานข้อมูลก่อนบวกคืน (ไม่ใช้ค่าที่แคชไว้ในเครื่อง)
+    let alreadyVoidedRemotely = false;
+    if (isSupabaseActive && supabase && order.order_number) {
+      try {
+        const { data: voidedRows, error: voidError } = await supabase
+          .from('orders')
+          .update({ status: 'voided' })
+          .eq('order_number', order.order_number)
+          .eq('status', 'completed')
+          .select('id');
+        // ไม่มีแถวถูกเปลี่ยน = บิลนี้ถูกยกเลิกจากเครื่องอื่นไปแล้ว (หรือไม่มีในฐานข้อมูล)
+        alreadyVoidedRemotely = !voidError && Array.isArray(voidedRows) && voidedRows.length === 0;
+
+        const remoteIds = [...restoreByProductId.keys()].filter(
+          (id) => !String(id).startsWith('prod-')
+        );
+        if (!voidError && Array.isArray(voidedRows) && voidedRows.length > 0 && remoteIds.length > 0) {
+          const { data: stockRows, error: stockError } = await supabase
+            .from('products')
+            .select('id, stock')
+            .in('id', remoteIds);
+          if (!stockError && Array.isArray(stockRows)) {
+            for (const row of stockRows) {
+              await supabase
+                .from('products')
+                .update({
+                  stock: (Number(row.stock) || 0) + restoreByProductId.get(row.id),
+                  updated_at: nowIso,
+                })
+                .eq('id', row.id);
+            }
+          }
+        } else if (voidError) {
+          console.warn('Supabase void order error:', voidError.message);
+        }
+      } catch (err) {
+        console.warn('Supabase void order fallback:', err.message);
+      }
+    }
+
     const orders = getLocal(STORAGE_KEYS.ORDERS, INITIAL_ORDERS);
     const updatedOrders = orders.map((o) =>
-      o.id === order.id ? { ...o, status: 'voided' } : o
+      o.id === order.id || (order.order_number && o.order_number === order.order_number)
+        ? { ...o, status: 'voided' }
+        : o
     );
     setLocal(STORAGE_KEYS.ORDERS, updatedOrders);
+
+    // บิลถูกยกเลิกไปแล้วในฐานข้อมูล: ไม่คืนสต็อกและไม่บันทึก Ledger ซ้ำ
+    if (alreadyVoidedRemotely) {
+      return { updatedOrder: { ...order, status: 'voided' }, updatedProducts: products };
+    }
 
     const updatedProducts = products.map((prod) => {
       const restoreQty = restoreByProductId.get(prod.id);
@@ -1481,6 +1645,12 @@ export const posService = {
     });
     const syncedProducts = normalizeAndSyncProducts(updatedProducts);
     setLocal(STORAGE_KEYS.PRODUCTS, syncedProducts);
+    await recordStockMovements(
+      products,
+      syncedProducts,
+      { movement_type: 'VOID', reference_doc: order.order_number },
+      isSupabaseActive
+    );
 
     return {
       updatedOrder: { ...order, status: 'voided' },
@@ -1811,6 +1981,7 @@ export const posService = {
         ? STOCK_IMPORT_STATUS.COMPLETED
         : STOCK_IMPORT_STATUS.PENDING;
     const items = importPayload.items || [];
+    const importNumber = generateImportNumber(nowIso);
 
     let syncedProducts = null;
     if (status === STOCK_IMPORT_STATUS.COMPLETED) {
@@ -1818,13 +1989,14 @@ export const posService = {
         items,
         currentProducts,
         isSupabaseActive,
-        nowIso
+        nowIso,
+        importNumber
       );
     }
 
     const importRecord = {
       id: `imp-${Date.now()}`,
-      import_number: generateImportNumber(nowIso),
+      import_number: importNumber,
       supplier_id: importPayload.supplier?.id || null,
       supplier_name: importPayload.supplier?.name || '-',
       supplier_phone: importPayload.supplier?.phone || '',
@@ -1877,7 +2049,8 @@ export const posService = {
         items,
         currentProducts,
         isSupabaseActive,
-        nowIso
+        nowIso,
+        target.import_number
       );
     }
 
@@ -1932,7 +2105,8 @@ export const posService = {
         target.items,
         currentProducts,
         isSupabaseActive,
-        nowIso
+        nowIso,
+        target.import_number
       );
     }
 
@@ -1965,6 +2139,7 @@ export const posService = {
     setLocal(STORAGE_KEYS.CUSTOMER_META, {});
     setLocal(STORAGE_KEYS.CUSTOMER_PAYMENTS, []);
     setLocal(STORAGE_KEYS.BILLING_NOTES, []);
+    setLocal(STORAGE_KEYS.STOCK_LEDGER, []);
     setLocal(STORAGE_KEYS.SUPPLIERS, INITIAL_SUPPLIERS);
     setLocal(STORAGE_KEYS.STOCK_IMPORTS, []);
     setLocal(STORAGE_KEYS.ORDERS, INITIAL_ORDERS);

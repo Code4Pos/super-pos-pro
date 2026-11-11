@@ -146,6 +146,27 @@ CREATE TABLE IF NOT EXISTS billing_notes (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- beta 0.2.5: บันทึกความเคลื่อนไหวสต็อก (Stock Ledger) ทุกครั้งที่สต็อกเปลี่ยน
+-- id สร้างจากฝั่งแอป เพื่อรวมข้อมูลกับในเครื่องได้โดยไม่ซ้ำ / change_qty และ balance_after เป็นหน่วยฐานของสินค้าหลัก
+CREATE TABLE IF NOT EXISTS stock_ledger (
+  id TEXT PRIMARY KEY,
+  product_id TEXT NOT NULL,
+  product_name TEXT,
+  sku TEXT,
+  unit TEXT,
+  movement_type TEXT NOT NULL CHECK (movement_type IN ('SALE', 'VOID', 'IMPORT', 'ADJUST', 'EDIT', 'OPENING')),
+  change_qty NUMERIC(12, 4) NOT NULL,
+  balance_after NUMERIC(12, 4) NOT NULL,
+  reference_doc TEXT,
+  reason TEXT,
+  approved_by TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_stock_ledger_product ON stock_ledger (product_id, created_at DESC);
+
+-- ต้นทุนแบบเฉลี่ยเคลื่อนที่ต้องการทศนิยมมากกว่า 2 ตำแหน่ง
+ALTER TABLE products ALTER COLUMN cost_price TYPE NUMERIC(12, 4);
+
 -- 6. ตารางรายการสินค้าในบิล (Order Items)
 CREATE TABLE IF NOT EXISTS order_items (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -182,6 +203,10 @@ ALTER TABLE orders ENABLE ROW LEVEL SECURITY;
 ALTER TABLE order_items ENABLE ROW LEVEL SECURITY;
 ALTER TABLE customer_payments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE billing_notes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE stock_ledger ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Allow public access to stock_ledger" ON stock_ledger;
+CREATE POLICY "Allow public access to stock_ledger" ON stock_ledger FOR ALL USING (true) WITH CHECK (true);
 
 DROP POLICY IF EXISTS "Allow public access to billing_notes" ON billing_notes;
 CREATE POLICY "Allow public access to billing_notes" ON billing_notes FOR ALL USING (true) WITH CHECK (true);

@@ -21,6 +21,7 @@ import {
   Briefcase,
   Building2,
   Landmark,
+  History,
 } from 'lucide-react';
 import { usePOS } from '../../context/POSContext';
 
@@ -99,6 +100,12 @@ export const SIDEBAR_MENU_GROUPS = [
         label: 'นำเข้าสินค้า',
         description: 'รับสินค้าเข้าคลังจากผู้ผลิต',
         icon: Truck,
+      },
+      {
+        id: 'stock-ledger',
+        label: 'ความเคลื่อนไหวสต็อก',
+        description: 'ประวัติรับเข้า-จ่ายออก และการปรับสต็อก',
+        icon: History,
       },
       {
         id: 'wholesale-pricing',

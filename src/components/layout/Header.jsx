@@ -125,6 +125,7 @@ export default function Header({
               {activeTab === 'pos' && 'ขายหน้าร้าน (POS)'}
               {activeTab === 'inventory' && 'คลังสินค้า › จัดการสินค้า'}
               {activeTab === 'stock-import' && 'คลังสินค้า › นำเข้าสินค้า'}
+              {activeTab === 'stock-ledger' && 'คลังสินค้า › ความเคลื่อนไหวสต็อก'}
               {activeTab === 'wholesale-pricing' && 'คลังสินค้า › ราคาขายส่ง'}
               {activeTab === 'special-pricing' && 'คลังสินค้า › ราคาพิเศษ'}
               {activeTab === 'orders' && 'รายงาน › ประวัติบิล'}
