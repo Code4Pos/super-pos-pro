@@ -16,13 +16,13 @@ export const ROLES = {
     label: 'ผู้จัดการ / หัวหน้าแคชเชียร์',
     description: 'ยกเลิกบิล อนุมัติปรับสต็อก อนุมัติใบนำเข้า เปิดลิ้นชักฉุกเฉิน',
     tabs: [
-      'pos', 'orders', 'dashboard', 'sales-tax', 'customers', 'receivables',
+      'pos', 'orders', 'dashboard', 'sales-tax', 'customers', 'receivables', 'sales-orders',
       'inventory', 'stock-import', 'stock-ledger', 'stock-count', 'lots', 'warehouses', 'reorder', 'wholesale-pricing', 'special-pricing',
       'suppliers', 'settings-printer', 'settings-payment',
     ],
     permissions: [
       'void_order', 'adjust_stock', 'approve_stock', 'approve_import', 'open_drawer',
-      'issue_tax_invoice', 'receive_payment', 'billing_note', 'credit_sale', 'transfer_stock', 'manage_warehouses',
+      'issue_tax_invoice', 'receive_payment', 'billing_note', 'credit_sale', 'transfer_stock', 'manage_warehouses', 'sales_order',
     ],
   },
   cashier: {
@@ -33,9 +33,9 @@ export const ROLES = {
   },
   wholesale: {
     label: 'พนักงานขายส่ง',
-    description: 'ขายให้ลูกค้า B2B ขายเชื่อ ออกใบกำกับภาษีเต็มรูป',
-    tabs: ['pos', 'orders', 'customers', 'settings-printer'],
-    permissions: ['issue_tax_invoice', 'credit_sale'],
+    description: 'ขายให้ลูกค้า B2B ใบสั่งขาย/จองสินค้า ขายเชื่อ ออกใบกำกับภาษีเต็มรูป',
+    tabs: ['pos', 'orders', 'customers', 'sales-orders', 'settings-printer'],
+    permissions: ['issue_tax_invoice', 'credit_sale', 'sales_order'],
   },
   warehouse: {
     label: 'เจ้าหน้าที่คลังสินค้า',
@@ -63,6 +63,7 @@ export const PERMISSION_LABELS = {
   credit_sale: 'ขายเชื่อ',
   transfer_stock: 'โอนสินค้าระหว่างคลัง',
   manage_warehouses: 'จัดการรายชื่อคลัง',
+  sales_order: 'สร้าง/เปิดบิลใบสั่งขายส่ง (จองสินค้า)',
 };
 
 export function canAccessTab(user, tab) {

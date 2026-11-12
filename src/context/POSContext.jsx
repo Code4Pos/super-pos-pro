@@ -6,10 +6,15 @@ import { summarizeSplitPayments } from '../utils/payments';
 import { calculateCustomerCredit, checkCreditSale } from '../utils/credit';
 import { hasPermission, canAccessTab } from '../utils/rbac';
 import { validateTransfer } from '../utils/warehouses';
+import {
+  calculateReservedByProduct,
+  validateSalesOrderItems,
+  buildSalesOrderItems,
+} from '../utils/salesOrders';
 
 const SESSION_STORAGE_KEY = 'siampos_session_v1';
 
-export const APP_VERSION = 'version beta 0.3.3';
+export const APP_VERSION = 'version beta 0.3.4';
 const HELD_BILLS_STORAGE_KEY = 'siampos_held_bills_v1';
 
 const POSContext = createContext(null);
@@ -36,6 +41,11 @@ export function POSProvider({ children }) {
   const [warehouses, setWarehouses] = useState([]);
   const [inventoryBalances, setInventoryBalances] = useState([]);
   const [stockTransfers, setStockTransfers] = useState([]);
+  const [salesOrders, setSalesOrders] = useState([]);
+  // ใบสั่งขายที่ถูกเปิดเข้าตะกร้า (ปิดใบอัตโนมัติเมื่อชำระเงินสำเร็จ)
+  const [activeSalesOrder, setActiveSalesOrder] = useState(null);
+  const activeSalesOrderRef = useRef(null);
+  activeSalesOrderRef.current = activeSalesOrder;
   const [productLots, setProductLots] = useState([]);
 
   // ผู้ใช้งานและสิทธิ์ (RBAC): ถ้ายังไม่มีผู้ใช้ที่เปิดใช้งาน ระบบจะเปิดทุกเมนูแบบไม่ต้องล็อกอิน
@@ -157,6 +167,7 @@ export function POSProvider({ children }) {
       setWarehouses(data.warehouses || []);
       setInventoryBalances(data.inventoryBalances || []);
       setStockTransfers(data.stockTransfers || []);
+      setSalesOrders(data.salesOrders || []);
       setProductLots(data.productLots || []);
       setUsers(data.users || []);
       setSuppliers(data.suppliers || []);
@@ -285,6 +296,7 @@ export function POSProvider({ children }) {
 
   const clearCart = useCallback(() => {
     setCart([]);
+    setActiveSalesOrder(null);
     setSelectedCustomer(null);
     setBillDiscount(0);
     setPricingMode('auto');
@@ -490,6 +502,7 @@ export function POSProvider({ children }) {
       }
 
       setCart(target.cart || []);
+      setActiveSalesOrder(null);
       setSelectedCustomer(target.selectedCustomer || null);
       setPricingMode(target.pricingMode || 'auto');
       setBillDiscount(target.billDiscount || 0);
@@ -528,6 +541,18 @@ export function POSProvider({ children }) {
       if (cartSummary.items.length === 0) {
         showToast('ไม่มีสินค้าในตะกร้า', 'error');
         return null;
+      }
+
+      // เตือน (ไม่บล็อก) เมื่อขายเกินยอดพร้อมขาย ATP เพราะไปใช้สต็อกที่ลูกค้าส่งจองไว้
+      const reservedForOthers = calculateReservedByProduct(salesOrders, activeSalesOrderRef.current?.id);
+      if (Object.keys(reservedForOthers).length > 0) {
+        // รวมสินค้าหลักกับสินค้ารองตัวเดียวกันก่อนเทียบ ATP
+        const atpError = validateSalesOrderItems(
+          cartSummary.items.map((item) => ({ product_id: item.product_id, qty: item.quantity })),
+          products,
+          reservedForOthers
+        );
+        if (atpError) showToast(`ขายเกินยอดที่ลูกค้าส่งจองไว้: ${atpError}`, 'warning');
       }
 
       let finalMethod = payment_method;
@@ -631,6 +656,26 @@ export function POSProvider({ children }) {
         );
       }
 
+      // ปิดใบสั่งขายที่เปิดเข้าตะกร้า (ยอดจองหายไป เพราะสต็อกถูกตัดจากบิลนี้แล้ว)
+      const linkedSalesOrder = activeSalesOrderRef.current;
+      if (linkedSalesOrder) {
+        try {
+          const result = await posService.saveSalesOrder(
+            {
+              ...linkedSalesOrder,
+              status: 'fulfilled',
+              order_number: savedOrder.order_number,
+              fulfilled_by_name: currentUser?.name || '',
+              fulfilled_at: new Date().toISOString(),
+            },
+            dbMode === 'supabase'
+          );
+          setSalesOrders(result.salesOrders);
+        } catch (err) {
+          showToast(err.message, 'warning');
+        }
+      }
+
       clearCart();
       showToast(`บันทึกบิล ${savedOrder.order_number} สำเร็จ!`, 'success');
 
@@ -653,6 +698,8 @@ export function POSProvider({ children }) {
       printerSettings,
       getCustomerCredit,
       currentUser,
+      salesOrders,
+      products,
     ]
   );
 
@@ -1145,6 +1192,92 @@ export function POSProvider({ children }) {
     [currentUser, dbMode, applyTransferResult, showToast]
   );
 
+  // ---------- ใบสั่งขายส่ง / จองสินค้า (Reserved Stock & ATP) ----------
+  const reservedByProduct = useMemo(() => calculateReservedByProduct(salesOrders), [salesOrders]);
+
+  const createSalesOrder = useCallback(
+    async ({ customer, items, dueDate = '', note = '' }) => {
+      if (!customer) {
+        showToast('กรุณาเลือกลูกค้า', 'error');
+        return null;
+      }
+      const error = validateSalesOrderItems(items, products, reservedByProduct);
+      if (error) {
+        showToast(error, 'error');
+        return null;
+      }
+      const record = {
+        id: `so-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        so_number: `SO-${new Date().toLocaleDateString('sv-SE').slice(2).replace(/-/g, '')}-${Math.floor(100 + Math.random() * 900)}`,
+        customer_id: customer.id,
+        customer_name: customer.shop_name && customer.shop_name !== '-' ? `${customer.name} (${customer.shop_name})` : customer.name,
+        items: buildSalesOrderItems(items, products),
+        due_date: dueDate || null,
+        note,
+        status: 'reserved',
+        created_by_name: currentUser?.name || '',
+        created_at: new Date().toISOString(),
+      };
+      const result = await posService.saveSalesOrder(record, dbMode === 'supabase');
+      setSalesOrders(result.salesOrders);
+      showToast(`สร้างใบสั่งขาย ${record.so_number} และจองสินค้าแล้ว`, 'success');
+      return result.saved;
+    },
+    [products, reservedByProduct, currentUser, dbMode, showToast]
+  );
+
+  const cancelSalesOrder = useCallback(
+    async (salesOrder) => {
+      try {
+        const result = await posService.saveSalesOrder(
+          { ...salesOrder, status: 'cancelled', cancelled_by_name: currentUser?.name || '', cancelled_at: new Date().toISOString() },
+          dbMode === 'supabase'
+        );
+        setSalesOrders(result.salesOrders);
+        if (activeSalesOrderRef.current?.id === salesOrder.id) setActiveSalesOrder(null);
+        showToast(`ยกเลิกใบสั่งขาย ${salesOrder.so_number} และคืนยอดจองแล้ว`, 'warning');
+        return true;
+      } catch (err) {
+        showToast(err.message, 'error');
+        return false;
+      }
+    },
+    [currentUser, dbMode, showToast]
+  );
+
+  // เปิดใบสั่งขายเข้าตะกร้าหน้าขาย เพื่อคิดเงินตามขั้นตอนปกติ (ราคาคำนวณตามเรตลูกค้า)
+  const loadSalesOrderToCart = useCallback(
+    (salesOrder) => {
+      if (cart.length > 0) {
+        showToast('มีสินค้าในตะกร้าอยู่ กรุณาพักบิลหรือล้างตะกร้าก่อน', 'error');
+        return false;
+      }
+      const missing = [];
+      const lines = [];
+      (salesOrder.items || []).forEach((item) => {
+        const product = products.find((p) => p.id === item.product_id);
+        if (!product) {
+          missing.push(item.product_name);
+          return;
+        }
+        const qty = Math.min(Number(item.qty) || 0, Number(product.stock) || 0);
+        if (qty < item.qty) missing.push(item.product_name);
+        if (qty > 0) lines.push({ product, quantity: qty, customPrice: null });
+      });
+      if (lines.length === 0) {
+        showToast('สินค้าในใบสั่งขายไม่มีสต็อกพอสำหรับเปิดบิล', 'error');
+        return false;
+      }
+      setCart(lines);
+      const customer = customers.find((c) => c.id === salesOrder.customer_id) || null;
+      handleSelectCustomer(customer);
+      setActiveSalesOrder(salesOrder);
+      if (missing.length > 0) showToast(`สต็อกไม่พอบางรายการ: ${missing.join(', ')}`, 'warning');
+      return true;
+    },
+    [cart.length, products, customers, handleSelectCustomer, showToast]
+  );
+
   const persistStockCount = useCallback(
     async (record) => {
       const { savedCount, updatedCounts } = await posService.saveStockCount(record, dbMode === 'supabase');
@@ -1325,6 +1458,8 @@ export function POSProvider({ children }) {
       setStockImports(updatedImports);
       if (updatedProducts) {
         setProducts(updatedProducts);
+        // รับเข้าคลังที่ไม่ใช่หน้าร้านจะเพิ่มยอดแยกคลังด้วย
+        setInventoryBalances(posService.getInventoryBalances());
       }
       const messages = {
         pending: [`ส่งขออนุมัติใบนำเข้า ${savedImport.import_number} แล้ว (ยังไม่เพิ่มสต็อก)`, 'info'],
@@ -1622,6 +1757,12 @@ export function POSProvider({ children }) {
     warehouses,
     inventoryBalances,
     stockTransfers,
+    salesOrders,
+    reservedByProduct,
+    activeSalesOrder,
+    createSalesOrder,
+    cancelSalesOrder,
+    loadSalesOrderToCart,
     saveWarehouse,
     createStockTransfer,
     changeStockTransferStatus,

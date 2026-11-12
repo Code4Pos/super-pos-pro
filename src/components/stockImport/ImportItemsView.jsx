@@ -40,12 +40,15 @@ export default function ImportItemsView({
   setItems,
   note,
   setNote,
+  warehouseId = 'wh-front',
+  setWarehouseId = () => {},
   importNumber = null,
   submitting = false,
   onBack,
   onSubmit,
 }) {
-  const { products, showToast } = usePOS();
+  const { products, showToast, warehouses = [] } = usePOS();
+  const activeWarehouses = warehouses.filter((w) => w.is_active !== false);
   const [productPickerValue, setProductPickerValue] = useState('');
   const [isApproveConfirmOpen, setIsApproveConfirmOpen] = useState(false);
 
@@ -230,7 +233,7 @@ export default function ImportItemsView({
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5 items-center">
-          <div className="sm:col-span-8">
+          <div className="sm:col-span-6">
             <SearchableDropdown
               value={productPickerValue}
               onChange={(val) => handleSelectProductDropdown(val)}
@@ -238,6 +241,21 @@ export default function ImportItemsView({
               icon={Package}
               placeholder="พิมพ์ค้นหาชื่อสินค้า, รหัสบาร์โค้ด หรือรหัสสินค้า (SKU) เพื่อเพิ่มลงตาราง..."
             />
+          </div>
+          {/* คลังที่รับสินค้าเข้า (สต็อกเพิ่มเมื่อใบนำเข้าเป็น "นำเข้าสำเร็จ") */}
+          <div className="sm:col-span-2">
+            <select
+              value={warehouseId}
+              onChange={(e) => setWarehouseId(e.target.value)}
+              title="รับสินค้าเข้าคลัง"
+              className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            >
+              {activeWarehouses.map((w) => (
+                <option key={w.id} value={w.id}>
+                  เข้า: {w.name}
+                </option>
+              ))}
+            </select>
           </div>
           <div className="sm:col-span-4">
             <input

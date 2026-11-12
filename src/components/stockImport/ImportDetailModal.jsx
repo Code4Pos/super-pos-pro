@@ -32,7 +32,7 @@ const STATUS_ACTION_CONFIRM = {
  * Modal ตรวจสอบใบนำเข้า: แสดงรายละเอียด ขั้นตอนสถานะ และปุ่มเปลี่ยนสถานะ
  */
 export default function ImportDetailModal({ importDoc, onClose, onEdit, onChangeStatus }) {
-  const { suppliers = [], can } = usePOS();
+  const { suppliers = [], warehouses = [], can } = usePOS();
   const [pendingAction, setPendingAction] = useState(null);
 
   if (!importDoc) return null;
@@ -122,6 +122,9 @@ export default function ImportDetailModal({ importDoc, onClose, onEdit, onChange
               <div className="text-slate-500 font-semibold">วันที่สร้างใบนำเข้า</div>
               <div className="font-extrabold text-slate-900">
                 {formatDateTime(importDoc.created_at)}
+              </div>
+              <div className="text-slate-500">
+                รับเข้าคลัง: {warehouses.find((w) => w.id === (importDoc.warehouse_id || 'wh-front'))?.name || 'หน้าร้าน'}
               </div>
               {importDoc.note && <div className="text-slate-500">หมายเหตุ: {importDoc.note}</div>}
             </div>

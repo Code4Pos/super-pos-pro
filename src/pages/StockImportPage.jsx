@@ -19,6 +19,7 @@ const EMPTY_DRAFT = {
   supplierId: '',
   items: [],
   note: '',
+  warehouse_id: 'wh-front',
 };
 
 /**
@@ -65,6 +66,7 @@ export default function StockImportPage() {
       supplierId: imp.supplier_id || '',
       items: imp.items || [],
       note: imp.note || '',
+      warehouse_id: imp.warehouse_id || 'wh-front',
     });
     setDetailImportId(null);
     setStep('items');
@@ -83,6 +85,7 @@ export default function StockImportPage() {
         supplier: selectedSupplier,
         items: enrichedItems,
         note: draft.note,
+        warehouse_id: draft.warehouse_id,
         status,
       };
       const saved = draft.id
@@ -173,6 +176,8 @@ export default function StockImportPage() {
           }
           note={draft.note}
           setNote={(note) => setDraft((prev) => ({ ...prev, note }))}
+          warehouseId={draft.warehouse_id}
+          setWarehouseId={(warehouse_id) => setDraft((prev) => ({ ...prev, warehouse_id }))}
           importNumber={draft.import_number}
           submitting={submitting}
           onBack={() => setStep('supplier')}

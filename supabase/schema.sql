@@ -302,6 +302,28 @@ CREATE TABLE IF NOT EXISTS stock_transfers (
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- beta 0.3.4: ใบสั่งขายส่ง / จองสินค้า (Reserved Stock) ATP = products.stock - ผลรวม base_qty ของใบที่ status = 'reserved'
+-- items: [{ product_id, master_product_id, product_name, sku, unit, qty, base_qty }]
+CREATE TABLE IF NOT EXISTS sales_orders (
+  id TEXT PRIMARY KEY,
+  so_number TEXT NOT NULL,
+  customer_id TEXT,
+  customer_name TEXT,
+  items JSONB NOT NULL DEFAULT '[]'::jsonb,
+  due_date DATE,
+  note TEXT,
+  status TEXT NOT NULL DEFAULT 'reserved' CHECK (status IN ('reserved', 'fulfilled', 'cancelled')),
+  order_number TEXT,
+  created_by_name TEXT,
+  fulfilled_by_name TEXT,
+  fulfilled_at TIMESTAMPTZ,
+  cancelled_by_name TEXT,
+  cancelled_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_sales_orders_status ON sales_orders (status);
+
 -- รับคืนสินค้าจากใบลดหนี้บันทึกใน Stock Ledger เป็นประเภท RETURN
 ALTER TABLE stock_ledger DROP CONSTRAINT IF EXISTS stock_ledger_movement_type_check;
 ALTER TABLE stock_ledger ADD CONSTRAINT stock_ledger_movement_type_check
@@ -352,6 +374,10 @@ ALTER TABLE product_lots ENABLE ROW LEVEL SECURITY;
 ALTER TABLE warehouses ENABLE ROW LEVEL SECURITY;
 ALTER TABLE inventory_balances ENABLE ROW LEVEL SECURITY;
 ALTER TABLE stock_transfers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE sales_orders ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Allow public access to sales_orders" ON sales_orders;
+CREATE POLICY "Allow public access to sales_orders" ON sales_orders FOR ALL USING (true) WITH CHECK (true);
 
 DROP POLICY IF EXISTS "Allow public access to warehouses" ON warehouses;
 CREATE POLICY "Allow public access to warehouses" ON warehouses FOR ALL USING (true) WITH CHECK (true);

@@ -24,6 +24,7 @@ export default function WarehousesPage() {
     warehouses = [],
     inventoryBalances = [],
     stockTransfers = [],
+    reservedByProduct = {},
     saveWarehouse,
     changeStockTransferStatus,
     can,
@@ -173,12 +174,14 @@ export default function WarehousesPage() {
                   ))}
                   <th className="text-right px-3 py-2 font-bold whitespace-nowrap">ระหว่างโอน</th>
                   <th className="text-right px-3 py-2 font-bold whitespace-nowrap">รวม</th>
+                  <th className="text-right px-3 py-2 font-bold whitespace-nowrap">จองไว้</th>
+                  <th className="text-right px-3 py-2 font-bold whitespace-nowrap">พร้อมขาย (ATP)</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {balanceRows.length === 0 ? (
                   <tr>
-                    <td colSpan={activeWarehouses.length + 3} className="p-8 text-center text-slate-400">
+                    <td colSpan={activeWarehouses.length + 5} className="p-8 text-center text-slate-400">
                       ไม่พบสินค้า
                     </td>
                   </tr>
@@ -209,6 +212,18 @@ export default function WarehousesPage() {
                       <td className="px-3 py-2 text-right font-extrabold text-slate-900 whitespace-nowrap">
                         {formatNumber(product.stock)} <span className="text-[11px] font-normal text-slate-500">{product.unit}</span>
                       </td>
+                      <td className={`px-3 py-2 text-right ${reservedByProduct[product.id] ? 'text-amber-700 font-bold' : 'text-slate-300'}`}>
+                        {formatNumber(reservedByProduct[product.id] || 0)}
+                      </td>
+                      {(() => {
+                        // ATP = สต็อกจริง - ยอดที่ลูกค้าส่งจองไว้
+                        const atp = (Number(product.stock) || 0) - (reservedByProduct[product.id] || 0);
+                        return (
+                          <td className={`px-3 py-2 text-right font-extrabold ${atp < 0 ? 'text-rose-600' : 'text-emerald-700'}`}>
+                            {formatNumber(atp)}
+                          </td>
+                        );
+                      })()}
                     </tr>
                   ))
                 )}

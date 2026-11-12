@@ -20,6 +20,7 @@ import SettingsPage from './pages/SettingsPage';
 import StockCountPage from './pages/StockCountPage';
 import LotsPage from './pages/LotsPage';
 import WarehousesPage from './pages/WarehousesPage';
+import SalesOrdersPage from './pages/SalesOrdersPage';
 import LoginScreen from './components/auth/LoginScreen';
 import { SETTINGS_TABS } from './utils/rbac';
 
@@ -35,6 +36,7 @@ const VALID_TABS = new Set([
   'dashboard',
   'suppliers',
   'receivables',
+  'sales-orders',
   'stock-ledger',
   'reorder',
   'sales-tax',
@@ -120,6 +122,7 @@ function MainAppContent() {
           )}
           {activeTab === 'suppliers' && <SuppliersPage />}
           {activeTab === 'receivables' && <AccountsReceivablePage />}
+          {activeTab === 'sales-orders' && <SalesOrdersPage onGoToPOS={() => setActiveTab('pos')} />}
           {activeTab === 'stock-ledger' && <StockLedgerPage />}
           {activeTab === 'reorder' && <ReorderPage />}
           {activeTab === 'sales-tax' && <SalesTaxReportPage />}

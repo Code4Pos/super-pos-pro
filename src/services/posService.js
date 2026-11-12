@@ -3,7 +3,7 @@ import { B2B_CUSTOMER_DEFAULTS, normalizeB2BFields } from '../utils/credit';
 import { calculateOrderVat, getNextTaxInvoiceNumber, getTaxInvoicePrefix } from '../utils/tax';
 import { hashPin, generateSalt } from '../utils/rbac';
 import { consumeLots, addToLots, restoreToLots, summarizeLotsByProduct } from '../utils/lots';
-import { normalizeWarehouses, applyBalanceDelta, TRANSIT_WAREHOUSE_ID } from '../utils/warehouses';
+import { normalizeWarehouses, applyBalanceDelta, TRANSIT_WAREHOUSE_ID, SALES_WAREHOUSE_ID } from '../utils/warehouses';
 import {
   INITIAL_CATEGORIES,
   INITIAL_UNITS,
@@ -31,6 +31,7 @@ const STORAGE_KEYS = {
   WAREHOUSES: 'siampos_warehouses_v1',
   INVENTORY_BALANCES: 'siampos_inventory_balances_v1',
   STOCK_TRANSFERS: 'siampos_stock_transfers_v1',
+  SALES_ORDERS: 'siampos_sales_orders_v1',
   PRODUCT_LOTS: 'siampos_product_lots_v1',
   OFFLINE_QUEUE: 'siampos_offline_queue_v1',
   OFFLINE_FAILED: 'siampos_offline_failed_v1',
@@ -659,6 +660,24 @@ export function calculateMovingAverageCost(oldStock, oldCost, addQty, addValue) 
 }
 
 /**
+ * เพิ่มยอดแยกคลังของสินค้าหลายรายการ (Map productId -> จำนวนหน่วยฐาน) เข้าคลังที่ระบุ
+ */
+async function addToWarehouseBalances(qtyByProductId, warehouseId, isSupabaseActive, nowIso = new Date().toISOString()) {
+  if (!warehouseId || warehouseId === SALES_WAREHOUSE_ID || qtyByProductId.size === 0) return;
+  const before = getLocal(STORAGE_KEYS.INVENTORY_BALANCES, []);
+  let balances = before;
+  for (const [pid, qty] of qtyByProductId.entries()) {
+    balances = applyBalanceDelta(balances, warehouseId, pid, qty, nowIso);
+  }
+  setLocal(STORAGE_KEYS.INVENTORY_BALANCES, balances);
+  if (isSupabaseActive && supabase) {
+    const unchanged = new Set(before);
+    const changed = balances.filter((b) => !unchanged.has(b));
+    if (changed.length > 0) await upsertOrQueue('inventory_balances', changed);
+  }
+}
+
+/**
  * เพิ่มสต็อกและอัปเดตต้นทุนเฉลี่ยเคลื่อนที่จากรายการในใบนำเข้า
  * พร้อมแปลงจำนวนของสินค้ารองกลับไปบวกเข้าสินค้าหลัก แล้วซิงค์สต็อกสินค้าสัมพันธ์
  * มูลค่ารับเข้าใช้ยอดรวมหลังหักส่วนลดของแต่ละแถว (line_total)
@@ -668,7 +687,8 @@ async function applyImportItemsToStock(
   currentProducts = null,
   isSupabaseActive = false,
   nowIso = new Date().toISOString(),
-  referenceDoc = ''
+  referenceDoc = '',
+  warehouseId = SALES_WAREHOUSE_ID
 ) {
   const baseProducts =
     Array.isArray(currentProducts) && currentProducts.length > 0
@@ -759,6 +779,8 @@ async function applyImportItemsToStock(
     { movement_type: 'IMPORT', reference_doc: referenceDoc, lotInfos },
     isSupabaseActive
   );
+  // รับเข้าคลังที่เลือก (คลังหน้าร้านไม่ต้องบันทึก เพราะคำนวณจากสต็อกรวม)
+  await addToWarehouseBalances(addStockByProductId, warehouseId, isSupabaseActive, nowIso);
   return syncedProducts;
 }
 
@@ -867,11 +889,14 @@ export const posService = {
             loadRemoteWithLocal('product_lots', STORAGE_KEYS.PRODUCT_LOTS, 5000),
           ]);
         // คลังสินค้า ยอดแยกคลัง และใบโอน (ใช้ id ฝั่งแอป ยึดฉบับที่อัปเดตล่าสุด)
-        const [remoteWarehouses, remoteBalances, remoteTransfers] = await Promise.all([
+        const [remoteWarehouses, remoteBalances, remoteTransfers, remoteSalesOrders] = await Promise.all([
           loadRemoteWithLocal('warehouses', STORAGE_KEYS.WAREHOUSES, 200),
           loadRemoteWithLocal('inventory_balances', STORAGE_KEYS.INVENTORY_BALANCES, 10000),
           loadRemoteWithLocal('stock_transfers', STORAGE_KEYS.STOCK_TRANSFERS, 500),
+          loadRemoteWithLocal('sales_orders', STORAGE_KEYS.SALES_ORDERS, 1000),
         ]);
+        const salesOrders = mergeByLatestUpdate(remoteSalesOrders, getLocal(STORAGE_KEYS.SALES_ORDERS, []));
+        setLocal(STORAGE_KEYS.SALES_ORDERS, salesOrders);
         const warehouses = normalizeWarehouses(mergeByLatestUpdate(remoteWarehouses, getLocal(STORAGE_KEYS.WAREHOUSES, [])));
         const inventoryBalances = mergeByLatestUpdate(remoteBalances, getLocal(STORAGE_KEYS.INVENTORY_BALANCES, []));
         const stockTransfers = mergeByLatestUpdate(remoteTransfers, getLocal(STORAGE_KEYS.STOCK_TRANSFERS, []));
@@ -906,6 +931,7 @@ export const posService = {
           warehouses,
           inventoryBalances,
           stockTransfers,
+          salesOrders,
           productLots,
           users,
           suppliers,
@@ -957,6 +983,7 @@ export const posService = {
       warehouses: normalizeWarehouses(getLocal(STORAGE_KEYS.WAREHOUSES, [])),
       inventoryBalances: getLocal(STORAGE_KEYS.INVENTORY_BALANCES, []),
       stockTransfers: getLocal(STORAGE_KEYS.STOCK_TRANSFERS, []),
+      salesOrders: getLocal(STORAGE_KEYS.SALES_ORDERS, []),
       productLots: getLocal(STORAGE_KEYS.PRODUCT_LOTS, []),
       users: getLocal(STORAGE_KEYS.USERS, []),
       suppliers,
@@ -1461,6 +1488,25 @@ export const posService = {
     const updated = baseProducts.map((p) => (p.id === productId ? { ...p, ...patch } : p));
     setLocal(STORAGE_KEYS.PRODUCTS, updated);
     return updated;
+  },
+
+  /**
+   * บันทึกใบสั่งขายส่ง/ใบจองสินค้า (id ฝั่งแอป ใช้ upsert)
+   * เปลี่ยนสถานะได้เฉพาะจาก 'reserved' เท่านั้น (กันเปิดบิลซ้ำ/ยกเลิกซ้ำจากหลายหน้าจอ)
+   */
+  async saveSalesOrder(record, isSupabaseActive) {
+    const orders = getLocal(STORAGE_KEYS.SALES_ORDERS, []);
+    const previous = orders.find((o) => o.id === record.id) || null;
+    if (previous && previous.status !== 'reserved') throw new Error('ใบสั่งขายนี้ปิดไปแล้ว');
+    const saved = { ...record, updated_at: new Date().toISOString() };
+    const updated = previous ? orders.map((o) => (o.id === saved.id ? saved : o)) : [saved, ...orders];
+    setLocal(STORAGE_KEYS.SALES_ORDERS, updated);
+    if (isSupabaseActive && supabase) await upsertOrQueue('sales_orders', [saved]);
+    return { saved, salesOrders: updated };
+  },
+
+  getInventoryBalances() {
+    return getLocal(STORAGE_KEYS.INVENTORY_BALANCES, []);
   },
 
   /**
@@ -2826,7 +2872,8 @@ export const posService = {
         currentProducts,
         isSupabaseActive,
         nowIso,
-        importNumber
+        importNumber,
+        importPayload.warehouse_id
       );
     }
 
@@ -2836,6 +2883,7 @@ export const posService = {
       supplier_id: importPayload.supplier?.id || null,
       supplier_name: importPayload.supplier?.name || '-',
       supplier_phone: importPayload.supplier?.phone || '',
+      warehouse_id: importPayload.warehouse_id || SALES_WAREHOUSE_ID,
       items,
       ...calculateImportTotals(items),
       note: importPayload.note || '',
@@ -2886,7 +2934,8 @@ export const posService = {
         currentProducts,
         isSupabaseActive,
         nowIso,
-        target.import_number
+        target.import_number,
+        importPayload.warehouse_id || target.warehouse_id
       );
     }
 
@@ -2895,6 +2944,7 @@ export const posService = {
       supplier_id: importPayload.supplier?.id || null,
       supplier_name: importPayload.supplier?.name || '-',
       supplier_phone: importPayload.supplier?.phone || '',
+      warehouse_id: importPayload.warehouse_id || target.warehouse_id || SALES_WAREHOUSE_ID,
       items,
       ...calculateImportTotals(items),
       note: importPayload.note || '',
@@ -2942,7 +2992,8 @@ export const posService = {
         currentProducts,
         isSupabaseActive,
         nowIso,
-        target.import_number
+        target.import_number,
+        target.warehouse_id
       );
     }
 
@@ -2983,6 +3034,7 @@ export const posService = {
     setLocal(STORAGE_KEYS.WAREHOUSES, []);
     setLocal(STORAGE_KEYS.INVENTORY_BALANCES, []);
     setLocal(STORAGE_KEYS.STOCK_TRANSFERS, []);
+    setLocal(STORAGE_KEYS.SALES_ORDERS, []);
     setLocal(STORAGE_KEYS.LOT_CONSUMPTIONS, []);
     setLocal(STORAGE_KEYS.SUPPLIERS, INITIAL_SUPPLIERS);
     setLocal(STORAGE_KEYS.STOCK_IMPORTS, []);

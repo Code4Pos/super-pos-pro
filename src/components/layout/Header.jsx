@@ -13,6 +13,7 @@ import {
   LogOut,
   UserCircle2,
   WifiOff,
+  ClipboardList,
   CloudUpload,
 } from 'lucide-react';
 import { usePOS } from '../../context/POSContext';
@@ -33,6 +34,7 @@ export default function Header({
     pendingSyncCount,
     syncing,
     syncNow,
+    activeSalesOrder,
     refreshData,
     loading,
     appVersion,
@@ -158,6 +160,7 @@ export default function Header({
               {activeTab === 'customers' && 'ลูกค้า › จัดการลูกค้า'}
               {activeTab === 'suppliers' && 'บริหาร › จัดการผู้ผลิต'}
               {activeTab === 'receivables' && 'ลูกค้า › ลูกหนี้ & วางบิล'}
+              {activeTab === 'sales-orders' && 'ลูกค้า › ใบสั่งขายส่ง / จองสินค้า'}
             </h2>
 
             {/* ป้าย Version Beta 0.1.3 */}
@@ -198,6 +201,19 @@ export default function Header({
             </div>
           </div>
         </button>
+
+        {/* ตะกร้าที่เปิดจากใบสั่งขายส่ง (ปิดใบอัตโนมัติเมื่อชำระเงิน) */}
+        {activeSalesOrder && (
+          <button
+            type="button"
+            onClick={() => setActiveTab('pos')}
+            className="hidden sm:flex items-center gap-1 px-2.5 py-1.5 rounded-xl border border-indigo-200 bg-indigo-50 text-indigo-700 text-xs font-semibold"
+            title="ตะกร้าปัจจุบันเปิดจากใบสั่งขายนี้"
+          >
+            <ClipboardList className="w-3.5 h-3.5 shrink-0" />
+            <span className="font-mono">{activeSalesOrder.so_number}</span>
+          </button>
+        )}
 
         {/* สถานะออฟไลน์ / รายการรอซิงค์ขึ้นฐานข้อมูล (กดเพื่อซิงค์ทันที) */}
         {(isOffline || pendingSyncCount > 0) && (
