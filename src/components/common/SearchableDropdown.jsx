@@ -16,8 +16,10 @@ export default function SearchableDropdown({
   allowCustomValue = false,
   className = '',
   inputClassName = '',
+  placement = 'auto', // 'auto' | 'bottom' | 'top'
 }) {
   const [isOpen, setIsOpen] = useState(false);
+  const [openUpward, setOpenUpward] = useState(false);
   const [query, setQuery] = useState('');
   const containerRef = useRef(null);
 
@@ -31,6 +33,19 @@ export default function SearchableDropdown({
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
+
+  // เลือกทิศที่จะเปิดรายการ: ถ้าพื้นที่ด้านล่างไม่พอ (เช่น อยู่แถบล่างของหน้า) ให้เปิดขึ้นด้านบน
+  useEffect(() => {
+    if (!isOpen) return;
+    if (placement !== 'auto') {
+      setOpenUpward(placement === 'top');
+      return;
+    }
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const spaceBelow = window.innerHeight - rect.bottom;
+    setOpenUpward(spaceBelow < 240 && rect.top > spaceBelow);
+  }, [isOpen, placement]);
 
   const selectedOption = useMemo(() => {
     return options.find((opt) => String(opt.value) === String(value)) || null;
@@ -145,7 +160,11 @@ export default function SearchableDropdown({
       </div>
 
       {isOpen && (
-        <div className="absolute left-0 right-0 top-full mt-1 bg-white rounded-2xl shadow-xl border border-slate-200 z-50 max-h-56 overflow-y-auto divide-y divide-slate-100">
+        <div
+          className={`absolute left-0 right-0 ${
+            openUpward ? 'bottom-full mb-1' : 'top-full mt-1'
+          } bg-white rounded-2xl shadow-xl border border-slate-200 z-50 max-h-56 overflow-y-auto divide-y divide-slate-100`}
+        >
           {filteredOptions.length === 0 ? (
             allowCustomValue && query.trim() ? (
               <button
