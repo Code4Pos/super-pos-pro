@@ -81,43 +81,47 @@ export default function OrdersPage() {
   }, [filteredOrders]);
 
   return (
-    <div className="flex-1 overflow-y-auto p-4 lg:p-6 pb-24 lg:pb-8 space-y-5">
+    <div className="flex-1 overflow-y-auto p-3 sm:p-5 pb-24 lg:pb-8 space-y-4">
       {/* สรุปยอดจากรายการบิลที่กรอง */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
-        <div className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-xs">
-          <div className="text-xs font-medium text-slate-500">จำนวนบิลที่สำเร็จ</div>
-          <div className="text-2xl font-extrabold text-slate-900 mt-1">
-            {summary.count} <span className="text-xs font-normal text-slate-500">บิล</span>
+      <div className="grid grid-cols-3 gap-2.5 sm:gap-3.5">
+        <div className="bg-white p-3 sm:p-4 rounded-2xl border border-slate-200/80 shadow-xs">
+          <div className="text-[11px] sm:text-xs font-medium text-slate-500 truncate">
+            บิลที่สำเร็จ
+          </div>
+          <div className="text-lg sm:text-2xl font-extrabold text-slate-900 mt-0.5 sm:mt-1">
+            {summary.count} <span className="text-[11px] font-normal text-slate-500">บิล</span>
           </div>
         </div>
 
-        <div className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-xs">
-          <div className="text-xs font-medium text-slate-500">ยอดขายสุทธิรวม</div>
-          <div className="text-2xl font-extrabold text-indigo-600 mt-1">
+        <div className="bg-white p-3 sm:p-4 rounded-2xl border border-slate-200/80 shadow-xs">
+          <div className="text-[11px] sm:text-xs font-medium text-slate-500 truncate">
+            ยอดขายสุทธิรวม
+          </div>
+          <div className="text-lg sm:text-2xl font-extrabold text-indigo-600 mt-0.5 sm:mt-1 truncate">
             {formatCurrency(summary.totalSales)}
           </div>
         </div>
 
-        <div className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-xs">
-          <div className="text-xs font-medium text-slate-500">
-            ส่วนลดราคาส่งที่ให้กับลูกค้า
+        <div className="bg-white p-3 sm:p-4 rounded-2xl border border-slate-200/80 shadow-xs">
+          <div className="text-[11px] sm:text-xs font-medium text-slate-500 truncate">
+            ส่วนลดราคาส่ง
           </div>
-          <div className="text-2xl font-extrabold text-emerald-600 mt-1">
+          <div className="text-lg sm:text-2xl font-extrabold text-emerald-600 mt-0.5 sm:mt-1 truncate">
             {formatCurrency(summary.totalSavings)}
           </div>
         </div>
       </div>
 
       {/* ตัวกรองและค้นหาบิล */}
-      <div className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-xs flex flex-col md:flex-row gap-3 items-stretch md:items-center justify-between">
+      <div className="bg-white p-3 sm:p-4 rounded-2xl border border-slate-200/80 shadow-xs flex flex-col md:flex-row gap-2.5 sm:gap-3 items-stretch md:items-center justify-between">
         <div className="relative flex-1">
           <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
           <input
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="ค้นหาเลขที่บิล (เช่น INV-...), ชื่อลูกค้า หรือชื่อสินค้าในบิล..."
-            className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-slate-200 bg-slate-50/70 text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white"
+            placeholder="ค้นหาเลขที่บิล, ชื่อลูกค้า หรือชื่อสินค้า..."
+            className="w-full pl-10 pr-4 py-2 rounded-xl border border-slate-200 bg-slate-50/70 text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white"
           />
         </div>
 
@@ -126,13 +130,13 @@ export default function OrdersPage() {
             {[
               { id: 'all', label: 'ทั้งหมด' },
               { id: 'today', label: 'วันนี้' },
-              { id: '7days', label: '7 วันล่าสุด' },
+              { id: '7days', label: '7 วัน' },
             ].map((d) => (
               <button
                 key={d.id}
                 type="button"
                 onClick={() => setDateFilter(d.id)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                className={`px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
                   dateFilter === d.id
                     ? 'bg-white text-slate-900 shadow-2xs'
                     : 'text-slate-600'
@@ -158,8 +162,115 @@ export default function OrdersPage() {
         </div>
       </div>
 
-      {/* รายการบิลขาย */}
-      <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs overflow-hidden">
+      {/* มุมมองการ์ดบิลสำหรับหน้าจอมือถือ (md:hidden) */}
+      <div className="md:hidden space-y-2.5">
+        {filteredOrders.length === 0 ? (
+          <div className="bg-white rounded-2xl border border-slate-200/80 p-8 text-center text-xs text-slate-400">
+            ไม่พบประวัติบิลขายที่ตรงกับเงื่อนไข
+          </div>
+        ) : (
+          filteredOrders.map((order) => {
+            const pBadge =
+              PAYMENT_BADGES[order.payment_method] || PAYMENT_BADGES.cash;
+            const isVoided = order.status === 'voided';
+            return (
+              <div
+                key={order.id}
+                className={`bg-white rounded-2xl border border-slate-200/90 p-3.5 space-y-2.5 ${
+                  isVoided ? 'opacity-60 bg-slate-50' : ''
+                }`}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="font-mono font-bold text-xs text-indigo-700">
+                        {order.order_number}
+                      </span>
+                      <span
+                        className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${pBadge.cls}`}
+                      >
+                        {pBadge.label}
+                      </span>
+                      {isVoided && (
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-700">
+                          ยกเลิกแล้ว
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-xs font-bold text-slate-800 mt-1">
+                      {order.customer_name || 'ลูกค้าทั่วไป'}
+                    </div>
+                    <div className="text-[11px] text-slate-400">
+                      {formatDateTime(order.created_at)}
+                    </div>
+                  </div>
+
+                  <div className="text-right shrink-0">
+                    <div className="text-base font-extrabold text-slate-900">
+                      {formatCurrency(order.grand_total)}
+                    </div>
+                    <div className="text-[10px] text-slate-400">
+                      {(order.items || []).length} รายการ
+                    </div>
+                  </div>
+                </div>
+
+                {order.items && order.items.length > 0 && (
+                  <div className="text-[11px] text-slate-500 bg-slate-50 px-2.5 py-1.5 rounded-xl truncate">
+                    {order.items
+                      .map((i) => `${i.product_name} x${i.quantity}`)
+                      .join(' • ')}
+                  </div>
+                )}
+
+                <div className="flex items-center justify-between gap-2 pt-1 border-t border-slate-100">
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedOrder(order)}
+                      className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-indigo-50 text-slate-700 text-xs font-bold flex items-center gap-1"
+                    >
+                      <Printer className="w-3.5 h-3.5" />
+                      <span>สั่งพิมพ์</span>
+                    </button>
+
+                    {(!isVoided ||
+                      invoicedOrderNumbers.has(order.order_number)) &&
+                      can('issue_tax_invoice') && (
+                        <button
+                          type="button"
+                          onClick={() => setTaxInvoiceOrder(order)}
+                          className={`px-2.5 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1 ${
+                            invoicedOrderNumbers.has(order.order_number)
+                              ? 'bg-emerald-50 text-emerald-700'
+                              : 'bg-slate-100 text-slate-600'
+                          }`}
+                        >
+                          <FileText className="w-3.5 h-3.5" />
+                          <span>ใบกำกับ</span>
+                        </button>
+                      )}
+                  </div>
+
+                  {!isVoided && can('void_order') && (
+                    <button
+                      type="button"
+                      onClick={() => voidOrder(order)}
+                      className="p-1.5 rounded-xl text-slate-400 hover:text-rose-600 hover:bg-rose-50"
+                      title="ยกเลิกบิล"
+                    >
+                      <Ban className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })
+        )}
+      </div>
+
+      {/* รายการบิลขายแบบตาราง (สำหรับหน้าจอ Tablet / Desktop ขึ้นไป) */}
+      <div className="hidden md:block bg-white rounded-2xl border border-slate-200/80 shadow-xs overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse">
             <thead>

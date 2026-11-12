@@ -14,8 +14,7 @@ import { ROLES, canAccessAnyAdminTab } from '../../utils/rbac';
 
 /**
  * หน้าเลือกโหมดการทำงานหลักของระบบ (Mode Selector Screen)
- * ให้ผู้ใช้เลือกระหว่าง "ขายหน้าร้าน (POS)" และ "จัดการหลังร้าน (Back-office)"
- * ออกแบบปุ่มขนาดใหญ่ กดง่ายบนจอสัมผัส (Sunmi T2 / Tablet / Desktop)
+ * ดีไซน์มินิมอล สะอาดตา รองรับทั้งหน้าจอมือถือ, แท็บเล็ต และเครื่อง POS Sunmi T2
  */
 export default function ModeSelectorScreen({ onSelectPOS, onSelectAdmin }) {
   const {
@@ -31,115 +30,112 @@ export default function ModeSelectorScreen({ onSelectPOS, onSelectAdmin }) {
   const canEnterAdmin = canAccessAnyAdminTab(currentUser);
 
   return (
-    <div className="h-[100dvh] w-screen overflow-y-auto bg-slate-900 text-white flex flex-col justify-between p-4 sm:p-6 select-none">
+    <div className="h-[100dvh] w-screen overflow-y-auto bg-slate-50 text-slate-900 flex flex-col justify-between p-4 sm:p-6 select-none">
       {/* แถบส่วนหัว: โลโก้ร้าน + สถานะฐานข้อมูล + พนักงานที่ล็อกอิน */}
-      <div className="max-w-4xl w-full mx-auto flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <div className="w-11 h-11 rounded-2xl bg-indigo-600 flex items-center justify-center shadow-lg">
-            <Store className="w-6 h-6 text-white" />
+      <div className="max-w-3xl w-full mx-auto flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <div className="w-10 h-10 rounded-2xl bg-indigo-600 flex items-center justify-center shrink-0">
+            <Store className="w-5 h-5 text-white" />
           </div>
-          <div>
+          <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <h1 className="text-lg sm:text-xl font-extrabold tracking-tight">
+              <h1 className="text-base sm:text-lg font-extrabold tracking-tight text-slate-900 truncate">
                 {printerSettings?.shopName || 'SiamPOS Pro'}
               </h1>
-              <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+              <span className="hidden sm:inline-block px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-slate-200/80 text-slate-700 shrink-0">
                 {appVersion}
               </span>
             </div>
-            <p className="text-xs text-slate-400">
-              ระบบขายหน้าร้านปลีก-ส่ง และบริหารคลังสินค้าอัจฉริยะ
+            <p className="text-[11px] text-slate-500 truncate">
+              ระบบขายหน้าร้านปลีก-ส่ง และบริหารคลังสินค้า
             </p>
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
           <span
-            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border ${
+            className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-[11px] font-bold border ${
               dbMode === 'supabase'
-                ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
-                : 'bg-amber-500/15 text-amber-300 border-amber-500/30'
+                ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                : 'bg-amber-50 text-amber-700 border-amber-200'
             }`}
           >
-            <Database className="w-3.5 h-3.5" />
-            <span>{dbMode === 'supabase' ? 'Supabase Cloud' : 'Demo Mode'}</span>
+            <Database className="w-3 h-3" />
+            <span>{dbMode === 'supabase' ? 'Supabase' : 'Demo'}</span>
           </span>
 
           {currentUser && (
             <button
               type="button"
               onClick={logout}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-rose-600/20 border border-slate-700 hover:border-rose-500/40 text-slate-200 hover:text-rose-300 text-xs font-bold transition-colors"
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-white hover:bg-rose-50 border border-slate-200 hover:border-rose-200 text-slate-700 hover:text-rose-700 text-xs font-bold transition-colors"
               title="ออกจากระบบ"
             >
-              <UserCircle2 className="w-4 h-4 text-indigo-400" />
-              <span>{currentUser.name}</span>
-              <span className="text-[10px] text-slate-400 font-normal hidden sm:inline">
-                ({ROLES[currentUser.role]?.label || currentUser.role})
-              </span>
-              <LogOut className="w-3.5 h-3.5 ml-1" />
+              <UserCircle2 className="w-4 h-4 text-indigo-600" />
+              <span className="max-w-[6rem] truncate">{currentUser.name}</span>
+              <LogOut className="w-3.5 h-3.5" />
             </button>
           )}
         </div>
       </div>
 
       {/* ส่วนกลาง: การ์ดเลือกโหมด 2 ฝั่ง (หน้าร้าน vs หลังร้าน) */}
-      <div className="max-w-4xl w-full mx-auto my-auto py-6 space-y-6">
-        <div className="text-center space-y-1.5">
-          <h2 className="text-xl sm:text-2xl md:text-3xl font-extrabold text-white">
-            เลือกส่วนการทำงานที่ต้องการเข้าใช้งาน
+      <div className="max-w-3xl w-full mx-auto my-auto py-4 sm:py-6 space-y-4 sm:space-y-6">
+        <div className="text-center space-y-1">
+          <h2 className="text-lg sm:text-2xl font-extrabold text-slate-900">
+            เลือกโหมดการใช้งาน
           </h2>
-          <p className="text-xs sm:text-sm text-slate-400">
-            แยกส่วนหน้าร้านและหลังร้านออกจากกัน เพื่อให้หน้าขายทำงานได้รวดเร็วที่สุด
+          <p className="text-xs sm:text-sm text-slate-500">
+            แยกส่วนหน้าร้านและหลังร้านออกจากกันเพื่อความรวดเร็วในการใช้งาน
           </p>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 sm:gap-5">
           {/* การ์ดที่ 1: ขายหน้าร้าน (POS) */}
           <button
             type="button"
             disabled={!canEnterPOS}
             onClick={onSelectPOS}
-            className={`group text-left p-6 sm:p-8 rounded-3xl border-2 transition-all flex flex-col justify-between min-h-[240px] sm:min-h-[270px] ${
+            className={`group text-left p-5 sm:p-6 rounded-3xl border transition-all flex flex-col justify-between min-h-[180px] sm:min-h-[230px] bg-white ${
               canEnterPOS
-                ? 'bg-slate-800/90 hover:bg-indigo-950/80 border-indigo-500/50 hover:border-indigo-400 shadow-xl'
-                : 'bg-slate-800/40 border-slate-800 opacity-50 cursor-not-allowed'
+                ? 'border-slate-200 hover:border-indigo-500 hover:ring-4 hover:ring-indigo-500/10'
+                : 'border-slate-200 opacity-50 cursor-not-allowed'
             }`}
           >
-            <div className="space-y-4">
+            <div className="space-y-3">
               <div className="flex items-center justify-between">
-                <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-indigo-600 text-white flex items-center justify-center shadow-lg">
-                  <ShoppingCart className="w-7 h-7 sm:w-8 sm:h-8" />
+                <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-2xl bg-indigo-600 text-white flex items-center justify-center">
+                  <ShoppingCart className="w-6 h-6 sm:w-7 sm:h-7" />
                 </div>
-                <span className="px-3 py-1 rounded-full text-xs font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
-                  index.html • โหลดไวพิเศษ
+                <span className="px-2.5 py-1 rounded-full text-[11px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-100">
+                  หน้าร้าน (POS)
                 </span>
               </div>
 
               <div>
-                <h3 className="text-xl sm:text-2xl font-extrabold text-white">
-                  ขายหน้าร้าน (POS)
+                <h3 className="text-lg sm:text-xl font-extrabold text-slate-900">
+                  ขายหน้าร้าน
                 </h3>
-                <p className="text-xs sm:text-sm text-slate-300 mt-1.5 leading-relaxed">
-                  หน้าคิดเงินเต็มจอ สแกนบาร์โค้ดตลอดเวลา คำนวณราคาปลีก-ส่งอัตโนมัติ พักบิล และพิมพ์ใบเสร็จความร้อน
+                <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                  คิดเงินปลีก-ส่ง สแกนบาร์โค้ด พักบิล และพิมพ์ใบเสร็จความร้อน
                 </p>
               </div>
             </div>
 
-            <div className="pt-5 mt-4 border-t border-slate-700/70 flex items-center justify-between">
+            <div className="pt-4 mt-3 border-t border-slate-100 flex items-center justify-between">
               {canEnterPOS ? (
                 <>
-                  <span className="text-xs sm:text-sm font-extrabold text-indigo-400 group-hover:text-indigo-300">
-                    เข้าสู่หน้าขายหน้าร้าน
+                  <span className="text-xs sm:text-sm font-bold text-indigo-600">
+                    เข้าสู่หน้าขาย
                   </span>
-                  <div className="w-9 h-9 rounded-xl bg-indigo-600 group-hover:bg-indigo-500 text-white flex items-center justify-center">
-                    <ArrowRight className="w-5 h-5" />
+                  <div className="w-8 h-8 rounded-xl bg-indigo-50 group-hover:bg-indigo-600 text-indigo-600 group-hover:text-white flex items-center justify-center transition-colors">
+                    <ArrowRight className="w-4 h-4" />
                   </div>
                 </>
               ) : (
-                <span className="text-xs font-bold text-rose-400 flex items-center gap-1.5">
-                  <Lock className="w-4 h-4" />
-                  บทบาทของคุณไม่มีสิทธิ์เข้าหน้าขายหน้าร้าน
+                <span className="text-xs font-bold text-rose-600 flex items-center gap-1.5">
+                  <Lock className="w-3.5 h-3.5" />
+                  ไม่มีสิทธิ์เข้าหน้าขาย
                 </span>
               )}
             </div>
@@ -150,46 +146,46 @@ export default function ModeSelectorScreen({ onSelectPOS, onSelectAdmin }) {
             type="button"
             disabled={!canEnterAdmin}
             onClick={onSelectAdmin}
-            className={`group text-left p-6 sm:p-8 rounded-3xl border-2 transition-all flex flex-col justify-between min-h-[240px] sm:min-h-[270px] ${
+            className={`group text-left p-5 sm:p-6 rounded-3xl border transition-all flex flex-col justify-between min-h-[180px] sm:min-h-[230px] bg-white ${
               canEnterAdmin
-                ? 'bg-slate-800/90 hover:bg-emerald-950/70 border-emerald-500/50 hover:border-emerald-400 shadow-xl'
-                : 'bg-slate-800/40 border-slate-800 opacity-50 cursor-not-allowed'
+                ? 'border-slate-200 hover:border-slate-900 hover:ring-4 hover:ring-slate-900/5'
+                : 'border-slate-200 opacity-50 cursor-not-allowed'
             }`}
           >
-            <div className="space-y-4">
+            <div className="space-y-3">
               <div className="flex items-center justify-between">
-                <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-emerald-600 text-white flex items-center justify-center shadow-lg">
-                  <Boxes className="w-7 h-7 sm:w-8 sm:h-8" />
+                <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-2xl bg-slate-900 text-white flex items-center justify-center">
+                  <Boxes className="w-6 h-6 sm:w-7 sm:h-7" />
                 </div>
-                <span className="px-3 py-1 rounded-full text-xs font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                  admin.html • ระบบบริหารครบวงจร
+                <span className="px-2.5 py-1 rounded-full text-[11px] font-bold bg-slate-100 text-slate-700 border border-slate-200">
+                  หลังร้าน (Admin)
                 </span>
               </div>
 
               <div>
-                <h3 className="text-xl sm:text-2xl font-extrabold text-white">
-                  จัดการหลังร้าน (Back-office)
+                <h3 className="text-lg sm:text-xl font-extrabold text-slate-900">
+                  จัดการหลังร้าน
                 </h3>
-                <p className="text-xs sm:text-sm text-slate-300 mt-1.5 leading-relaxed">
-                  จัดการสินค้า สต็อกหลายคลัง นำเข้าสินค้า ราคาส่งหลายระดับ ลูกหนี้/วางบิล รายงานภาษีขาย และตั้งค่าระบบ
+                <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                  คลังสินค้า นำเข้า ราคาส่ง ลูกหนี้/วางบิล รายงานภาษี และตั้งค่าระบบ
                 </p>
               </div>
             </div>
 
-            <div className="pt-5 mt-4 border-t border-slate-700/70 flex items-center justify-between">
+            <div className="pt-4 mt-3 border-t border-slate-100 flex items-center justify-between">
               {canEnterAdmin ? (
                 <>
-                  <span className="text-xs sm:text-sm font-extrabold text-emerald-400 group-hover:text-emerald-300">
-                    เข้าสู่ระบบจัดการหลังร้าน
+                  <span className="text-xs sm:text-sm font-bold text-slate-800">
+                    เข้าสู่ระบบหลังร้าน
                   </span>
-                  <div className="w-9 h-9 rounded-xl bg-emerald-600 group-hover:bg-emerald-500 text-white flex items-center justify-center">
-                    <ArrowRight className="w-5 h-5" />
+                  <div className="w-8 h-8 rounded-xl bg-slate-100 group-hover:bg-slate-900 text-slate-700 group-hover:text-white flex items-center justify-center transition-colors">
+                    <ArrowRight className="w-4 h-4" />
                   </div>
                 </>
               ) : (
-                <span className="text-xs font-bold text-rose-400 flex items-center gap-1.5">
-                  <Lock className="w-4 h-4" />
-                  บทบาทของคุณไม่มีสิทธิ์เข้าเมนูหลังร้าน
+                <span className="text-xs font-bold text-rose-600 flex items-center gap-1.5">
+                  <Lock className="w-3.5 h-3.5" />
+                  ไม่มีสิทธิ์เข้าเมนูหลังร้าน
                 </span>
               )}
             </div>
@@ -198,8 +194,8 @@ export default function ModeSelectorScreen({ onSelectPOS, onSelectAdmin }) {
       </div>
 
       {/* ส่วนท้าย */}
-      <div className="max-w-4xl w-full mx-auto text-center text-[11px] text-slate-500">
-        SiamPOS Pro ({appVersion}) • ออกแบบเพื่อความลื่นไหลบนเครื่อง POS หน้าจอสัมผัส
+      <div className="max-w-3xl w-full mx-auto text-center text-[11px] text-slate-400">
+        SiamPOS Pro • {appVersion}
       </div>
     </div>
   );

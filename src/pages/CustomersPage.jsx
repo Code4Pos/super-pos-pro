@@ -127,33 +127,33 @@ export default function CustomersPage({ onNavigateToPOS }) {
   };
 
   return (
-    <div className="flex-1 overflow-y-auto p-4 lg:p-6 pb-24 lg:pb-8 space-y-5">
+    <div className="flex-1 overflow-y-auto p-3 sm:p-5 pb-24 lg:pb-8 space-y-4">
       {/* แถบค้นหาและปุ่มเพิ่มลูกค้า */}
-      <div className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-xs flex flex-col md:flex-row gap-3 items-stretch md:items-center justify-between">
+      <div className="bg-white p-3.5 sm:p-4 rounded-2xl border border-slate-200/80 shadow-xs flex flex-col md:flex-row gap-2.5 sm:gap-3 items-stretch md:items-center justify-between">
         <div className="relative flex-1">
           <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
           <input
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="ค้นหาชื่อลูกค้า, ชื่อร้าน, เบอร์โทร, รหัสสมาชิก หรือเลขผู้เสียภาษี..."
-            className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-slate-200 bg-slate-50/70 text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white"
+            placeholder="ค้นหาชื่อลูกค้า, ชื่อร้าน, เบอร์โทร หรือรหัสสมาชิก..."
+            className="w-full pl-10 pr-4 py-2 rounded-xl border border-slate-200 bg-slate-50/70 text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white"
           />
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl overflow-x-auto max-w-full">
             {[
               { id: 'all', label: 'ทั้งหมด' },
-              { id: 'wholesale', label: '⭐ ลูกค้าส่ง / ยี่ปั๊ว' },
+              { id: 'wholesale', label: '⭐ ลูกค้าส่ง' },
               { id: 'retail', label: 'ลูกค้าปลีก' },
-              { id: 'outstanding', label: 'มียอดค้างชำระ' },
+              { id: 'outstanding', label: 'ค้างชำระ' },
             ].map((t) => (
               <button
                 key={t.id}
                 type="button"
                 onClick={() => setTypeFilter(t.id)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                className={`px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors ${
                   typeFilter === t.id
                     ? 'bg-white text-slate-900 shadow-2xs'
                     : 'text-slate-600'
@@ -167,16 +167,16 @@ export default function CustomersPage({ onNavigateToPOS }) {
           <button
             type="button"
             onClick={handleOpenAdd}
-            className="py-2.5 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs sm:text-sm font-bold flex items-center gap-1.5 shadow-md shadow-indigo-600/20"
+            className="py-2 px-3.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs sm:text-sm font-bold flex items-center gap-1.5 shrink-0"
           >
             <UserPlus className="w-4 h-4" />
-            <span>เพิ่มลูกค้าใหม่</span>
+            <span>เพิ่มลูกค้า</span>
           </button>
         </div>
       </div>
 
       {/* การ์ดแสดงรายชื่อลูกค้า */}
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4">
         {filteredCustomers.map((cus) => {
           const isWholesale = cus.customer_type === 'wholesale';
           const credit = creditByCustomerId.get(cus.id);
@@ -187,7 +187,7 @@ export default function CustomersPage({ onNavigateToPOS }) {
           return (
             <div
               key={cus.id}
-              className="bg-white rounded-2xl border border-slate-200/90 p-5 shadow-xs hover:shadow-md transition-all flex flex-col justify-between gap-4"
+              className="bg-white rounded-2xl border border-slate-200/90 p-4 sm:p-5 shadow-xs hover:shadow-md transition-all flex flex-col justify-between gap-3.5"
             >
               <div className="space-y-3">
                 <div className="flex items-start justify-between gap-2">

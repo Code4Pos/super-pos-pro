@@ -725,8 +725,141 @@ export default function InventoryPage() {
         onPageSizeChange={setPageSize}
       />
 
-      {/* ตารางรายการสินค้า */}
-      <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs overflow-visible">
+      {/* มุมมองการ์ดมินิมอลสำหรับหน้าจอมือถือ (md:hidden) — ไม่ต้องเลื่อนตารางซ้าย-ขวา */}
+      <div className="md:hidden space-y-2.5">
+        {paginatedProducts.length === 0 ? (
+          <div className="bg-white rounded-2xl border border-slate-200/80 p-8 text-center text-xs text-slate-400">
+            ไม่พบรายการสินค้าที่ค้นหา
+          </div>
+        ) : (
+          paginatedProducts.map((product) => {
+            const stock = Number(product.stock) || 0;
+            const minStock = Number(product.min_stock) || 10;
+            const isLow = stock <= minStock && stock > 0;
+            const isOut = stock <= 0;
+            const catName =
+              categoryNameMap.get(product.category_id) || product.category_id;
+            const wholesaleEnabled =
+              product.is_wholesale_enabled !== false &&
+              Number(product.wholesale_price) > 0;
+            const masterLinkedProd = product.linked_product_id
+              ? products.find((p) => p.id === product.linked_product_id)
+              : null;
+
+            return (
+              <div
+                key={product.id}
+                className="bg-white rounded-2xl border border-slate-200/90 p-3.5 space-y-3"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="text-[11px] font-mono font-bold text-slate-400">
+                        {product.sku}
+                      </span>
+                      <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-600 text-[10px] font-semibold">
+                        {catName}
+                      </span>
+                      {masterLinkedProd && (
+                        <span className="px-1.5 py-0.5 rounded-md bg-violet-50 text-violet-700 text-[10px] font-bold inline-flex items-center gap-0.5">
+                          <GitBranch className="w-2.5 h-2.5" />
+                          เชื่อม {masterLinkedProd.name}
+                        </span>
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingProduct(product);
+                        setIsProductModalOpen(true);
+                      }}
+                      className="font-bold text-slate-900 text-sm text-left line-clamp-2 mt-1 hover:text-indigo-600"
+                    >
+                      {product.name}
+                    </button>
+                  </div>
+
+                  {/* ป้ายสต็อก กดเพื่อปรับสต็อกได้ทันที */}
+                  <button
+                    type="button"
+                    onClick={() => setStockAdjustProduct(product)}
+                    className={`px-2.5 py-1 rounded-xl text-xs font-extrabold shrink-0 border ${
+                      isOut
+                        ? 'bg-rose-50 text-rose-700 border-rose-200'
+                        : isLow
+                        ? 'bg-amber-50 text-amber-800 border-amber-200'
+                        : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                    }`}
+                  >
+                    {stock} {product.unit}
+                  </button>
+                </div>
+
+                {/* กล่องราคา 3 ช่องสะอาดตา */}
+                <div className="grid grid-cols-3 gap-2 p-2.5 rounded-xl bg-slate-50 border border-slate-100 text-center">
+                  <div>
+                    <div className="text-[10px] text-slate-400">ราคาทุน</div>
+                    <div className="text-xs font-bold text-slate-700 mt-0.5">
+                      {formatCurrency(product.cost_price)}
+                    </div>
+                  </div>
+                  <div className="border-x border-slate-200/80">
+                    <div className="text-[10px] text-slate-400">ราคาปลีก</div>
+                    <div className="text-xs font-extrabold text-slate-900 mt-0.5">
+                      {formatCurrency(product.retail_price)}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[10px] text-slate-400">ราคาส่ง</div>
+                    <div className="text-xs font-extrabold text-emerald-600 mt-0.5">
+                      {wholesaleEnabled
+                        ? formatCurrency(product.wholesale_price)
+                        : '-'}
+                    </div>
+                  </div>
+                </div>
+
+                {/* ปุ่มจัดการด่วนบนมือถือ */}
+                <div className="flex items-center justify-between gap-2 pt-0.5">
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setStockAdjustProduct(product)}
+                      className="px-3 py-1.5 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-bold flex items-center gap-1.5"
+                    >
+                      <PackagePlus className="w-3.5 h-3.5" />
+                      <span>ปรับสต็อก</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingProduct(product);
+                        setIsProductModalOpen(true);
+                      }}
+                      className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold flex items-center gap-1.5"
+                    >
+                      <Edit3 className="w-3.5 h-3.5" />
+                      <span>แก้ไข</span>
+                    </button>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setProductToDelete(product)}
+                    className="p-1.5 rounded-xl text-slate-400 hover:text-rose-600 hover:bg-rose-50"
+                    title="ลบสินค้า"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            );
+          })
+        )}
+      </div>
+
+      {/* ตารางรายการสินค้า (สำหรับหน้าจอ Tablet / Desktop ขึ้นไป) */}
+      <div className="hidden md:block bg-white rounded-2xl border border-slate-200/80 shadow-xs overflow-visible">
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse">
             <thead>

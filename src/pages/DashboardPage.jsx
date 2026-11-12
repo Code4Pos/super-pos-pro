@@ -97,75 +97,74 @@ export default function DashboardPage({ onNavigate }) {
   );
 
   return (
-    <div className="flex-1 overflow-y-auto p-4 lg:p-6 pb-24 lg:pb-8 space-y-5">
-      {/* KPI Cards แถวบน */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-        <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs flex items-start justify-between">
-          <div>
-            <div className="text-xs font-semibold text-slate-500">
-              ยอดขายสุทธิรวม (Total Revenue)
+    <div className="flex-1 overflow-y-auto p-3 sm:p-5 pb-24 lg:pb-8 space-y-4 sm:space-y-5">
+      {/* KPI Cards แถวบน (2 คอลัมน์บนมือถือ, 4 คอลัมน์บนจอใหญ่) */}
+      <div className="grid grid-cols-2 xl:grid-cols-4 gap-2.5 sm:gap-4">
+        <div className="bg-white p-3.5 sm:p-5 rounded-2xl border border-slate-200/80 shadow-xs flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <div className="text-[11px] sm:text-xs font-semibold text-slate-500 truncate">
+              ยอดขายสุทธิรวม
             </div>
-            <div className="text-2xl sm:text-3xl font-extrabold text-slate-900 mt-1.5">
+            <div className="text-lg sm:text-2xl md:text-3xl font-extrabold text-slate-900 mt-1 truncate">
               {formatCurrency(analytics.totalRevenue)}
             </div>
-            <div className="text-xs text-indigo-600 font-medium mt-1">
-              จากทั้งหมด {analytics.orderCount} บิลขายสำเร็จ
+            <div className="text-[11px] text-indigo-600 font-medium mt-0.5 truncate">
+              {analytics.orderCount} บิลสำเร็จ
             </div>
           </div>
-          <div className="w-11 h-11 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0">
-            <TrendingUp className="w-6 h-6" />
+          <div className="w-9 h-9 sm:w-11 sm:h-11 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0">
+            <TrendingUp className="w-4 h-4 sm:w-6 sm:h-6" />
           </div>
         </div>
 
-        <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs flex items-start justify-between">
-          <div>
-            <div className="text-xs font-semibold text-slate-500">
-              กำไรขั้นต้นโดยประมาณ (Gross Profit)
+        <div className="bg-white p-3.5 sm:p-5 rounded-2xl border border-slate-200/80 shadow-xs flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <div className="text-[11px] sm:text-xs font-semibold text-slate-500 truncate">
+              กำไรขั้นต้น
             </div>
-            <div className="text-2xl sm:text-3xl font-extrabold text-emerald-600 mt-1.5">
+            <div className="text-lg sm:text-2xl md:text-3xl font-extrabold text-emerald-600 mt-1 truncate">
               {formatCurrency(analytics.grossProfit)}
             </div>
-            <div className="text-xs text-emerald-700 font-medium mt-1">
-              อัตรากำไรขั้นต้น {analytics.profitMargin}%
+            <div className="text-[11px] text-emerald-700 font-medium mt-0.5 truncate">
+              กำไร {analytics.profitMargin}%
             </div>
           </div>
-          <div className="w-11 h-11 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0">
-            <DollarSign className="w-6 h-6" />
-          </div>
-        </div>
-
-        <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs flex items-start justify-between">
-          <div>
-            <div className="text-xs font-semibold text-slate-500">
-              บิลที่มีเรตราคาส่ง (Wholesale Bills)
-            </div>
-            <div className="text-2xl sm:text-3xl font-extrabold text-violet-600 mt-1.5">
-              {analytics.wholesaleOrderCount} / {analytics.orderCount}{' '}
-              <span className="text-sm font-normal text-slate-500">บิล</span>
-            </div>
-            <div className="text-xs text-slate-500 mt-1">
-              ช่วยกระตุ้นยอดซื้อยกลัง/แพ็ค
-            </div>
-          </div>
-          <div className="w-11 h-11 rounded-2xl bg-violet-50 text-violet-600 flex items-center justify-center shrink-0">
-            <Receipt className="w-6 h-6" />
+          <div className="w-9 h-9 sm:w-11 sm:h-11 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0">
+            <DollarSign className="w-4 h-4 sm:w-6 sm:h-6" />
           </div>
         </div>
 
-        <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs flex items-start justify-between">
-          <div>
-            <div className="text-xs font-semibold text-slate-500">
-              ส่วนลดราคาส่งที่มอบให้ลูกค้า
+        <div className="bg-white p-3.5 sm:p-5 rounded-2xl border border-slate-200/80 shadow-xs flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <div className="text-[11px] sm:text-xs font-semibold text-slate-500 truncate">
+              บิลเรตราคาส่ง
             </div>
-            <div className="text-2xl sm:text-3xl font-extrabold text-amber-600 mt-1.5">
+            <div className="text-lg sm:text-2xl md:text-3xl font-extrabold text-violet-600 mt-1 truncate">
+              {analytics.wholesaleOrderCount} / {analytics.orderCount}
+            </div>
+            <div className="text-[11px] text-slate-400 mt-0.5 truncate">
+              บิลขายส่ง
+            </div>
+          </div>
+          <div className="w-9 h-9 sm:w-11 sm:h-11 rounded-2xl bg-violet-50 text-violet-600 flex items-center justify-center shrink-0">
+            <Receipt className="w-4 h-4 sm:w-6 sm:h-6" />
+          </div>
+        </div>
+
+        <div className="bg-white p-3.5 sm:p-5 rounded-2xl border border-slate-200/80 shadow-xs flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <div className="text-[11px] sm:text-xs font-semibold text-slate-500 truncate">
+              ส่วนลดราคาส่งรวม
+            </div>
+            <div className="text-lg sm:text-2xl md:text-3xl font-extrabold text-amber-600 mt-1 truncate">
               {formatCurrency(analytics.totalWholesaleSavings)}
             </div>
-            <div className="text-xs text-slate-500 mt-1">
-              คำนวณจากส่วนต่างราคาปลีก-ส่ง
+            <div className="text-[11px] text-slate-400 mt-0.5 truncate">
+              ประหยัดให้ลูกค้า
             </div>
           </div>
-          <div className="w-11 h-11 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center shrink-0">
-            <Sparkles className="w-6 h-6" />
+          <div className="w-9 h-9 sm:w-11 sm:h-11 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center shrink-0">
+            <Sparkles className="w-4 h-4 sm:w-6 sm:h-6" />
           </div>
         </div>
       </div>

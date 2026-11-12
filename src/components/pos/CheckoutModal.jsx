@@ -204,14 +204,14 @@ export default function CheckoutModal({ isOpen, onClose, onOrderSuccess }) {
 
           {/* 1. หน้าต่างชำระเงินสด (แบ่งซ้าย-ขวาบนจอแนวนอน/แท็บเล็ต/Sunmi T2 เพื่อให้ปุ่มตัวเลขใหญ่และไม่ล้นจอ) */}
           {paymentMethod === 'cash' && (
-            <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 items-stretch">
+            <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5 sm:gap-3 items-stretch">
               {/* ฝั่งซ้าย: ยอดชำระสุทธิ, รับเงินสด, เงินทอน, หมายเหตุ และปุ่มยืนยัน */}
-              <div className="sm:col-span-5 flex flex-col justify-between gap-2.5">
+              <div className="sm:col-span-5 flex flex-col justify-between gap-2">
                 <div className="space-y-2">
                   {/* ยอดสุทธิ */}
-                  <div className="p-3 rounded-2xl bg-indigo-50 border border-indigo-200 flex sm:flex-col justify-between items-baseline sm:items-start">
+                  <div className="p-2.5 sm:p-3 rounded-2xl bg-indigo-50 border border-indigo-200 flex sm:flex-col justify-between items-baseline sm:items-start">
                     <div className="text-xs font-bold text-indigo-800">
-                      ยอดที่ต้องชำระสุทธิ
+                      ยอดสุทธิ
                       {vatMode !== 'no_vat' && (
                         <span className="ml-1 text-[10px] text-indigo-600 font-normal">
                           ({vatMode === 'vat_in' ? 'รวม VAT' : 'VAT นอก'}{' '}
@@ -219,19 +219,19 @@ export default function CheckoutModal({ isOpen, onClose, onOrderSuccess }) {
                         </span>
                       )}
                     </div>
-                    <div className="text-2xl sm:text-3xl font-extrabold text-indigo-700 mt-0.5">
+                    <div className="text-xl sm:text-3xl font-extrabold text-indigo-700 mt-0.5">
                       {formatCurrency(grandTotal)}
                     </div>
                   </div>
 
                   {/* รับเงินสด & เงินทอน */}
                   <div className="grid grid-cols-2 sm:grid-cols-1 gap-2">
-                    <div className="p-2.5 sm:p-3 rounded-2xl bg-slate-100 border-2 border-indigo-500/30 flex sm:flex-row flex-col justify-between sm:items-center">
-                      <span className="text-xs font-bold text-slate-600">
+                    <div className="p-2 sm:p-3 rounded-2xl bg-slate-100 border border-indigo-500/30 flex sm:flex-row flex-col justify-between sm:items-center">
+                      <span className="text-[11px] sm:text-xs font-bold text-slate-600">
                         รับเงินสดมา
                       </span>
                       <span
-                        className={`text-xl sm:text-2xl font-mono font-extrabold ${
+                        className={`text-lg sm:text-2xl font-mono font-extrabold ${
                           isFresh ? 'text-indigo-600' : 'text-slate-900'
                         }`}
                       >
@@ -240,17 +240,17 @@ export default function CheckoutModal({ isOpen, onClose, onOrderSuccess }) {
                     </div>
 
                     <div
-                      className={`p-2.5 sm:p-3 rounded-2xl border flex sm:flex-row flex-col justify-between sm:items-center ${
+                      className={`p-2 sm:p-3 rounded-2xl border flex sm:flex-row flex-col justify-between sm:items-center ${
                         numericCash >= grandTotal
                           ? 'bg-emerald-50 border-emerald-300'
                           : 'bg-rose-50 border-rose-200'
                       }`}
                     >
-                      <span className="text-xs font-bold text-slate-700">
+                      <span className="text-[11px] sm:text-xs font-bold text-slate-700">
                         {numericCash >= grandTotal ? 'เงินทอน' : 'ยังขาดอีก'}
                       </span>
                       <span
-                        className={`text-xl sm:text-2xl font-mono font-extrabold ${
+                        className={`text-lg sm:text-2xl font-mono font-extrabold ${
                           numericCash >= grandTotal
                             ? 'text-emerald-600'
                             : 'text-rose-600'
@@ -279,7 +279,7 @@ export default function CheckoutModal({ isOpen, onClose, onOrderSuccess }) {
                   <button
                     type="button"
                     onClick={onClose}
-                    className="py-3 px-4 rounded-2xl border border-slate-200 hover:bg-slate-100 text-slate-700 text-xs sm:text-sm font-bold"
+                    className="py-2.5 sm:py-3 px-4 rounded-2xl border border-slate-200 hover:bg-slate-100 text-slate-700 text-xs sm:text-sm font-bold"
                   >
                     ยกเลิก
                   </button>
@@ -287,7 +287,7 @@ export default function CheckoutModal({ isOpen, onClose, onOrderSuccess }) {
                     type="button"
                     disabled={!canSubmit}
                     onClick={handleConfirmCheckout}
-                    className="flex-1 py-3 px-4 rounded-2xl bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 disabled:bg-slate-300 text-white font-extrabold text-sm sm:text-base shadow-md flex items-center justify-center gap-1.5"
+                    className="flex-1 py-2.5 sm:py-3 px-4 rounded-2xl bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 disabled:bg-slate-300 text-white font-extrabold text-sm sm:text-base shadow-md flex items-center justify-center gap-1.5"
                   >
                     <CheckCircle2 className="w-5 h-5 shrink-0" />
                     <span>
@@ -302,9 +302,9 @@ export default function CheckoutModal({ isOpen, onClose, onOrderSuccess }) {
               </div>
 
               {/* ฝั่งขวา: ปุ่มลัดธนบัตร (100, 500, 1000, พอดี) + แป้นตัวเลข Numpad ขนาดใหญ่ */}
-              <div className="sm:col-span-7 flex flex-col justify-between gap-2">
+              <div className="sm:col-span-7 flex flex-col justify-between gap-1.5 sm:gap-2">
                 {/* ปุ่มลัดธนบัตร */}
-                <div className="grid grid-cols-4 gap-2">
+                <div className="grid grid-cols-4 gap-1.5 sm:gap-2">
                   {[
                     { label: '฿100', val: 100 },
                     { label: '฿500', val: 500 },
@@ -315,7 +315,7 @@ export default function CheckoutModal({ isOpen, onClose, onOrderSuccess }) {
                       key={btn.label}
                       type="button"
                       onClick={() => handleShortcutPrice(btn.val)}
-                      className={`h-11 sm:h-12 rounded-2xl font-extrabold text-sm sm:text-base border transition-colors ${
+                      className={`h-10 sm:h-12 rounded-xl sm:rounded-2xl font-extrabold text-xs sm:text-base border transition-colors ${
                         btn.isExact
                           ? 'bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-600'
                           : 'bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border-indigo-200'
@@ -327,13 +327,13 @@ export default function CheckoutModal({ isOpen, onClose, onOrderSuccess }) {
                 </div>
 
                 {/* แป้นกดตัวเลข Numpad ขนาดใหญ่ */}
-                <div className="grid grid-cols-4 gap-2">
+                <div className="grid grid-cols-4 gap-1.5 sm:gap-2">
                   {['7', '8', '9'].map((n) => (
                     <button
                       key={n}
                       type="button"
                       onClick={() => handleDigit(n)}
-                      className="h-12 sm:h-14 rounded-2xl bg-slate-50 hover:bg-slate-100 active:bg-slate-200 border border-slate-300 text-xl sm:text-2xl font-extrabold text-slate-800"
+                      className="h-11 sm:h-14 rounded-xl sm:rounded-2xl bg-slate-50 hover:bg-slate-100 active:bg-slate-200 border border-slate-200 text-lg sm:text-2xl font-extrabold text-slate-800"
                     >
                       {n}
                     </button>
@@ -341,10 +341,10 @@ export default function CheckoutModal({ isOpen, onClose, onOrderSuccess }) {
                   <button
                     type="button"
                     onClick={handleBackspace}
-                    className="h-12 sm:h-14 rounded-2xl bg-amber-50 hover:bg-amber-100 active:bg-amber-200 border border-amber-300 text-amber-800 flex items-center justify-center"
+                    className="h-11 sm:h-14 rounded-xl sm:rounded-2xl bg-amber-50 hover:bg-amber-100 active:bg-amber-200 border border-amber-200 text-amber-800 flex items-center justify-center"
                     title="ลบทีละหลัก"
                   >
-                    <Delete className="w-6 h-6" />
+                    <Delete className="w-5 h-5 sm:w-6 sm:h-6" />
                   </button>
 
                   {['4', '5', '6'].map((n) => (
@@ -352,7 +352,7 @@ export default function CheckoutModal({ isOpen, onClose, onOrderSuccess }) {
                       key={n}
                       type="button"
                       onClick={() => handleDigit(n)}
-                      className="h-12 sm:h-14 rounded-2xl bg-slate-50 hover:bg-slate-100 active:bg-slate-200 border border-slate-300 text-xl sm:text-2xl font-extrabold text-slate-800"
+                      className="h-11 sm:h-14 rounded-xl sm:rounded-2xl bg-slate-50 hover:bg-slate-100 active:bg-slate-200 border border-slate-200 text-lg sm:text-2xl font-extrabold text-slate-800"
                     >
                       {n}
                     </button>
@@ -360,10 +360,10 @@ export default function CheckoutModal({ isOpen, onClose, onOrderSuccess }) {
                   <button
                     type="button"
                     onClick={handleClear}
-                    className="h-12 sm:h-14 rounded-2xl bg-rose-50 hover:bg-rose-100 active:bg-rose-200 border border-rose-300 text-rose-700 text-xs sm:text-sm font-extrabold flex flex-col items-center justify-center"
+                    className="h-11 sm:h-14 rounded-xl sm:rounded-2xl bg-rose-50 hover:bg-rose-100 active:bg-rose-200 border border-rose-200 text-rose-700 text-xs sm:text-sm font-extrabold flex flex-col items-center justify-center"
                     title="รีเซ็ตเป็น 0"
                   >
-                    <RotateCcw className="w-4 h-4" />
+                    <RotateCcw className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
                     <span>0 (C)</span>
                   </button>
 
@@ -372,7 +372,7 @@ export default function CheckoutModal({ isOpen, onClose, onOrderSuccess }) {
                       key={n}
                       type="button"
                       onClick={() => handleDigit(n)}
-                      className="h-12 sm:h-14 rounded-2xl bg-slate-50 hover:bg-slate-100 active:bg-slate-200 border border-slate-300 text-xl sm:text-2xl font-extrabold text-slate-800"
+                      className="h-11 sm:h-14 rounded-xl sm:rounded-2xl bg-slate-50 hover:bg-slate-100 active:bg-slate-200 border border-slate-200 text-lg sm:text-2xl font-extrabold text-slate-800"
                     >
                       {n}
                     </button>
@@ -380,7 +380,7 @@ export default function CheckoutModal({ isOpen, onClose, onOrderSuccess }) {
                   <button
                     type="button"
                     onClick={() => handleDigit('.')}
-                    className="h-12 sm:h-14 rounded-2xl bg-slate-50 hover:bg-slate-100 active:bg-slate-200 border border-slate-300 text-2xl font-extrabold text-slate-800"
+                    className="h-11 sm:h-14 rounded-xl sm:rounded-2xl bg-slate-50 hover:bg-slate-100 active:bg-slate-200 border border-slate-200 text-xl sm:text-2xl font-extrabold text-slate-800"
                   >
                     .
                   </button>
@@ -388,14 +388,14 @@ export default function CheckoutModal({ isOpen, onClose, onOrderSuccess }) {
                   <button
                     type="button"
                     onClick={() => handleDigit('0')}
-                    className="col-span-2 h-12 sm:h-14 rounded-2xl bg-slate-50 hover:bg-slate-100 active:bg-slate-200 border border-slate-300 text-xl sm:text-2xl font-extrabold text-slate-800"
+                    className="col-span-2 h-11 sm:h-14 rounded-xl sm:rounded-2xl bg-slate-50 hover:bg-slate-100 active:bg-slate-200 border border-slate-200 text-lg sm:text-2xl font-extrabold text-slate-800"
                   >
                     0
                   </button>
                   <button
                     type="button"
                     onClick={() => handleDigit('00')}
-                    className="col-span-2 h-12 sm:h-14 rounded-2xl bg-slate-50 hover:bg-slate-100 active:bg-slate-200 border border-slate-300 text-xl sm:text-2xl font-extrabold text-slate-800"
+                    className="col-span-2 h-11 sm:h-14 rounded-xl sm:rounded-2xl bg-slate-50 hover:bg-slate-100 active:bg-slate-200 border border-slate-200 text-lg sm:text-2xl font-extrabold text-slate-800"
                   >
                     00
                   </button>

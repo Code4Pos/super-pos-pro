@@ -250,25 +250,25 @@ export default function POSPage() {
     <div className="flex-1 flex overflow-hidden relative h-full">
       {/* ฝั่งซ้าย: แถบค้นหา + Dropdown หมวดหมู่ + ตารางสินค้า */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden bg-slate-50">
-        <div className="p-2.5 sm:p-3 bg-white border-b border-slate-200 shrink-0">
+        <div className="p-2 sm:p-3 bg-white border-b border-slate-200 shrink-0">
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
             {/* ช่องค้นหา / สแกนบาร์โค้ด */}
             <div className="relative flex-1">
-              <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
               <input
                 type="text"
                 disabled={Boolean(notFoundBarcode)}
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 onKeyDown={handleSearchBarcodeKeyDown}
-                placeholder="ค้นหาชื่อสินค้า, SKU หรือยิงบาร์โค้ดได้ตลอดเวลา..."
-                className="w-full pl-10 pr-32 py-2 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white disabled:bg-rose-50 text-xs sm:text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                placeholder="ค้นหาชื่อสินค้า, SKU หรือยิงบาร์โค้ด..."
+                className="w-full pl-9 pr-14 sm:pr-36 py-2 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white disabled:bg-rose-50 text-xs sm:text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500"
               />
               {searchQuery ? (
                 <button
                   type="button"
                   onClick={() => setSearchQuery('')}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 p-1 rounded-md text-slate-400 hover:text-rose-600"
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 rounded-md text-slate-400 hover:text-rose-600"
                 >
                   <X className="w-4 h-4" />
                 </button>
@@ -276,13 +276,13 @@ export default function POSPage() {
                 <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-bold absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
                   <Barcode className="w-3.5 h-3.5" />
-                  พร้อมสแกนตลอดเวลา
+                  <span className="hidden sm:inline">พร้อมสแกนตลอดเวลา</span>
                 </span>
               )}
             </div>
 
             {/* หมวดหมู่สินค้าแบบ Dropdown ที่สามารถพิมพ์ค้นหาได้ */}
-            <div ref={catDropdownRef} className="relative sm:w-64 md:w-72 shrink-0">
+            <div ref={catDropdownRef} className="relative sm:w-60 md:w-68 shrink-0">
               <div className="flex items-center rounded-xl border border-slate-200 bg-slate-50 focus-within:bg-white focus-within:ring-2 focus-within:ring-indigo-500">
                 <FolderSearch className="w-4 h-4 text-indigo-600 ml-3 mr-1.5 shrink-0" />
                 <input
@@ -301,7 +301,7 @@ export default function POSPage() {
                     setCatSearchQuery(e.target.value);
                     setIsCatDropdownOpen(true);
                   }}
-                  placeholder="พิมพ์ค้นหาหมวดหมู่สินค้า..."
+                  placeholder="พิมพ์ค้นหาหมวดหมู่..."
                   className="w-full py-2 px-1.5 bg-transparent text-xs sm:text-sm font-semibold text-slate-800 focus:outline-none truncate"
                 />
 
@@ -361,7 +361,7 @@ export default function POSPage() {
                           <span className="truncate">{cat.name}</span>
                           <div className="flex items-center gap-2 shrink-0">
                             <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-600">
-                              {count} รายการ
+                              {count}
                             </span>
                             {active && (
                               <Check className="w-4 h-4 text-indigo-600" />
@@ -378,7 +378,7 @@ export default function POSPage() {
         </div>
 
         {/* ตารางการ์ดสินค้า */}
-        <div className="flex-1 overflow-y-auto p-2.5 sm:p-3.5 pb-32 lg:pb-4">
+        <div className="flex-1 overflow-y-auto p-2 sm:p-3.5 pb-24 lg:pb-4">
           {filteredProducts.length === 0 ? (
             <div className="h-64 flex flex-col items-center justify-center text-center text-slate-400">
               <PackageSearch className="w-12 h-12 stroke-1.5 mb-2 text-slate-300" />
@@ -390,7 +390,7 @@ export default function POSPage() {
               </p>
             </div>
           ) : (
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-2.5 sm:gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-2 sm:gap-3">
               {filteredProducts.map((product) => {
                 const cartItem = cartItemMap.get(product.id);
                 const qtyInCart = cartItem?.quantity || 0;
@@ -420,13 +420,13 @@ export default function POSPage() {
         <CartPanel onOpenCheckout={() => setIsCheckoutOpen(true)} />
       </div>
 
-      {/* แถบสรุปตะกร้าลอยด้านล่างสำหรับ Smartphone / Tablet (< lg) */}
+      {/* แถบสรุปตะกร้าลอยด้านล่างสำหรับ Smartphone / Tablet (< lg) — วางชิดขอบล่างเพราะหน้าขายไม่มี MobileNav */}
       {cartSummary.items.length > 0 && (
-        <div className="lg:hidden fixed bottom-16 inset-x-0 p-2.5 z-20 pointer-events-none">
-          <div className="max-w-lg mx-auto bg-slate-900 text-white rounded-2xl p-2.5 shadow-lg border border-slate-700 flex items-center justify-between gap-3 pointer-events-auto">
+        <div className="lg:hidden fixed bottom-2.5 inset-x-2.5 z-20 pointer-events-none safe-area-pb">
+          <div className="max-w-lg mx-auto bg-slate-900 text-white rounded-2xl p-2.5 shadow-xl border border-slate-800 flex items-center justify-between gap-2.5 pointer-events-auto">
             <div
               onClick={() => setIsMobileCartOpen(true)}
-              className="flex items-center gap-3 cursor-pointer flex-1 min-w-0"
+              className="flex items-center gap-2.5 cursor-pointer flex-1 min-w-0"
             >
               <div className="w-10 h-10 rounded-xl bg-indigo-600 flex items-center justify-center font-bold text-sm relative shrink-0">
                 <ShoppingCart className="w-5 h-5" />
@@ -435,19 +435,19 @@ export default function POSPage() {
                 </span>
               </div>
               <div className="min-w-0">
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1.5 flex-wrap">
                   <span className="font-extrabold text-base text-white">
                     {formatCurrency(cartSummary.grandTotal)}
                   </span>
                   {cartSummary.wholesaleSavings > 0 && (
-                    <span className="px-1.5 py-0.5 rounded-md bg-emerald-500/20 text-emerald-300 text-[10px] font-bold flex items-center gap-0.5">
+                    <span className="px-1.5 py-0.5 rounded-md bg-emerald-500/20 text-emerald-300 text-[10px] font-bold inline-flex items-center gap-0.5">
                       <Sparkles className="w-2.5 h-2.5" />
-                      ลดส่ง -{formatCurrency(cartSummary.wholesaleSavings)}
+                      -{formatCurrency(cartSummary.wholesaleSavings)}
                     </span>
                   )}
                 </div>
                 <div className="text-[11px] text-slate-300 flex items-center gap-1">
-                  <span>แตะเพื่อดูรายการในตะกร้า</span>
+                  <span>ดูตะกร้า ({cartSummary.items.length} รายการ)</span>
                   <ChevronUp className="w-3.5 h-3.5" />
                 </div>
               </div>
@@ -458,7 +458,7 @@ export default function POSPage() {
               onClick={() => setIsCheckoutOpen(true)}
               className="py-2.5 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs sm:text-sm shrink-0"
             >
-              ชำระเงินทันที
+              ชำระเงิน
             </button>
           </div>
         </div>
