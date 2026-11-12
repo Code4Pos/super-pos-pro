@@ -14,12 +14,12 @@ import {
 
 const SESSION_STORAGE_KEY = 'siampos_session_v1';
 
-export const APP_VERSION = 'version beta 0.3.4';
+export const APP_VERSION = 'version beta 0.3.5';
 const HELD_BILLS_STORAGE_KEY = 'siampos_held_bills_v1';
 
 const POSContext = createContext(null);
 
-export function POSProvider({ children }) {
+export function POSProvider({ children, scope = 'all' }) {
   const [dbMode, setDbMode] = useState('demo');
   const [loading, setLoading] = useState(true);
   // โหมดออฟไลน์: เน็ตหลุด หรือเปิดแอปด้วยแคชเพราะเชื่อม Supabase ไม่ได้
@@ -145,11 +145,14 @@ export function POSProvider({ children }) {
     return () => clearTimeout(timer);
   }, [toast]);
 
-  // โหลดข้อมูลทั้งหมดตอนเริ่มต้น
+  // โหลดข้อมูลตามขอบเขตของหน้า (scope = 'pos' โหลดเฉพาะข้อมูลขายหน้าร้าน, 'admin' หรือ 'all' โหลดทั้งหมด)
   const refreshData = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await posService.fetchAllData();
+      const data =
+        scope === 'pos'
+          ? await posService.fetchPOSData()
+          : await posService.fetchAllData();
       setDbMode(data.mode);
       setIsOffline(Boolean(data.offline) || (typeof navigator !== 'undefined' && navigator.onLine === false));
       setPendingSyncCount(posService.getOfflineQueue().length);
@@ -181,7 +184,7 @@ export function POSProvider({ children }) {
     } finally {
       setLoading(false);
     }
-  }, [showToast]);
+  }, [scope, showToast]);
 
   useEffect(() => {
     refreshData();
@@ -815,18 +818,20 @@ export function POSProvider({ children }) {
 
   // ปรับสต็อกด่วน (ซิงค์สต็อกและราคาต้นทุนไปยังสินค้ารองที่เชื่อมสินค้าสัมพันธ์ โดยใช้รายการสินค้าปัจจุบันเสมอเพื่อป้องกันสินค้าหาย)
   // ทุกครั้งที่สต็อกสินค้าเปลี่ยน (ขาย, ยกเลิกบิล, นำเข้า, ปรับสต็อก) ให้ดึงรายการเคลื่อนไหวใหม่จากเครื่อง
-  // แล้วรวมกับรายการที่โหลดจากฐานข้อมูลไว้แล้ว (ไม่ซ้ำ id)
+  // แล้วรวมกับรายการที่โหลดจากฐานข้อมูลไว้แล้ว (ไม่ซ้ำ id) — ข้ามการโหลด stockLedger ถ้าอยู่ในโหมดหน้าขาย (scope === 'pos')
   useEffect(() => {
-    const localLedger = posService.getStockLedger();
-    setStockLedger((prev) => {
-      const localIds = new Set(localLedger.map((e) => e.id));
-      return [...localLedger, ...prev.filter((e) => !localIds.has(e.id))].sort(
-        (a, b) => new Date(b.created_at) - new Date(a.created_at)
-      );
-    });
+    if (scope !== 'pos') {
+      const localLedger = posService.getStockLedger();
+      setStockLedger((prev) => {
+        const localIds = new Set(localLedger.map((e) => e.id));
+        return [...localLedger, ...prev.filter((e) => !localIds.has(e.id))].sort(
+          (a, b) => new Date(b.created_at) - new Date(a.created_at)
+        );
+      });
+    }
     // ล็อตถูกปรับพร้อมกับการเคลื่อนไหวสต็อก (ข้อมูลในเครื่องรวมกับฐานข้อมูลแล้วตอนโหลด)
     setProductLots(posService.getProductLots());
-  }, [products]);
+  }, [products, scope]);
 
   // movementMeta: { reason, approved_by, reference_doc } สำหรับบันทึก Stock Ledger
   const updateProductStock = useCallback(
@@ -1278,6 +1283,27 @@ export function POSProvider({ children }) {
     [cart.length, products, customers, handleSelectCustomer, showToast]
   );
 
+  // รับคำสั่งเปิดบิลขายที่ส่งข้ามมาจากหน้าหลังร้าน (admin.html -> index.html)
+  const pendingActionHandledRef = useRef(false);
+  useEffect(() => {
+    if (loading || products.length === 0 || pendingActionHandledRef.current) return;
+    const action = posService.consumePendingPOSAction();
+    if (!action) return;
+    pendingActionHandledRef.current = true;
+
+    if (action.type === 'customer' && action.customerId) {
+      const targetCus = customers.find((c) => c.id === action.customerId);
+      if (targetCus) {
+        handleSelectCustomer(targetCus);
+      }
+    } else if (action.type === 'salesOrder' && action.salesOrderId) {
+      const targetSO = salesOrders.find((so) => so.id === action.salesOrderId);
+      if (targetSO) {
+        loadSalesOrderToCart(targetSO);
+      }
+    }
+  }, [loading, products.length, customers, salesOrders, handleSelectCustomer, loadSalesOrderToCart]);
+
   const persistStockCount = useCallback(
     async (record) => {
       const { savedCount, updatedCounts } = await posService.saveStockCount(record, dbMode === 'supabase');
@@ -1591,6 +1617,35 @@ export function POSProvider({ children }) {
       clearInterval(timer);
     };
   }, []);
+
+  // ซิงค์ข้อมูลข้ามแท็บเบราว์เซอร์เมื่อเปิด index.html (หน้าร้าน) คู่กับ admin.html (หลังร้าน)
+  useEffect(() => {
+    const handleStorageChange = (e) => {
+      if (!e.key) return;
+      if (e.key === SESSION_STORAGE_KEY) {
+        try {
+          const parsed = e.newValue ? JSON.parse(e.newValue) : null;
+          setSessionUserId(parsed?.userId || null);
+        } catch {
+          setSessionUserId(null);
+        }
+      } else if (e.key === 'siampos_printer_settings_v1') {
+        setPrinterSettings(printerService.getSettings());
+      } else if (
+        e.key === 'siampos_products_v1' ||
+        e.key === 'siampos_categories_v1' ||
+        e.key === 'siampos_customers_v1' ||
+        e.key === 'siampos_wholesale_rules_v1' ||
+        e.key === 'siampos_special_rules_v1' ||
+        e.key === 'siampos_sales_orders_v1' ||
+        e.key === 'siampos_users_v1'
+      ) {
+        refreshData();
+      }
+    };
+    window.addEventListener('storage', handleStorageChange);
+    return () => window.removeEventListener('storage', handleStorageChange);
+  }, [refreshData]);
 
   const resetDemo = useCallback(async () => {
     posService.resetDemoData();

@@ -36,16 +36,9 @@ import {
 import { usePOS } from '../../context/POSContext';
 
 /**
- * รายการหน้าทั้งหมดสำหรับ Mobile Bottom Navigation
+ * รายการหน้าสำหรับ Mobile Bottom Navigation (เฉพาะหลังร้าน — ไม่มีเมนูขายหน้าร้าน)
  */
 export const NAV_ITEMS = [
-  {
-    id: 'pos',
-    label: 'ขายหน้าร้าน (POS)',
-    shortLabel: 'หน้าขาย',
-    icon: ShoppingCart,
-    description: 'คิดเงิน ปลีก-ส่ง สแกนบาร์โค้ด',
-  },
   {
     id: 'inventory',
     label: 'จัดการสินค้า',
@@ -77,21 +70,11 @@ export const NAV_ITEMS = [
 ];
 
 /**
- * โครงสร้างเมนู Sidebar (version beta 0.1.7):
- * - ยกเว้นเมนู "ขายหน้าร้าน" ที่กดเข้าหน้าขายได้ทันที
- * - เมนูอื่นๆ เป็น Menu Dropdown:
- *   1. คลังสินค้า -> จัดการสินค้า
- *   2. รายงาน -> ประวัติบิล, แดชบอร์ด
- *   3. ลูกค้า -> จัดการลูกค้า
+ * โครงสร้างเมนู Sidebar ของระบบหลังร้าน (admin.html):
+ * - เอาเมนู "ขายหน้าร้าน (POS)" ออกจาก Sidebar (การสลับไปหน้าขายใช้ปุ่มบน Header หรือหน้าเลือกโหมด)
+ * - เมนูทั้งหมดเป็น Menu Dropdown ของระบบหลังร้าน
  */
 export const SIDEBAR_MENU_GROUPS = [
-  {
-    id: 'pos',
-    label: 'ขายหน้าร้าน (POS)',
-    description: 'คิดเงิน ปลีก-ส่ง สแกนบาร์โค้ด',
-    icon: ShoppingCart,
-    isDropdown: false,
-  },
   {
     id: 'group-inventory',
     label: 'คลังสินค้า',

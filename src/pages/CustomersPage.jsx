@@ -123,7 +123,7 @@ export default function CustomersPage({ onNavigateToPOS }) {
 
   const handleStartOrderForCustomer = (cus) => {
     selectCustomer(cus);
-    if (onNavigateToPOS) onNavigateToPOS();
+    if (onNavigateToPOS) onNavigateToPOS(cus);
   };
 
   return (

@@ -1,0 +1,204 @@
+import React, { useState, useEffect } from 'react';
+import { CheckCircle2, AlertCircle, Info } from 'lucide-react';
+import { POSProvider, usePOS } from './context/POSContext';
+import { posService } from './services/posService';
+import Sidebar from './components/layout/Sidebar';
+import Header from './components/layout/Header';
+import MobileNav from './components/layout/MobileNav';
+import ModeSelectorScreen from './components/layout/ModeSelectorScreen';
+import InventoryPage from './pages/InventoryPage';
+import StockImportPage from './pages/StockImportPage';
+import PricingTierPage from './pages/PricingTierPage';
+import OrdersPage from './pages/OrdersPage';
+import CustomersPage from './pages/CustomersPage';
+import DashboardPage from './pages/DashboardPage';
+import SuppliersPage from './pages/SuppliersPage';
+import AccountsReceivablePage from './pages/AccountsReceivablePage';
+import StockLedgerPage from './pages/StockLedgerPage';
+import ReorderPage from './pages/ReorderPage';
+import SalesTaxReportPage from './pages/SalesTaxReportPage';
+import SettingsPage from './pages/SettingsPage';
+import StockCountPage from './pages/StockCountPage';
+import LotsPage from './pages/LotsPage';
+import WarehousesPage from './pages/WarehousesPage';
+import SalesOrdersPage from './pages/SalesOrdersPage';
+import LoginScreen from './components/auth/LoginScreen';
+import { ADMIN_TABS, SETTINGS_TABS } from './utils/rbac';
+
+const ACTIVE_TAB_STORAGE_KEY = 'siampos_active_tab_v1';
+const VALID_ADMIN_TABS = new Set(ADMIN_TABS);
+
+function AdminAppContent() {
+  // จดจำหน้าหลังร้านปัจจุบันไว้ใน localStorage เพื่อให้กด Refresh แล้วอยู่หน้าเดิม
+  const [activeTab, setActiveTab] = useState(() => {
+    try {
+      const savedTab = localStorage.getItem(ACTIVE_TAB_STORAGE_KEY);
+      if (savedTab && VALID_ADMIN_TABS.has(savedTab)) {
+        return savedTab;
+      }
+    } catch {
+      // ignore storage errors
+    }
+    return 'dashboard';
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(ACTIVE_TAB_STORAGE_KEY, activeTab);
+    } catch {
+      // ignore storage errors
+    }
+  }, [activeTab]);
+
+  // ซ่อน/ย่อ Sidebar เป็นค่าเริ่มต้น (false = โหมดย่อแสดงเฉพาะไอคอน, true = โหมดแสดงเต็ม)
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [showModeSelector, setShowModeSelector] = useState(false);
+  const { toast, authEnabled, currentUser, canTab } = usePOS();
+
+  // ถ้าบทบาทของผู้ใช้เข้าหน้านี้ไม่ได้ ให้ย้ายไปหน้าหลังร้านแรกที่มีสิทธิ์
+  useEffect(() => {
+    if (!canTab(activeTab)) {
+      const firstAllowed = [...VALID_ADMIN_TABS].find((tab) => canTab(tab));
+      if (firstAllowed) {
+        setActiveTab(firstAllowed);
+      } else {
+        setShowModeSelector(true);
+      }
+    }
+  }, [activeTab, canTab]);
+
+  if (authEnabled && !currentUser) {
+    return <LoginScreen />;
+  }
+
+  const navigateToPOS = () => {
+    try {
+      sessionStorage.setItem('siampos_entry_chosen_v1', 'pos');
+    } catch {
+      // ignore storage errors
+    }
+    window.location.href = './index.html?mode=pos';
+  };
+
+  if (showModeSelector) {
+    return (
+      <ModeSelectorScreen
+        onSelectPOS={navigateToPOS}
+        onSelectAdmin={() => setShowModeSelector(false)}
+      />
+    );
+  }
+
+  return (
+    <div className="h-[100dvh] w-screen overflow-hidden flex bg-slate-50 text-slate-900">
+      {/* แถบเมนูด้านซ้ายของระบบหลังร้าน (ไม่มีเมนูขายหน้าร้าน) */}
+      <Sidebar
+        activeTab={activeTab}
+        setActiveTab={setActiveTab}
+        isOpen={isSidebarOpen}
+        onToggleSidebar={() => setIsSidebarOpen((prev) => !prev)}
+      />
+
+      {/* พื้นที่หลักของระบบหลังร้าน ความสูงพอดีกับจอ (100dvh) */}
+      <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden">
+        <Header
+          mode="admin"
+          activeTab={activeTab}
+          setActiveTab={setActiveTab}
+          isSidebarOpen={isSidebarOpen}
+          onToggleSidebar={() => setIsSidebarOpen((prev) => !prev)}
+          onOpenModeSelector={() => setShowModeSelector(true)}
+        />
+
+        <main className="flex-1 flex overflow-hidden relative">
+          {activeTab === 'inventory' && <InventoryPage />}
+          {activeTab === 'stock-import' && <StockImportPage />}
+          {activeTab === 'wholesale-pricing' && (
+            <PricingTierPage key="wholesale" mode="wholesale" />
+          )}
+          {activeTab === 'special-pricing' && (
+            <PricingTierPage key="special" mode="special" />
+          )}
+          {activeTab === 'orders' && <OrdersPage />}
+          {activeTab === 'customers' && (
+            <CustomersPage
+              onNavigateToPOS={(cus) => {
+                if (cus?.id) {
+                  posService.setPendingPOSAction({
+                    type: 'customer',
+                    customerId: cus.id,
+                  });
+                }
+                navigateToPOS();
+              }}
+            />
+          )}
+          {activeTab === 'dashboard' && (
+            <DashboardPage onNavigate={(tab) => setActiveTab(tab)} />
+          )}
+          {activeTab === 'suppliers' && <SuppliersPage />}
+          {activeTab === 'receivables' && <AccountsReceivablePage />}
+          {activeTab === 'sales-orders' && (
+            <SalesOrdersPage
+              onGoToPOS={(so) => {
+                if (so?.id) {
+                  posService.setPendingPOSAction({
+                    type: 'salesOrder',
+                    salesOrderId: so.id,
+                  });
+                }
+                navigateToPOS();
+              }}
+            />
+          )}
+          {activeTab === 'stock-ledger' && <StockLedgerPage />}
+          {activeTab === 'reorder' && <ReorderPage />}
+          {activeTab === 'sales-tax' && <SalesTaxReportPage />}
+          {activeTab === 'stock-count' && <StockCountPage />}
+          {activeTab === 'lots' && <LotsPage />}
+          {activeTab === 'warehouses' && <WarehousesPage />}
+          {SETTINGS_TABS.includes(activeTab) && (
+            <SettingsPage section={activeTab} />
+          )}
+        </main>
+
+        {/* แถบเมนูด้านล่าง (Smartphone & Tablet Bottom Nav — เฉพาะเมนูหลังร้าน) */}
+        <MobileNav activeTab={activeTab} setActiveTab={setActiveTab} />
+      </div>
+
+      {/* ระบบแจ้งเตือน Toast ลอยมุมขวาบน */}
+      {toast && (
+        <div className="fixed top-3 right-3 z-[80] max-w-sm pointer-events-none">
+          <div
+            className={`px-4 py-2.5 rounded-2xl shadow-lg border flex items-center gap-2 text-xs sm:text-sm font-bold ${
+              toast.type === 'error'
+                ? 'bg-rose-600 text-white border-rose-500'
+                : toast.type === 'warning'
+                ? 'bg-amber-500 text-slate-950 border-amber-400'
+                : toast.type === 'info'
+                ? 'bg-slate-900 text-white border-slate-700'
+                : 'bg-emerald-600 text-white border-emerald-500'
+            }`}
+          >
+            {toast.type === 'error' || toast.type === 'warning' ? (
+              <AlertCircle className="w-4 h-4 shrink-0" />
+            ) : toast.type === 'info' ? (
+              <Info className="w-4 h-4 shrink-0" />
+            ) : (
+              <CheckCircle2 className="w-4 h-4 shrink-0" />
+            )}
+            <span>{toast.message}</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default function AdminApp() {
+  return (
+    <POSProvider scope="admin">
+      <AdminAppContent />
+    </POSProvider>
+  );
+}

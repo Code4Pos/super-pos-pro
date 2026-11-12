@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import {
   Store,
+  Boxes,
+  LayoutGrid,
   RefreshCw,
   Database,
   TrendingUp,
@@ -18,13 +20,17 @@ import {
 } from 'lucide-react';
 import { usePOS } from '../../context/POSContext';
 import { formatCurrency } from '../../utils/formatters';
-import { ROLES, SETTINGS_TABS } from '../../utils/rbac';
+import { ROLES, SETTINGS_TABS, canAccessAnyAdminTab } from '../../utils/rbac';
+
+const ACTIVE_TAB_STORAGE_KEY = 'siampos_active_tab_v1';
 
 export default function Header({
-  activeTab,
+  mode = 'admin', // 'pos' | 'admin'
+  activeTab = 'pos',
   setActiveTab,
-  isSidebarOpen,
+  isSidebarOpen = false,
   onToggleSidebar,
+  onOpenModeSelector,
 }) {
   const {
     orders,
@@ -44,10 +50,36 @@ export default function Header({
     canTab,
   } = usePOS();
 
+  const isPosPage = mode === 'pos';
+  const canEnterPOS = canTab('pos');
+  const canEnterAdmin = canAccessAnyAdminTab(currentUser);
+
   // ปุ่มฟันเฟืองพาไปหน้าตั้งค่าเครื่องพิมพ์ (หรือหน้าตั้งค่าแรกที่บทบาทนี้เข้าได้)
   const settingsTab = canTab('settings-printer')
     ? 'settings-printer'
     : SETTINGS_TABS.find((tab) => canTab(tab));
+
+  const navigateToAdminTab = (targetTab = 'dashboard') => {
+    if (setActiveTab && !isPosPage) {
+      setActiveTab(targetTab);
+      return;
+    }
+    try {
+      localStorage.setItem(ACTIVE_TAB_STORAGE_KEY, targetTab);
+    } catch {
+      // ignore storage errors
+    }
+    window.location.href = './admin.html';
+  };
+
+  const navigateToPOS = () => {
+    try {
+      sessionStorage.setItem('siampos_entry_chosen_v1', 'pos');
+    } catch {
+      // ignore storage errors
+    }
+    window.location.href = './index.html?mode=pos';
+  };
 
   const [isFullscreen, setIsFullscreen] = useState(false);
 
@@ -105,71 +137,96 @@ export default function Header({
 
   return (
     <header className="h-14 bg-white border-b border-slate-200 px-3 sm:px-4 flex items-center justify-between shrink-0 z-20 select-none">
-      {/* ด้านซ้าย: ปุ่มแสดง/ซ่อน Sidebar + ปุ่มกลับหน้าขาย (รูปร้านค้า) + ชื่อหน้า + Version */}
+      {/* ด้านซ้าย: ปุ่มแสดง/ซ่อน Sidebar (เฉพาะหลังร้าน) + ปุ่มเลือกโหมด + ปุ่มสลับหน้าร้าน/หลังร้าน + ชื่อหน้า */}
       <div className="flex items-center gap-2 min-w-0">
-        {/* 1. ปุ่มสลับแสดง/ซ่อน Sidebar บนหน้าจอ Desktop */}
-        <button
-          type="button"
-          onClick={onToggleSidebar}
-          className="hidden lg:flex items-center justify-center w-9 h-9 rounded-xl border border-slate-200 hover:bg-slate-100 text-slate-700 shrink-0"
-          title={isSidebarOpen ? 'ซ่อนแถบเมนูด้านซ้าย' : 'แสดงแถบเมนูด้านซ้าย'}
-        >
-          {isSidebarOpen ? (
-            <PanelLeftClose className="w-4 h-4" />
-          ) : (
-            <PanelLeftOpen className="w-4 h-4 text-indigo-600" />
-          )}
-        </button>
+        {/* 1. ปุ่มสลับแสดง/ซ่อน Sidebar เฉพาะหน้าหลังร้าน (admin.html) */}
+        {!isPosPage && onToggleSidebar && (
+          <button
+            type="button"
+            onClick={onToggleSidebar}
+            className="hidden lg:flex items-center justify-center w-9 h-9 rounded-xl border border-slate-200 hover:bg-slate-100 text-slate-700 shrink-0"
+            title={isSidebarOpen ? 'ซ่อนแถบเมนูด้านซ้าย' : 'แสดงแถบเมนูด้านซ้าย'}
+          >
+            {isSidebarOpen ? (
+              <PanelLeftClose className="w-4 h-4" />
+            ) : (
+              <PanelLeftOpen className="w-4 h-4 text-indigo-600" />
+            )}
+          </button>
+        )}
 
-        {/* 2. ปุ่ม "กลับหน้าขาย" ถัดจากปุ่มแสดง/ซ่อนเมนู ใส่ไอคอนรูปร้านค้า (Store) */}
-        <button
-          type="button"
-          onClick={() => setActiveTab('pos')}
-          className={`flex items-center gap-1.5 px-3 h-9 rounded-xl font-bold text-xs transition-colors shrink-0 ${
-            activeTab === 'pos'
-              ? 'bg-indigo-600 text-white shadow-2xs'
-              : 'bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200'
-          }`}
-          title="กลับหน้าขายหน้าร้าน (POS)"
-        >
-          <Store className="w-4 h-4 shrink-0" />
-          <span>กลับหน้าขาย</span>
-        </button>
+        {/* 2. ปุ่มเปิดหน้าเลือกโหมด (หน้าร้าน / หลังร้าน) */}
+        {onOpenModeSelector && (
+          <button
+            type="button"
+            onClick={onOpenModeSelector}
+            className="flex items-center justify-center w-9 h-9 rounded-xl border border-slate-200 hover:bg-slate-100 text-slate-700 shrink-0"
+            title="กลับหน้าเลือกโหมด (หน้าร้าน / หลังร้าน)"
+          >
+            <LayoutGrid className="w-4 h-4 text-slate-700" />
+          </button>
+        )}
+
+        {/* 3. ปุ่มสลับข้ามระหว่าง หน้าร้าน (index.html) <-> หลังร้าน (admin.html) */}
+        {isPosPage ? (
+          canEnterAdmin && (
+            <button
+              type="button"
+              onClick={() => navigateToAdminTab('dashboard')}
+              className="flex items-center gap-1.5 px-3 h-9 rounded-xl font-bold text-xs bg-emerald-600 hover:bg-emerald-700 text-white shadow-2xs transition-colors shrink-0"
+              title="สลับไปหน้าจัดการหลังร้าน (admin.html)"
+            >
+              <Boxes className="w-4 h-4 shrink-0" />
+              <span>จัดการหลังร้าน</span>
+            </button>
+          )
+        ) : (
+          canEnterPOS && (
+            <button
+              type="button"
+              onClick={navigateToPOS}
+              className="flex items-center gap-1.5 px-3 h-9 rounded-xl font-bold text-xs bg-indigo-600 hover:bg-indigo-700 text-white shadow-2xs transition-colors shrink-0"
+              title="สลับไปหน้าขายหน้าร้าน (index.html)"
+            >
+              <Store className="w-4 h-4 shrink-0" />
+              <span>ไปหน้าขายหน้าร้าน</span>
+            </button>
+          )
+        )}
 
         <div className="min-w-0 ml-1">
           <div className="flex items-center gap-1.5 flex-wrap">
             <h2 className="font-bold text-slate-800 text-xs sm:text-sm md:text-base leading-tight truncate">
-              {activeTab === 'pos' && 'ขายหน้าร้าน (POS)'}
-              {activeTab === 'inventory' && 'คลังสินค้า › จัดการสินค้า'}
-              {activeTab === 'stock-import' && 'คลังสินค้า › นำเข้าสินค้า'}
-              {activeTab === 'stock-ledger' && 'คลังสินค้า › ความเคลื่อนไหวสต็อก'}
-              {activeTab === 'stock-count' && 'คลังสินค้า › ตรวจนับสต็อก'}
-              {activeTab === 'lots' && 'คลังสินค้า › Lot / วันหมดอายุ'}
-              {activeTab === 'warehouses' && 'คลังสินค้า › คลังสินค้า & โอนย้าย'}
-              {activeTab === 'reorder' && 'คลังสินค้า › แนะนำสั่งซื้อ (PO)'}
-              {activeTab === 'wholesale-pricing' && 'คลังสินค้า › ราคาขายส่ง'}
-              {activeTab === 'special-pricing' && 'คลังสินค้า › ราคาพิเศษ'}
-              {activeTab === 'orders' && 'รายงาน › ประวัติบิล'}
-              {activeTab === 'dashboard' && 'รายงาน › แดชบอร์ด'}
-              {activeTab === 'sales-tax' && 'รายงาน › รายงานภาษีขาย'}
-              {activeTab === 'settings-shop' && 'ตั้งค่า › ข้อมูลร้าน'}
-              {activeTab === 'settings-tax' && 'ตั้งค่า › ภาษี (VAT)'}
-              {activeTab === 'settings-payment' && 'ตั้งค่า › การชำระเงิน'}
-              {activeTab === 'settings-printer' && 'ตั้งค่า › เครื่องพิมพ์'}
-              {activeTab === 'settings-users' && 'ตั้งค่า › ผู้ใช้งาน & สิทธิ์'}
-              {activeTab === 'customers' && 'ลูกค้า › จัดการลูกค้า'}
-              {activeTab === 'suppliers' && 'บริหาร › จัดการผู้ผลิต'}
-              {activeTab === 'receivables' && 'ลูกค้า › ลูกหนี้ & วางบิล'}
-              {activeTab === 'sales-orders' && 'ลูกค้า › ใบสั่งขายส่ง / จองสินค้า'}
+              {isPosPage && 'ขายหน้าร้าน (POS)'}
+              {!isPosPage && activeTab === 'inventory' && 'คลังสินค้า › จัดการสินค้า'}
+              {!isPosPage && activeTab === 'stock-import' && 'คลังสินค้า › นำเข้าสินค้า'}
+              {!isPosPage && activeTab === 'stock-ledger' && 'คลังสินค้า › ความเคลื่อนไหวสต็อก'}
+              {!isPosPage && activeTab === 'stock-count' && 'คลังสินค้า › ตรวจนับสต็อก'}
+              {!isPosPage && activeTab === 'lots' && 'คลังสินค้า › Lot / วันหมดอายุ'}
+              {!isPosPage && activeTab === 'warehouses' && 'คลังสินค้า › คลังสินค้า & โอนย้าย'}
+              {!isPosPage && activeTab === 'reorder' && 'คลังสินค้า › แนะนำสั่งซื้อ (PO)'}
+              {!isPosPage && activeTab === 'wholesale-pricing' && 'คลังสินค้า › ราคาขายส่ง'}
+              {!isPosPage && activeTab === 'special-pricing' && 'คลังสินค้า › ราคาพิเศษ'}
+              {!isPosPage && activeTab === 'orders' && 'รายงาน › ประวัติบิล'}
+              {!isPosPage && activeTab === 'dashboard' && 'รายงาน › แดชบอร์ด'}
+              {!isPosPage && activeTab === 'sales-tax' && 'รายงาน › รายงานภาษีขาย'}
+              {!isPosPage && activeTab === 'settings-shop' && 'ตั้งค่า › ข้อมูลร้าน'}
+              {!isPosPage && activeTab === 'settings-tax' && 'ตั้งค่า › ภาษี (VAT)'}
+              {!isPosPage && activeTab === 'settings-payment' && 'ตั้งค่า › การชำระเงิน'}
+              {!isPosPage && activeTab === 'settings-printer' && 'ตั้งค่า › เครื่องพิมพ์'}
+              {!isPosPage && activeTab === 'settings-users' && 'ตั้งค่า › ผู้ใช้งาน & สิทธิ์'}
+              {!isPosPage && activeTab === 'customers' && 'ลูกค้า › จัดการลูกค้า'}
+              {!isPosPage && activeTab === 'suppliers' && 'บริหาร › จัดการผู้ผลิต'}
+              {!isPosPage && activeTab === 'receivables' && 'ลูกค้า › ลูกหนี้ & วางบิล'}
+              {!isPosPage && activeTab === 'sales-orders' && 'ลูกค้า › ใบสั่งขายส่ง / จองสินค้า'}
             </h2>
 
-            {/* ป้าย Version Beta 0.1.3 */}
             <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-indigo-50 text-indigo-700 border border-indigo-200 shrink-0">
               {appVersion}
             </span>
 
             <span
-              className={`lg:hidden inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold shrink-0 ${
+              className={`${isPosPage ? 'inline-flex' : 'lg:hidden inline-flex'} items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold shrink-0 ${
                 dbMode === 'supabase'
                   ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
                   : 'bg-amber-50 text-amber-700 border border-amber-200'
@@ -185,7 +242,10 @@ export default function Header({
       {/* ด้านขวา: ยอดขายวันนี้ + เตือนสต็อก + ไอคอนเครื่องพิมพ์พร้อมจุดสีสถานะ + ปุ่ม Full Screen + รีเฟรช */}
       <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
         <button
-          onClick={() => setActiveTab('dashboard')}
+          type="button"
+          onClick={() => {
+            if (canTab('dashboard')) navigateToAdminTab('dashboard');
+          }}
           className="hidden md:flex items-center gap-2 px-2.5 py-1 rounded-xl bg-indigo-50/90 hover:bg-indigo-100/80 border border-indigo-100 text-left"
           title="ดูแดชบอร์ดสรุปยอดขาย"
         >
@@ -206,7 +266,9 @@ export default function Header({
         {activeSalesOrder && (
           <button
             type="button"
-            onClick={() => setActiveTab('pos')}
+            onClick={() => {
+              if (!isPosPage) navigateToPOS();
+            }}
             className="hidden sm:flex items-center gap-1 px-2.5 py-1.5 rounded-xl border border-indigo-200 bg-indigo-50 text-indigo-700 text-xs font-semibold"
             title="ตะกร้าปัจจุบันเปิดจากใบสั่งขายนี้"
           >
@@ -246,11 +308,12 @@ export default function Header({
           </button>
         )}
 
-        {lowStockCount > 0 && (
+        {lowStockCount > 0 && canTab('inventory') && (
           <button
-            onClick={() => setActiveTab('inventory')}
+            type="button"
+            onClick={() => navigateToAdminTab('inventory')}
             className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200/80 text-xs font-semibold"
-            title="คลิกเพื่อดูสินค้าใกล้หมดสต็อก"
+            title="คลิกเพื่อดูสินค้าใกล้หมดสต็อกในหน้าคลังสินค้า"
           >
             <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
             <span className="hidden xl:inline">สต็อกต่ำ</span>
@@ -264,7 +327,7 @@ export default function Header({
         {settingsTab && (
           <button
             type="button"
-            onClick={() => setActiveTab(settingsTab)}
+            onClick={() => navigateToAdminTab(settingsTab)}
             className="relative w-10 h-9 rounded-xl border border-slate-200 hover:bg-slate-100 text-slate-700 flex items-center justify-center"
             title="ตั้งค่าระบบ (จุดสี = สถานะเครื่องพิมพ์)"
           >
@@ -311,6 +374,7 @@ export default function Header({
         </button>
 
         <button
+          type="button"
           onClick={refreshData}
           disabled={loading}
           className="w-9 h-9 flex items-center justify-center rounded-xl border border-slate-200 hover:bg-slate-100 text-slate-600"
@@ -321,7 +385,6 @@ export default function Header({
           />
         </button>
       </div>
-
     </header>
   );
 }

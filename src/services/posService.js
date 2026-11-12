@@ -37,6 +37,7 @@ const STORAGE_KEYS = {
   OFFLINE_FAILED: 'siampos_offline_failed_v1',
   SUPABASE_CACHE_AT: 'siampos_supabase_cache_at_v1',
   LOT_CONSUMPTIONS: 'siampos_lot_consumptions_v1',
+  PENDING_POS_ACTION: 'siampos_pending_pos_action_v1',
   SUPPLIERS: 'siampos_suppliers_v1',
   STOCK_IMPORTS: 'siampos_stock_imports_v1',
   ORDERS: 'siampos_orders_v1',
@@ -786,7 +787,194 @@ async function applyImportItemsToStock(
 
 export const posService = {
   /**
-   * โหลดข้อมูลทั้งหมดของระบบตอนเปิดแอป
+   * โหลดเฉพาะข้อมูลที่จำเป็นสำหรับ "หน้าขายหน้าร้าน (POS)"
+   * ไม่โหลดข้อมูลหลังร้านที่ไม่จำเป็น (เช่น ใบวางบิล, ประวัติความเคลื่อนไหวสต็อก, ใบกำกับภาษี, ใบลดหนี้, ใบตรวจนับ, คลัง/ใบโอน, ผู้ผลิต, ใบนำเข้า, ถังขยะ)
+   * เพื่อให้เปิดหน้าขายได้รวดเร็วและใช้หน่วยความจำน้อยที่สุดบนเครื่อง POS (เช่น Sunmi T2)
+   */
+  async fetchPOSData() {
+    const localTrash = getLocal(STORAGE_KEYS.TRASH_PRODUCTS, []);
+    const localMeta = getLocal(STORAGE_KEYS.PRODUCT_META, {});
+    const localCustomerMeta = getLocal(STORAGE_KEYS.CUSTOMER_META, {});
+    const rawWholesaleRules = getLocal(STORAGE_KEYS.WHOLESALE_RULES, []);
+    const rawSpecialRules = getLocal(STORAGE_KEYS.SPECIAL_RULES, []);
+    const specialRules = normalizeSpecialRules(rawSpecialRules);
+
+    let offlineFallback = false;
+    if (isSupabaseConfigured && supabase) {
+      try {
+        await this.flushOfflineQueue();
+        const [catRes, prodRes, cusRes, ordRes] = await Promise.all([
+          supabase.from('categories').select('*').order('created_at', { ascending: true }),
+          supabase.from('products').select('*').order('name', { ascending: true }),
+          supabase.from('customers').select('*').order('created_at', { ascending: false }),
+          supabase.from('orders').select('*').order('created_at', { ascending: false }).limit(200),
+        ]);
+
+        if (catRes.error) throw catRes.error;
+        if (prodRes.error) throw prodRes.error;
+        if (cusRes.error) throw cusRes.error;
+        if (ordRes.error) throw ordRes.error;
+
+        const categories = [
+          { id: 'all', name: 'สินค้าทั้งหมด', icon: 'LayoutGrid', color: 'indigo' },
+          ...(catRes.data || []).filter((c) => c.id !== 'all'),
+        ];
+
+        const trashIds = new Set(localTrash.map((t) => t.id));
+        const supaList = (prodRes.data || [])
+          .filter((p) => !trashIds.has(p.id))
+          .map((p) => {
+            const meta = localMeta[p.id] || localMeta[p.sku] || {};
+            return {
+              ...p,
+              is_wholesale_enabled:
+                p.is_wholesale_enabled !== undefined
+                  ? p.is_wholesale_enabled
+                  : meta.is_wholesale_enabled,
+              selling_units:
+                Array.isArray(p.selling_units) && p.selling_units.length > 0
+                  ? p.selling_units
+                  : meta.selling_units || [],
+              linked_product_id:
+                p.linked_product_id || meta.linked_product_id || null,
+              linked_deduct_qty:
+                p.linked_deduct_qty || meta.linked_deduct_qty || 1,
+              lead_time_days: p.lead_time_days ?? meta.lead_time_days,
+              safety_stock: p.safety_stock ?? meta.safety_stock,
+              track_lots: p.track_lots ?? meta.track_lots ?? false,
+              lot_strategy: p.lot_strategy ?? meta.lot_strategy ?? 'FEFO',
+            };
+          });
+
+        const existingLocalProds = getLocal(STORAGE_KEYS.PRODUCTS, []);
+        const supaIds = new Set(supaList.map((p) => p.id));
+        const supaSkus = new Set(supaList.map((p) => p.sku));
+        const extraLocalOnly = existingLocalProds.filter(
+          (lp) =>
+            String(lp.id).startsWith('prod-') &&
+            !trashIds.has(lp.id) &&
+            !supaIds.has(lp.id) &&
+            !supaSkus.has(lp.sku)
+        );
+
+        const syncedSupaProducts = normalizeAndSyncProducts([
+          ...extraLocalOnly,
+          ...supaList,
+        ]);
+        setLocal(STORAGE_KEYS.PRODUCTS, syncedSupaProducts);
+
+        const wholesaleRules = syncInitialWholesaleRulesWithProducts(
+          syncedSupaProducts,
+          rawWholesaleRules
+        );
+
+        const mergedCustomers = (cusRes.data || []).map((c) =>
+          mergeCustomerMeta(c, localCustomerMeta)
+        );
+
+        // โหลดเฉพาะตารางย่อยที่ต้องใช้ในหน้าขาย:
+        // - customer_payments: คำนวณวงเงินเครดิตคงเหลือเมื่อขายเชื่อ
+        // - app_users: ล็อกอิน PIN และตรวจสิทธิ์
+        // - product_lots: ตัดล็อต FEFO/FIFO ตอนขาย
+        // - sales_orders: คำนวณยอดจอง ATP และปิดใบจองเมื่อเปิดบิลขาย
+        const [customerPayments, remoteUsers, remoteLots, remoteSalesOrders] = await Promise.all([
+          loadRemoteWithLocal('customer_payments', STORAGE_KEYS.CUSTOMER_PAYMENTS),
+          loadRemoteWithLocal('app_users', STORAGE_KEYS.USERS),
+          loadRemoteWithLocal('product_lots', STORAGE_KEYS.PRODUCT_LOTS, 5000),
+          loadRemoteWithLocal('sales_orders', STORAGE_KEYS.SALES_ORDERS, 1000),
+        ]);
+
+        const salesOrders = mergeByLatestUpdate(remoteSalesOrders, getLocal(STORAGE_KEYS.SALES_ORDERS, []));
+        setLocal(STORAGE_KEYS.SALES_ORDERS, salesOrders);
+        const productLots = mergeByLatestUpdate(remoteLots, getLocal(STORAGE_KEYS.PRODUCT_LOTS, []));
+        setLocal(STORAGE_KEYS.PRODUCT_LOTS, productLots);
+        const users = mergeByLatestUpdate(remoteUsers, getLocal(STORAGE_KEYS.USERS, []));
+        setLocal(STORAGE_KEYS.USERS, users);
+
+        if (categories.length > 1) setLocal(STORAGE_KEYS.CATEGORIES, categories);
+        setLocal(STORAGE_KEYS.CUSTOMERS, cusRes.data || []);
+        setLocal(STORAGE_KEYS.ORDERS, ordRes.data || []);
+        setLocal(STORAGE_KEYS.SUPABASE_CACHE_AT, new Date().toISOString());
+
+        return {
+          mode: 'supabase',
+          categories: categories.length > 1 ? categories : INITIAL_CATEGORIES,
+          units: [],
+          products: syncedSupaProducts,
+          trashedProducts: [],
+          customers: mergedCustomers,
+          customerPayments,
+          billingNotes: [],
+          stockLedger: [],
+          taxInvoices: [],
+          taxNotes: [],
+          stockCounts: [],
+          warehouses: [],
+          inventoryBalances: [],
+          stockTransfers: [],
+          salesOrders,
+          productLots,
+          users,
+          suppliers: [],
+          stockImports: [],
+          orders: ordRes.data || [],
+          wholesaleRules,
+          specialRules,
+        };
+      } catch (err) {
+        offlineFallback = isNetworkError(err) && Boolean(getLocal(STORAGE_KEYS.SUPABASE_CACHE_AT, null));
+        console.warn(
+          offlineFallback
+            ? 'Supabase offline, using cached POS data:'
+            : 'Supabase connection error, falling back to Demo Mode:',
+          err.message
+        );
+      }
+    }
+
+    const rawProducts = getLocal(STORAGE_KEYS.PRODUCTS, INITIAL_PRODUCTS);
+    const normalized = normalizeAndSyncProducts(rawProducts);
+    setLocal(STORAGE_KEYS.PRODUCTS, normalized);
+
+    const wholesaleRules = syncInitialWholesaleRulesWithProducts(
+      normalized,
+      rawWholesaleRules
+    );
+
+    const localCustomers = getLocal(STORAGE_KEYS.CUSTOMERS, INITIAL_CUSTOMERS).map(
+      (c) => mergeCustomerMeta(c, localCustomerMeta)
+    );
+
+    return {
+      mode: offlineFallback ? 'supabase' : 'demo',
+      offline: offlineFallback,
+      categories: getLocal(STORAGE_KEYS.CATEGORIES, INITIAL_CATEGORIES),
+      units: [],
+      products: normalized,
+      trashedProducts: [],
+      customers: localCustomers,
+      customerPayments: getLocal(STORAGE_KEYS.CUSTOMER_PAYMENTS, []),
+      billingNotes: [],
+      stockLedger: [],
+      taxInvoices: [],
+      taxNotes: [],
+      stockCounts: [],
+      warehouses: [],
+      inventoryBalances: [],
+      stockTransfers: [],
+      salesOrders: getLocal(STORAGE_KEYS.SALES_ORDERS, []),
+      productLots: getLocal(STORAGE_KEYS.PRODUCT_LOTS, []),
+      users: getLocal(STORAGE_KEYS.USERS, []),
+      suppliers: [],
+      stockImports: [],
+      orders: getLocal(STORAGE_KEYS.ORDERS, INITIAL_ORDERS),
+      wholesaleRules,
+      specialRules,
+    };
+  },
+
+  /**
+   * โหลดข้อมูลทั้งหมดของระบบ (สำหรับหน้าจัดการหลังร้าน Admin)
    */
   async fetchAllData() {
     const localUnits = getLocal(STORAGE_KEYS.UNITS, INITIAL_UNITS);
@@ -3010,6 +3198,25 @@ export const posService = {
     setLocal(STORAGE_KEYS.STOCK_IMPORTS, updatedImports);
 
     return { savedImport, updatedImports, updatedProducts: syncedProducts };
+  },
+
+  /**
+   * ฝากคำสั่งเปิดบิลขายข้ามหน้า (จาก admin.html -> index.html)
+   * เช่น เปิดบิลขายให้ลูกค้าที่เลือก หรือเปิดบิลจากใบสั่งขายส่ง (Sales Order)
+   */
+  setPendingPOSAction(action) {
+    setLocal(STORAGE_KEYS.PENDING_POS_ACTION, action);
+  },
+
+  consumePendingPOSAction() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEYS.PENDING_POS_ACTION);
+      if (!raw) return null;
+      localStorage.removeItem(STORAGE_KEYS.PENDING_POS_ACTION);
+      return JSON.parse(raw);
+    } catch {
+      return null;
+    }
   },
 
   /**

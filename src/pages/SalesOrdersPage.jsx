@@ -46,7 +46,7 @@ export default function SalesOrdersPage({ onGoToPOS }) {
   const reservedSkuCount = new Set(reservedOrders.flatMap((so) => (so.items || []).map((i) => i.master_product_id))).size;
 
   const handleOpenInPOS = (so) => {
-    if (loadSalesOrderToCart(so)) onGoToPOS?.();
+    if (loadSalesOrderToCart(so)) onGoToPOS?.(so);
   };
 
   return (

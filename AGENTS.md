@@ -8,8 +8,11 @@
 ## 1. ภาพรวมโปรเจค
 
 - **Stack:** React 18 + Vite 5 + Tailwind CSS 3 + Supabase (JavaScript/JSX ล้วน ไม่มี TypeScript)
-- **ไม่มี router:** สลับหน้าด้วย `activeTab` ใน `src/App.jsx`
-- **Global state:** `src/context/POSContext.jsx` (context เดียว ใช้ผ่าน `usePOS()`)
+- **แยก 2 Entry `.html` (Multi-Page App):**
+  - **หน้าร้าน (POS):** `index.html` → `src/main.jsx` → `src/PosApp.jsx` (ไม่มี Sidebar/MobileNav, โหลดเฉพาะ `POSPage` และ `posService.fetchPOSData()`)
+  - **หลังร้าน (Admin):** `admin.html` → `src/main-admin.jsx` → `src/AdminApp.jsx` (สลับหน้าด้วย `activeTab`, Sidebar ไม่มีเมนูขายหน้าร้าน, โหลด `posService.fetchAllData()`)
+  - **หน้าเลือกโหมด:** `src/components/layout/ModeSelectorScreen.jsx` ให้เลือกระหว่างหน้าร้านกับหลังร้าน
+- **Global state:** `src/context/POSContext.jsx` (context เดียว ใช้ผ่าน `usePOS()`, รับ `scope="pos" | "admin"`)
 - **ชั้นข้อมูล:** `src/services/posService.js` — ใช้ Supabase เมื่อตั้งค่า `.env` แล้ว ถ้าไม่ได้ตั้งค่าจะ fallback ไป LocalStorage (Demo Mode)
 - **Schema:** `supabase/schema.sql` มีเฉพาะ `categories`, `units`, `products`, `customers`, `orders`, `order_items`
   ข้อมูล suppliers, stock imports, wholesale rules และ special rules ยังอยู่ใน LocalStorage เท่านั้น
@@ -39,25 +42,27 @@ npm run build    # ต้องผ่านก่อน commit ทุกคร�
 - ฟังก์ชันใน `posService` ที่เขียนข้อมูลจะรับพารามิเตอร์ `isSupabaseActive` และต้องทำงานได้ทั้งสองโหมด (Supabase และ LocalStorage)
 - ฟังก์ชันคำนวณราคาและจัดรูปแบบเงิน/เวลาอยู่ใน `src/utils/formatters.js` ห้ามคำนวณราคาซ้ำในที่อื่น
 
-## 4. การเพิ่มหน้าใหม่ (Tab)
+## 4. การเพิ่มหน้าใหม่ (Tab หลังร้าน)
 
 ต้องแก้ให้ครบทุกที่:
 
 1. `src/pages/<Name>Page.jsx`
-2. `src/App.jsx` — เพิ่มใน `VALID_TABS` และใน `<main>`
-3. `src/components/layout/Sidebar.jsx` — เมนู
-4. `src/components/layout/Header.jsx` — ชื่อหัวข้อของหน้า
-5. `src/components/layout/MobileNav.jsx` — ถ้าต้องแสดงบนมือถือ
+2. `src/utils/rbac.js` — เพิ่มใน `ADMIN_TABS` และ `ROLES`
+3. `src/AdminApp.jsx` — เพิ่มใน `<main>`
+4. `src/components/layout/Sidebar.jsx` — เมนู
+5. `src/components/layout/Header.jsx` — ชื่อหัวข้อของหน้า
+6. `src/components/layout/MobileNav.jsx` — ถ้าต้องแสดงบนมือถือ
 
 ## 5. เวอร์ชัน
 
-เมื่อปล่อยฟีเจอร์ ให้เพิ่มเวอร์ชันใน **3 ที่พร้อมกัน**:
+เมื่อปล่อยฟีเจอร์ ให้เพิ่มเวอร์ชันใน **4 ที่พร้อมกัน**:
 
 | ไฟล์ | รูปแบบ |
 |---|---|
-| `package.json` | `"version": "0.1.9-beta"` |
-| `index.html` | `<title>SiamPOS Pro (version beta 0.1.9) — ...` |
-| `src/context/POSContext.jsx` | `export const APP_VERSION = 'version beta 0.1.9';` |
+| `package.json` | `"version": "0.3.5-beta"` |
+| `index.html` | `<title>SiamPOS Pro (version beta 0.3.5) — ...` |
+| `admin.html` | `<title>SiamPOS Pro (version beta 0.3.5) — ...` |
+| `src/context/POSContext.jsx` | `export const APP_VERSION = 'version beta 0.3.5';` |
 
 ถ้า agent อีกตัวเพิ่งเพิ่มเวอร์ชันไปใน commit ที่ยังไม่ได้ push ให้ใช้เวอร์ชันนั้นต่อ ไม่ต้องเพิ่มซ้ำ
 
@@ -82,6 +87,7 @@ npm run build    # ต้องผ่านก่อน commit ทุกคร�
 > ให้ agent เขียนสั้นๆ เมื่อจบงานที่ยังไม่เสร็จ หรือเมื่อมีเรื่องที่อีกฝ่ายต้องรู้ (ลบรายการที่เสร็จแล้วทิ้ง)
 > รูปแบบ: `- [YYYY-MM-DD] (Claude|Gemini) สิ่งที่ทำ / สิ่งที่ค้าง / ไฟล์ที่เกี่ยวข้อง`
 
+- [2026-11-12] (Gemini) beta 0.3.5 (แยกหน้าร้าน `index.html` กับหลังร้าน `admin.html`): แยก Vite Multi-Page (`vite.config.js`) หน้าร้าน `index.html` → `PosApp.jsx` (ไม่มี Sidebar/MobileNav, โหลดเฉพาะ `POSPage` และ `posService.fetchPOSData()` ไม่โหลดข้อมูล/หน้าหลังร้าน) / หลังร้าน `admin.html` → `AdminApp.jsx` (Sidebar และ MobileNav เอาเมนูขายหน้าร้านออก) / หน้าเลือกโหมด `ModeSelectorScreen.jsx` เลือกระหว่างหน้าร้านกับหลังร้าน / `Header.jsx` มีปุ่มสลับหน้าร้าน ↔ หลังร้าน และปุ่มกลับหน้าเลือกโหมด / ส่งต่อคำสั่ง "เปิดบิลขาย" ข้ามหน้าจาก `CustomersPage` และ `SalesOrdersPage` ผ่าน `posService.setPendingPOSAction` / อัปเดต `public/sw.js` ให้แคช `admin.html` ด้วย
 - [2026-11-12] (Claude) beta 0.3.4 (Module 3 ส่วนที่เหลือ): ใบนำเข้ามี `warehouse_id` เลือกคลังที่รับเข้าได้ (`applyImportItemsToStock` → `addToWarehouseBalances`, ค่าเริ่มต้นหน้าร้าน) / ใบสั่งขายส่ง `salesOrders` (หน้า `sales-orders`, `SalesOrdersPage.jsx`, `components/salesOrder/SalesOrderModal.jsx`) สถานะ `reserved` > `fulfilled`|`cancelled` ผ่าน `saveSalesOrder` / **Reserved = ผลรวม `base_qty` (หน่วยฐานสินค้าหลัก) ของใบ reserved, ATP = stock - reserved** ฟังก์ชันอยู่ใน `src/utils/salesOrders.js` / จองเกิน ATP ไม่ได้ / "เปิดบิลขาย" โหลดเข้าตะกร้า (`loadSalesOrderToCart`, ต้องตะกร้าว่าง) แล้วปิดใบอัตโนมัติใน `checkoutOrder` (`activeSalesOrder`) / ขายหน้าร้านเกิน ATP แค่เตือน ไม่บล็อก / สิทธิ์ `sales_order` / ต้องรัน Migration beta 0.3.4 / ข้อจำกัด: ล็อตยังไม่แยกคลัง
 - [2026-11-12] (Claude) beta 0.3.3 (Module 3 หลายคลัง + โอนย้าย): สต็อกรวมยังอยู่ที่ `products.stock` / ยอดแยกคลังเป็นบัญชีย่อย `inventoryBalances` เก็บเฉพาะคลังที่ไม่ใช่หน้าร้าน + `wh-transit` / **ยอดหน้าร้าน (คลังขาย `wh-front`) = สต็อกรวม - คลังอื่น - ระหว่างโอน** ดังนั้นการขาย/นำเข้า/ปรับสต็อกเดิมไม่ต้องแก้และมีผลกับหน้าร้าน (ติดลบได้ = ต้องโอนเติม) / ฟังก์ชันล้วนใน `src/utils/warehouses.js` / ใบโอน `stockTransfers` 2 ขั้น `in_transit` > `received`|`cancelled` ผ่าน `saveStockTransfer` (ไม่บันทึก Ledger เพราะสต็อกรวมไม่เปลี่ยน) / หน้า `warehouses` (`WarehousesPage.jsx`, `components/warehouse/StockTransferModal.jsx`) / สิทธิ์ `transfer_stock`, `manage_warehouses` / ต้องรัน Migration beta 0.3.3 / ยังไม่ทำ: รับสินค้าเข้าคลังที่เลือก (ตอนนี้เข้าหน้าร้าน), Reserved stock/ATP, ล็อตแยกคลัง / ยกเลิกแผน e-Tax XML ตามที่ผู้ใช้สั่ง / `SearchableDropdown` มี `placement` ('auto' เปิดขึ้นบนเมื่อด้านล่างไม่พอ)
 - [2026-11-12] (Claude) beta 0.3.2 (Offline mode): บิลที่บันทึกตอนเน็ตหลุด (หรือ Supabase ตอบ network error) เข้าคิว `OFFLINE_QUEUE` ผ่าน `pushOrderToSupabase`/`enqueueOffline` ส่วน `stock_ledger`/`product_lots` ใช้ `upsertOrQueue` (id ฝั่งแอป ซิงค์ซ้ำได้) / `flushOfflineQueue` ซิงค์ตามลำดับ หยุดเมื่อยังเชื่อมไม่ได้ รายการที่ผิดจากข้อมูลย้ายไป `OFFLINE_FAILED` / ซิงค์อัตโนมัติตอน `fetchAllData`, event `online` และทุก 1 นาที, Header มีปุ่ม "ออฟไลน์/รอซิงค์ N" (`syncNow`) / เปิดแอปตอนออฟไลน์: ถ้าเคยโหลดข้อมูลจริง (`SUPABASE_CACHE_AT`) จะใช้แคชในเครื่องแบบ `mode: 'supabase'` + `offline: true` (ไม่ตกไป Demo) / PWA: `public/manifest.webmanifest`, `public/sw.js`, `public/icon.svg` ลงทะเบียน SW เฉพาะ build จริงใน `main.jsx` / ข้อจำกัด: ข้อมูลอื่นที่แก้ตอนออฟไลน์ (สินค้า ลูกค้า ใบนำเข้า ฯลฯ) ยังไม่เข้าคิว, ตัดสต็อกตอนซิงค์คิดจากยอดล่าสุดในฐานข้อมูล

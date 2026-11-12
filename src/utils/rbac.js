@@ -5,6 +5,26 @@
 
 const SETTINGS_TABS = ['settings-shop', 'settings-tax', 'settings-payment', 'settings-printer', 'settings-users'];
 
+export const ADMIN_TABS = [
+  'inventory',
+  'stock-import',
+  'wholesale-pricing',
+  'special-pricing',
+  'orders',
+  'customers',
+  'dashboard',
+  'suppliers',
+  'receivables',
+  'sales-orders',
+  'stock-ledger',
+  'reorder',
+  'sales-tax',
+  'stock-count',
+  'lots',
+  'warehouses',
+  ...SETTINGS_TABS,
+];
+
 export const ROLES = {
   admin: {
     label: 'ผู้ดูแลระบบ',
@@ -82,6 +102,10 @@ export function hasPermission(user, permission) {
 
 export function getAllowedTabs(user, allTabs = []) {
   return allTabs.filter((tab) => canAccessTab(user, tab));
+}
+
+export function canAccessAnyAdminTab(user) {
+  return ADMIN_TABS.some((tab) => canAccessTab(user, tab));
 }
 
 export { SETTINGS_TABS };
