@@ -5,10 +5,11 @@ import { calculateEffectiveUnitPrice } from '../utils/formatters';
 import { summarizeSplitPayments } from '../utils/payments';
 import { calculateCustomerCredit, checkCreditSale } from '../utils/credit';
 import { hasPermission, canAccessTab } from '../utils/rbac';
+import { validateTransfer } from '../utils/warehouses';
 
 const SESSION_STORAGE_KEY = 'siampos_session_v1';
 
-export const APP_VERSION = 'version beta 0.3.2';
+export const APP_VERSION = 'version beta 0.3.3';
 const HELD_BILLS_STORAGE_KEY = 'siampos_held_bills_v1';
 
 const POSContext = createContext(null);
@@ -32,6 +33,9 @@ export function POSProvider({ children }) {
   const [taxInvoices, setTaxInvoices] = useState([]);
   const [taxNotes, setTaxNotes] = useState([]);
   const [stockCounts, setStockCounts] = useState([]);
+  const [warehouses, setWarehouses] = useState([]);
+  const [inventoryBalances, setInventoryBalances] = useState([]);
+  const [stockTransfers, setStockTransfers] = useState([]);
   const [productLots, setProductLots] = useState([]);
 
   // ผู้ใช้งานและสิทธิ์ (RBAC): ถ้ายังไม่มีผู้ใช้ที่เปิดใช้งาน ระบบจะเปิดทุกเมนูแบบไม่ต้องล็อกอิน
@@ -150,6 +154,9 @@ export function POSProvider({ children }) {
       setTaxInvoices(data.taxInvoices || []);
       setTaxNotes(data.taxNotes || []);
       setStockCounts(data.stockCounts || []);
+      setWarehouses(data.warehouses || []);
+      setInventoryBalances(data.inventoryBalances || []);
+      setStockTransfers(data.stockTransfers || []);
       setProductLots(data.productLots || []);
       setUsers(data.users || []);
       setSuppliers(data.suppliers || []);
@@ -1057,6 +1064,87 @@ export function POSProvider({ children }) {
   );
 
   // ตรวจนับสต็อกแบบ Blind Count: สร้างใบนับ > บันทึกผลนับ > ส่งผล (บันทึกยอดในระบบ ณ ตอนส่ง) > อนุมัติปรับสต็อก
+  // ---------- คลังสินค้าหลายคลัง และใบโอนสต็อก (Module 3) ----------
+  const saveWarehouse = useCallback(
+    async (warehouse) => {
+      if (!String(warehouse.name || '').trim()) {
+        showToast('กรุณาระบุชื่อคลัง', 'error');
+        return false;
+      }
+      const updated = await posService.saveWarehouse(warehouse, dbMode === 'supabase');
+      setWarehouses(updated);
+      showToast(`บันทึกคลัง ${warehouse.name} แล้ว`, 'success');
+      return true;
+    },
+    [dbMode, showToast]
+  );
+
+  const applyTransferResult = useCallback((result) => {
+    setStockTransfers(result.transfers);
+    setInventoryBalances(result.balances);
+    return result.saved;
+  }, []);
+
+  const createStockTransfer = useCallback(
+    async ({ fromId, toId, items, note = '' }) => {
+      const error = validateTransfer({ fromId, toId, items }, products, inventoryBalances, warehouses);
+      if (error) {
+        showToast(error, 'error');
+        return null;
+      }
+      const nowIso = new Date().toISOString();
+      const record = {
+        id: `trf-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        // ใช้วันที่ตามเวลาเครื่อง (ไม่ใช่ UTC) เพื่อไม่ให้เลขที่ช่วงเช้ามืดเป็นวันก่อนหน้า
+        transfer_number: `TRF-${new Date().toLocaleDateString('sv-SE').slice(2).replace(/-/g, '')}-${Math.floor(100 + Math.random() * 900)}`,
+        from_warehouse_id: fromId,
+        to_warehouse_id: toId,
+        items: items
+          .filter((i) => Number(i.qty) > 0)
+          .map((i) => {
+            const p = products.find((x) => x.id === i.product_id);
+            return { product_id: i.product_id, product_name: p?.name || '', sku: p?.sku || '', unit: p?.unit || 'ชิ้น', qty: Number(i.qty) };
+          }),
+        note,
+        status: 'in_transit',
+        created_by_name: currentUser?.name || '',
+        created_at: nowIso,
+      };
+      try {
+        const saved = applyTransferResult(await posService.saveStockTransfer(record, dbMode === 'supabase'));
+        showToast(`สร้างใบโอน ${saved.transfer_number} แล้ว (รอคลังปลายทางยืนยันรับ)`, 'success');
+        return saved;
+      } catch (err) {
+        showToast(err.message, 'error');
+        return null;
+      }
+    },
+    [products, inventoryBalances, warehouses, currentUser, dbMode, applyTransferResult, showToast]
+  );
+
+  const changeStockTransferStatus = useCallback(
+    async (transfer, status) => {
+      const nowIso = new Date().toISOString();
+      const byName = currentUser?.name || '';
+      const record =
+        status === 'received'
+          ? { ...transfer, status, received_by_name: byName, received_at: nowIso }
+          : { ...transfer, status, cancelled_by_name: byName, cancelled_at: nowIso };
+      try {
+        const saved = applyTransferResult(await posService.saveStockTransfer(record, dbMode === 'supabase'));
+        showToast(
+          status === 'received' ? `รับสินค้าตามใบโอน ${saved.transfer_number} แล้ว` : `ยกเลิกใบโอน ${saved.transfer_number} และคืนยอดคลังต้นทางแล้ว`,
+          status === 'received' ? 'success' : 'warning'
+        );
+        return saved;
+      } catch (err) {
+        showToast(err.message, 'error');
+        return null;
+      }
+    },
+    [currentUser, dbMode, applyTransferResult, showToast]
+  );
+
   const persistStockCount = useCallback(
     async (record) => {
       const { savedCount, updatedCounts } = await posService.saveStockCount(record, dbMode === 'supabase');
@@ -1531,6 +1619,12 @@ export function POSProvider({ children }) {
     taxNotes,
     createTaxNote,
     stockCounts,
+    warehouses,
+    inventoryBalances,
+    stockTransfers,
+    saveWarehouse,
+    createStockTransfer,
+    changeStockTransferStatus,
     productLots,
     updateLotSettings,
     reconcileProductLots,

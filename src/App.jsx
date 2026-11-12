@@ -19,6 +19,7 @@ import SalesTaxReportPage from './pages/SalesTaxReportPage';
 import SettingsPage from './pages/SettingsPage';
 import StockCountPage from './pages/StockCountPage';
 import LotsPage from './pages/LotsPage';
+import WarehousesPage from './pages/WarehousesPage';
 import LoginScreen from './components/auth/LoginScreen';
 import { SETTINGS_TABS } from './utils/rbac';
 
@@ -39,6 +40,7 @@ const VALID_TABS = new Set([
   'sales-tax',
   'stock-count',
   'lots',
+  'warehouses',
   ...SETTINGS_TABS,
 ]);
 
@@ -123,6 +125,7 @@ function MainAppContent() {
           {activeTab === 'sales-tax' && <SalesTaxReportPage />}
           {activeTab === 'stock-count' && <StockCountPage />}
           {activeTab === 'lots' && <LotsPage />}
+          {activeTab === 'warehouses' && <WarehousesPage />}
           {SETTINGS_TABS.includes(activeTab) && <SettingsPage section={activeTab} />}
         </main>
 

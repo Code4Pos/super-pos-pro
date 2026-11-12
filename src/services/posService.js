@@ -3,6 +3,7 @@ import { B2B_CUSTOMER_DEFAULTS, normalizeB2BFields } from '../utils/credit';
 import { calculateOrderVat, getNextTaxInvoiceNumber, getTaxInvoicePrefix } from '../utils/tax';
 import { hashPin, generateSalt } from '../utils/rbac';
 import { consumeLots, addToLots, restoreToLots, summarizeLotsByProduct } from '../utils/lots';
+import { normalizeWarehouses, applyBalanceDelta, TRANSIT_WAREHOUSE_ID } from '../utils/warehouses';
 import {
   INITIAL_CATEGORIES,
   INITIAL_UNITS,
@@ -27,6 +28,9 @@ const STORAGE_KEYS = {
   USERS: 'siampos_users_v1',
   TAX_NOTES: 'siampos_tax_notes_v1',
   STOCK_COUNTS: 'siampos_stock_counts_v1',
+  WAREHOUSES: 'siampos_warehouses_v1',
+  INVENTORY_BALANCES: 'siampos_inventory_balances_v1',
+  STOCK_TRANSFERS: 'siampos_stock_transfers_v1',
   PRODUCT_LOTS: 'siampos_product_lots_v1',
   OFFLINE_QUEUE: 'siampos_offline_queue_v1',
   OFFLINE_FAILED: 'siampos_offline_failed_v1',
@@ -485,8 +489,9 @@ async function syncLotsWithMovements(entries, afterProducts, meta = {}, isSupaba
 // ส่งเฉพาะล็อตที่เพิ่ม/เปลี่ยนขึ้น Supabase (ตาราง product_lots ใช้ id จากฝั่งแอป)
 async function upsertChangedLots(beforeLots, afterLots, isSupabaseActive) {
   if (!isSupabaseActive || !supabase) return;
-  const beforeById = new Map(beforeLots.map((l) => [l.id, l.updated_at]));
-  const changed = afterLots.filter((l) => beforeById.get(l.id) !== l.updated_at);
+  // ฟังก์ชันใน lots.js สร้าง object ใหม่เฉพาะล็อตที่เปลี่ยน (เทียบ object แทนเวลา กันกรณีทำรายการในมิลลิวินาทีเดียวกัน)
+  const unchanged = new Set(beforeLots);
+  const changed = afterLots.filter((l) => !unchanged.has(l));
   if (changed.length === 0) return;
   await upsertOrQueue('product_lots', changed);
 }
@@ -861,6 +866,17 @@ export const posService = {
             loadRemoteWithLocal('stock_counts', STORAGE_KEYS.STOCK_COUNTS, 500),
             loadRemoteWithLocal('product_lots', STORAGE_KEYS.PRODUCT_LOTS, 5000),
           ]);
+        // คลังสินค้า ยอดแยกคลัง และใบโอน (ใช้ id ฝั่งแอป ยึดฉบับที่อัปเดตล่าสุด)
+        const [remoteWarehouses, remoteBalances, remoteTransfers] = await Promise.all([
+          loadRemoteWithLocal('warehouses', STORAGE_KEYS.WAREHOUSES, 200),
+          loadRemoteWithLocal('inventory_balances', STORAGE_KEYS.INVENTORY_BALANCES, 10000),
+          loadRemoteWithLocal('stock_transfers', STORAGE_KEYS.STOCK_TRANSFERS, 500),
+        ]);
+        const warehouses = normalizeWarehouses(mergeByLatestUpdate(remoteWarehouses, getLocal(STORAGE_KEYS.WAREHOUSES, [])));
+        const inventoryBalances = mergeByLatestUpdate(remoteBalances, getLocal(STORAGE_KEYS.INVENTORY_BALANCES, []));
+        const stockTransfers = mergeByLatestUpdate(remoteTransfers, getLocal(STORAGE_KEYS.STOCK_TRANSFERS, []));
+        setLocal(STORAGE_KEYS.INVENTORY_BALANCES, inventoryBalances);
+        setLocal(STORAGE_KEYS.STOCK_TRANSFERS, stockTransfers);
         // ใบตรวจนับและล็อตแก้ไขได้หลายครั้ง จึงยึดฉบับที่อัปเดตล่าสุด
         const stockCounts = mergeByLatestUpdate(remoteCounts, getLocal(STORAGE_KEYS.STOCK_COUNTS, []));
         const productLots = mergeByLatestUpdate(remoteLots, getLocal(STORAGE_KEYS.PRODUCT_LOTS, []));
@@ -887,6 +903,9 @@ export const posService = {
           taxInvoices,
           taxNotes,
           stockCounts,
+          warehouses,
+          inventoryBalances,
+          stockTransfers,
           productLots,
           users,
           suppliers,
@@ -935,6 +954,9 @@ export const posService = {
       taxInvoices: getLocal(STORAGE_KEYS.TAX_INVOICES, []),
       taxNotes: getLocal(STORAGE_KEYS.TAX_NOTES, []),
       stockCounts: getLocal(STORAGE_KEYS.STOCK_COUNTS, []),
+      warehouses: normalizeWarehouses(getLocal(STORAGE_KEYS.WAREHOUSES, [])),
+      inventoryBalances: getLocal(STORAGE_KEYS.INVENTORY_BALANCES, []),
+      stockTransfers: getLocal(STORAGE_KEYS.STOCK_TRANSFERS, []),
       productLots: getLocal(STORAGE_KEYS.PRODUCT_LOTS, []),
       users: getLocal(STORAGE_KEYS.USERS, []),
       suppliers,
@@ -1439,6 +1461,75 @@ export const posService = {
     const updated = baseProducts.map((p) => (p.id === productId ? { ...p, ...patch } : p));
     setLocal(STORAGE_KEYS.PRODUCTS, updated);
     return updated;
+  },
+
+  /**
+   * เพิ่ม/แก้ไขคลังสินค้า (id ฝั่งแอป)
+   */
+  async saveWarehouse(warehouse, isSupabaseActive) {
+    const nowIso = new Date().toISOString();
+    const saved = {
+      ...warehouse,
+      id: warehouse.id || `wh-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      created_at: warehouse.created_at || nowIso,
+      updated_at: nowIso,
+    };
+    const list = normalizeWarehouses(getLocal(STORAGE_KEYS.WAREHOUSES, []));
+    const exists = list.some((w) => w.id === saved.id);
+    const updated = normalizeWarehouses(exists ? list.map((w) => (w.id === saved.id ? saved : w)) : [...list, saved]);
+    setLocal(STORAGE_KEYS.WAREHOUSES, updated);
+    if (isSupabaseActive && supabase) await upsertOrQueue('warehouses', [updated.find((w) => w.id === saved.id)]);
+    return updated;
+  },
+
+  /**
+   * บันทึกใบโอนสต็อกระหว่างคลัง และปรับยอดแยกคลังตามการเปลี่ยนสถานะ (Two-Step Transfer)
+   * - สร้าง (in_transit): ตัดออกจากคลังต้นทาง เข้ายอด "ระหว่างโอน"
+   * - รับเข้า (received): ย้ายจากยอดระหว่างโอนเข้าคลังปลายทาง
+   * - ยกเลิก (cancelled): คืนยอดระหว่างโอนกลับคลังต้นทาง
+   * สต็อกรวม (products.stock) ไม่เปลี่ยน จึงไม่บันทึก Stock Ledger
+   */
+  async saveStockTransfer(record, isSupabaseActive) {
+    const nowIso = new Date().toISOString();
+    const transfers = getLocal(STORAGE_KEYS.STOCK_TRANSFERS, []);
+    const previous = transfers.find((t) => t.id === record.id) || null;
+    const prevStatus = previous?.status || null;
+    const nextStatus = record.status;
+    const allowed =
+      (!prevStatus && nextStatus === 'in_transit') ||
+      (prevStatus === 'in_transit' && (nextStatus === 'received' || nextStatus === 'cancelled'));
+    if (!allowed) throw new Error('สถานะใบโอนนี้เปลี่ยนแล้ว');
+
+    const beforeBalances = getLocal(STORAGE_KEYS.INVENTORY_BALANCES, []);
+    let balances = beforeBalances;
+    (record.items || []).forEach((item) => {
+      const qty = Number(item.qty) || 0;
+      if (qty <= 0) return;
+      if (nextStatus === 'in_transit') {
+        balances = applyBalanceDelta(balances, record.from_warehouse_id, item.product_id, -qty, nowIso);
+        balances = applyBalanceDelta(balances, TRANSIT_WAREHOUSE_ID, item.product_id, qty, nowIso);
+      } else {
+        const targetId = nextStatus === 'received' ? record.to_warehouse_id : record.from_warehouse_id;
+        balances = applyBalanceDelta(balances, TRANSIT_WAREHOUSE_ID, item.product_id, -qty, nowIso);
+        balances = applyBalanceDelta(balances, targetId, item.product_id, qty, nowIso);
+      }
+    });
+
+    const saved = { ...record, updated_at: nowIso };
+    const updatedTransfers = previous
+      ? transfers.map((t) => (t.id === saved.id ? saved : t))
+      : [saved, ...transfers];
+    setLocal(STORAGE_KEYS.INVENTORY_BALANCES, balances);
+    setLocal(STORAGE_KEYS.STOCK_TRANSFERS, updatedTransfers);
+
+    if (isSupabaseActive && supabase) {
+      // applyBalanceDelta สร้าง object ใหม่เฉพาะแถวที่เปลี่ยน (เทียบ object แทนเวลา กันกรณีทำรายการในมิลลิวินาทีเดียวกัน)
+      const unchanged = new Set(beforeBalances);
+      const changed = balances.filter((b) => !unchanged.has(b));
+      await upsertOrQueue('stock_transfers', [saved]);
+      if (changed.length > 0) await upsertOrQueue('inventory_balances', changed);
+    }
+    return { saved, transfers: updatedTransfers, balances };
   },
 
   /**
@@ -2889,6 +2980,9 @@ export const posService = {
     setLocal(STORAGE_KEYS.TAX_NOTES, []);
     setLocal(STORAGE_KEYS.STOCK_COUNTS, []);
     setLocal(STORAGE_KEYS.PRODUCT_LOTS, []);
+    setLocal(STORAGE_KEYS.WAREHOUSES, []);
+    setLocal(STORAGE_KEYS.INVENTORY_BALANCES, []);
+    setLocal(STORAGE_KEYS.STOCK_TRANSFERS, []);
     setLocal(STORAGE_KEYS.LOT_CONSUMPTIONS, []);
     setLocal(STORAGE_KEYS.SUPPLIERS, INITIAL_SUPPLIERS);
     setLocal(STORAGE_KEYS.STOCK_IMPORTS, []);

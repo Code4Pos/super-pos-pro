@@ -25,6 +25,7 @@ import {
   ClipboardList,
   ClipboardCheck,
   CalendarClock,
+  Warehouse,
   FileSpreadsheet,
   Settings,
   Percent,
@@ -132,6 +133,12 @@ export const SIDEBAR_MENU_GROUPS = [
         label: 'Lot / วันหมดอายุ',
         description: 'ล็อตคงเหลือ เตือนสินค้าใกล้หมดอายุ FEFO/FIFO',
         icon: CalendarClock,
+      },
+      {
+        id: 'warehouses',
+        label: 'คลังสินค้า & โอนย้าย',
+        description: 'ยอดแยกตามคลัง โอนสินค้าแบบยืนยันรับ 2 ขั้น',
+        icon: Warehouse,
       },
       {
         id: 'wholesale-pricing',

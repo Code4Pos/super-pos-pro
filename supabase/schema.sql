@@ -264,6 +264,44 @@ CREATE TABLE IF NOT EXISTS product_lots (
 );
 CREATE INDEX IF NOT EXISTS idx_product_lots_product ON product_lots (product_id, expiry_date);
 
+-- beta 0.3.3: หลายคลัง + ใบโอนสต็อก 2 ขั้น (In-Transit -> Received)
+-- สต็อกรวมยังอยู่ที่ products.stock / inventory_balances เก็บเฉพาะคลังที่ไม่ใช่หน้าร้าน + ยอดระหว่างโอน (warehouse_id = 'wh-transit')
+-- ยอดหน้าร้าน = products.stock - ผลรวม inventory_balances ของสินค้านั้น (ทุก id เป็น id ฝั่งแอป ใช้ upsert)
+CREATE TABLE IF NOT EXISTS warehouses (
+  id TEXT PRIMARY KEY,
+  code TEXT,
+  name TEXT NOT NULL,
+  type TEXT DEFAULT 'other',
+  is_active BOOLEAN DEFAULT TRUE,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE TABLE IF NOT EXISTS inventory_balances (
+  id TEXT PRIMARY KEY, -- '<warehouse_id>:<product_id>'
+  warehouse_id TEXT NOT NULL,
+  product_id TEXT NOT NULL,
+  physical_qty NUMERIC(12, 4) NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_inventory_balances_product ON inventory_balances (product_id);
+CREATE TABLE IF NOT EXISTS stock_transfers (
+  id TEXT PRIMARY KEY,
+  transfer_number TEXT NOT NULL,
+  from_warehouse_id TEXT NOT NULL,
+  to_warehouse_id TEXT NOT NULL,
+  items JSONB NOT NULL DEFAULT '[]'::jsonb,
+  status TEXT NOT NULL DEFAULT 'in_transit' CHECK (status IN ('in_transit', 'received', 'cancelled')),
+  note TEXT,
+  created_by_name TEXT,
+  received_by_name TEXT,
+  received_at TIMESTAMPTZ,
+  cancelled_by_name TEXT,
+  cancelled_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- รับคืนสินค้าจากใบลดหนี้บันทึกใน Stock Ledger เป็นประเภท RETURN
 ALTER TABLE stock_ledger DROP CONSTRAINT IF EXISTS stock_ledger_movement_type_check;
 ALTER TABLE stock_ledger ADD CONSTRAINT stock_ledger_movement_type_check
@@ -311,6 +349,16 @@ ALTER TABLE app_users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tax_notes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE stock_counts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE product_lots ENABLE ROW LEVEL SECURITY;
+ALTER TABLE warehouses ENABLE ROW LEVEL SECURITY;
+ALTER TABLE inventory_balances ENABLE ROW LEVEL SECURITY;
+ALTER TABLE stock_transfers ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Allow public access to warehouses" ON warehouses;
+CREATE POLICY "Allow public access to warehouses" ON warehouses FOR ALL USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS "Allow public access to inventory_balances" ON inventory_balances;
+CREATE POLICY "Allow public access to inventory_balances" ON inventory_balances FOR ALL USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS "Allow public access to stock_transfers" ON stock_transfers;
+CREATE POLICY "Allow public access to stock_transfers" ON stock_transfers FOR ALL USING (true) WITH CHECK (true);
 
 DROP POLICY IF EXISTS "Allow public access to product_lots" ON product_lots;
 CREATE POLICY "Allow public access to product_lots" ON product_lots FOR ALL USING (true) WITH CHECK (true);

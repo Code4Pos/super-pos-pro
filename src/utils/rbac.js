@@ -17,12 +17,12 @@ export const ROLES = {
     description: 'ยกเลิกบิล อนุมัติปรับสต็อก อนุมัติใบนำเข้า เปิดลิ้นชักฉุกเฉิน',
     tabs: [
       'pos', 'orders', 'dashboard', 'sales-tax', 'customers', 'receivables',
-      'inventory', 'stock-import', 'stock-ledger', 'stock-count', 'lots', 'reorder', 'wholesale-pricing', 'special-pricing',
+      'inventory', 'stock-import', 'stock-ledger', 'stock-count', 'lots', 'warehouses', 'reorder', 'wholesale-pricing', 'special-pricing',
       'suppliers', 'settings-printer', 'settings-payment',
     ],
     permissions: [
       'void_order', 'adjust_stock', 'approve_stock', 'approve_import', 'open_drawer',
-      'issue_tax_invoice', 'receive_payment', 'billing_note', 'credit_sale',
+      'issue_tax_invoice', 'receive_payment', 'billing_note', 'credit_sale', 'transfer_stock', 'manage_warehouses',
     ],
   },
   cashier: {
@@ -39,9 +39,9 @@ export const ROLES = {
   },
   warehouse: {
     label: 'เจ้าหน้าที่คลังสินค้า',
-    description: 'รับสินค้าเข้า ตรวจนับ ปรับสต็อก (ลด/กำหนดยอดต้องมีผู้อนุมัติ)',
-    tabs: ['inventory', 'stock-import', 'stock-ledger', 'stock-count', 'lots', 'reorder', 'suppliers'],
-    permissions: ['adjust_stock'],
+    description: 'รับสินค้าเข้า ตรวจนับ โอนย้ายระหว่างคลัง ปรับสต็อก (ลด/กำหนดยอดต้องมีผู้อนุมัติ)',
+    tabs: ['inventory', 'stock-import', 'stock-ledger', 'stock-count', 'lots', 'warehouses', 'reorder', 'suppliers'],
+    permissions: ['adjust_stock', 'transfer_stock'],
   },
   accountant: {
     label: 'ฝ่ายบัญชี',
@@ -61,6 +61,8 @@ export const PERMISSION_LABELS = {
   receive_payment: 'รับชำระหนี้',
   billing_note: 'ออกใบวางบิล',
   credit_sale: 'ขายเชื่อ',
+  transfer_stock: 'โอนสินค้าระหว่างคลัง',
+  manage_warehouses: 'จัดการรายชื่อคลัง',
 };
 
 export function canAccessTab(user, tab) {
