@@ -8,25 +8,57 @@ function formatBranch(branch) {
 }
 
 const PRINTER_SETTINGS_KEY = 'siampos_printer_settings_v2';
+const SHOP_SETTINGS_KEY = 'siampos_shop_settings_v1';
 
-const DEFAULT_PRINTER_SETTINGS = {
-  paperSize: '80mm', // '58mm' | '80mm'
-  connectionType: 'system', // 'system' | 'webusb' | 'webserial' | 'rawbt'
-  baudRate: 115200, // 9600 | 115200
-  autoPrint: false,
+// ค่าตั้งข้อมูลร้าน ภาษี และพร้อมเพย์ ที่ใช้ร่วมกันทุกเครื่อง (ซิงค์กับตาราง shop_settings บนฐานข้อมูล)
+export const SHARED_SHOP_SETTING_KEYS = [
+  'shopName',
+  'shopAddress',
+  'shopPhone',
+  'footerText',
+  'promptpayId',
+  'vatRegistered',
+  'shopTaxId',
+  'shopBranch',
+  'vatMode',
+];
+
+const DEFAULT_SHOP_SETTINGS = {
   shopName: 'สยามค้าปลีก-ส่ง (SiamPOS Pro)',
   shopAddress: 'ศูนย์รวมสินค้าอุปโภคบริโภค ราคาปลีก-ส่ง มาตรฐานครบวงจร',
   shopPhone: '02-123-4567',
   footerText: 'ขอบคุณที่อุดหนุน สินค้าซื้อแล้วรับเปลี่ยนคืนภายใน 7 วัน',
-  performanceMode: true,
-  systemPrinterReady: true,
   promptpayId: '', // เบอร์มือถือ 10 หลัก หรือเลขผู้เสียภาษี 13 หลัก สำหรับสร้าง QR พร้อมเพย์
-  cashDrawerEnabled: false, // เปิดลิ้นชักเก็บเงินอัตโนมัติเมื่อรับเงินสด
-  cashDrawerPin: '2', // ขาสัญญาณลิ้นชัก '2' (Pin 2) | '5' (Pin 5)
   vatRegistered: false, // ร้านจดทะเบียนภาษีมูลค่าเพิ่ม (ออกใบกำกับภาษีได้)
   shopTaxId: '', // เลขประจำตัวผู้เสียภาษี 13 หลักของร้าน
   shopBranch: '00000', // รหัสสาขา (00000 = สำนักงานใหญ่)
+  vatMode: 'no_vat', // 'no_vat' | 'vat_in' | 'vat_out'
 };
+
+// ค่าตั้งเฉพาะเครื่องนี้ (ชนิดเครื่องพิมพ์ ขนาดกระดาษ ลิ้นชักเก็บเงิน — เก็บใน localStorage ของแต่ละเครื่อง ไม่ซิงค์ข้ามเครื่อง)
+const DEFAULT_DEVICE_PRINTER_SETTINGS = {
+  paperSize: '80mm', // '58mm' | '80mm'
+  connectionType: 'system', // 'system' | 'webusb' | 'webserial' | 'rawbt'
+  baudRate: 115200, // 9600 | 115200
+  autoPrint: false,
+  performanceMode: true,
+  systemPrinterReady: true,
+  cashDrawerEnabled: false, // เปิดลิ้นชักเก็บเงินอัตโนมัติเมื่อรับเงินสด
+  cashDrawerPin: '2', // ขาสัญญาณลิ้นชัก '2' (Pin 2) | '5' (Pin 5)
+};
+
+const DEFAULT_PRINTER_SETTINGS = {
+  ...DEFAULT_DEVICE_PRINTER_SETTINGS,
+  ...DEFAULT_SHOP_SETTINGS,
+};
+
+function pickSharedShopFields(source = {}) {
+  const picked = {};
+  SHARED_SHOP_SETTING_KEYS.forEach((key) => {
+    if (source[key] !== undefined) picked[key] = source[key];
+  });
+  return picked;
+}
 
 const PAYMENT_LABELS = {
   ...PAYMENT_METHOD_LABELS,
@@ -1315,11 +1347,33 @@ export const printerService = {
     return true;
   },
 
+  getLocalShopSettings() {
+    try {
+      const rawShop = localStorage.getItem(SHOP_SETTINGS_KEY);
+      if (rawShop) {
+        return { ...DEFAULT_SHOP_SETTINGS, ...JSON.parse(rawShop) };
+      }
+      const rawPrinter = localStorage.getItem(PRINTER_SETTINGS_KEY);
+      if (rawPrinter) {
+        return {
+          ...DEFAULT_SHOP_SETTINGS,
+          ...pickSharedShopFields(JSON.parse(rawPrinter)),
+        };
+      }
+      return DEFAULT_SHOP_SETTINGS;
+    } catch {
+      return DEFAULT_SHOP_SETTINGS;
+    }
+  },
+
   getSettings() {
     try {
       const raw = localStorage.getItem(PRINTER_SETTINGS_KEY);
-      if (!raw) return DEFAULT_PRINTER_SETTINGS;
-      return { ...DEFAULT_PRINTER_SETTINGS, ...JSON.parse(raw) };
+      const deviceSaved = raw ? JSON.parse(raw) : {};
+      const shopSaved = this.getLocalShopSettings();
+      const merged = { ...DEFAULT_PRINTER_SETTINGS, ...deviceSaved, ...shopSaved };
+      delete merged.updated_at;
+      return merged;
     } catch {
       return DEFAULT_PRINTER_SETTINGS;
     }
@@ -1327,13 +1381,48 @@ export const printerService = {
 
   saveSettings(newSettings) {
     const merged = { ...this.getSettings(), ...newSettings };
+    delete merged.updated_at;
     try {
       localStorage.setItem(PRINTER_SETTINGS_KEY, JSON.stringify(merged));
+      const hasShopChange = SHARED_SHOP_SETTING_KEYS.some((k) =>
+        Object.prototype.hasOwnProperty.call(newSettings || {}, k)
+      );
+      if (hasShopChange || !localStorage.getItem(SHOP_SETTINGS_KEY)) {
+        const prevShop = this.getLocalShopSettings();
+        const nextShop = {
+          ...prevShop,
+          ...pickSharedShopFields(merged),
+          updated_at: hasShopChange ? new Date().toISOString() : prevShop.updated_at || null,
+        };
+        localStorage.setItem(SHOP_SETTINGS_KEY, JSON.stringify(nextShop));
+      }
     } catch (e) {
       console.error('Failed to save printer settings:', e);
     }
     this.checkPrinterStatus(merged);
     return merged;
+  },
+
+  /**
+   * นำค่าตั้งร้านที่ใช้ร่วมกันจากฐานข้อมูล (shop_settings) มาอัปเดตในเครื่อง โดยไม่แตะต้องค่าตั้งเครื่องพิมพ์ของเครื่องนี้
+   */
+  applyRemoteShopSettings(remoteShop = {}) {
+    try {
+      const shopPayload = {
+        ...DEFAULT_SHOP_SETTINGS,
+        ...pickSharedShopFields(remoteShop),
+        updated_at: remoteShop.updated_at || new Date().toISOString(),
+      };
+      localStorage.setItem(SHOP_SETTINGS_KEY, JSON.stringify(shopPayload));
+      const raw = localStorage.getItem(PRINTER_SETTINGS_KEY);
+      const current = raw ? JSON.parse(raw) : {};
+      const nextPrinter = { ...DEFAULT_PRINTER_SETTINGS, ...current, ...pickSharedShopFields(shopPayload) };
+      localStorage.setItem(PRINTER_SETTINGS_KEY, JSON.stringify(nextPrinter));
+      return nextPrinter;
+    } catch (e) {
+      console.error('Failed to apply remote shop settings:', e);
+      return this.getSettings();
+    }
   },
 
   subscribeStatus(callback) {

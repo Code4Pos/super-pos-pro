@@ -23,8 +23,8 @@ export default function SettingsPage({ section }) {
     <div className="flex-1 overflow-y-auto bg-slate-50 p-3 sm:p-5 pb-24 lg:pb-5">
       <div className="max-w-3xl mx-auto space-y-4">
         <Section />
-        {/* ค่าตั้งเฉพาะเครื่อง (รหัสเครื่อง / บัญชีร้าน) อยู่คู่กับเครื่องพิมพ์ */}
-        {section === 'settings-printer' && <DeviceSettings />}
+        {/* ค่าตั้งเฉพาะเครื่อง (รหัสเครื่อง / อัปโหลดข้อมูลจากเครื่องหลัก / บัญชีร้าน) แสดงที่หน้าข้อมูลร้านและเครื่องพิมพ์ */}
+        {(section === 'settings-shop' || section === 'settings-printer') && <DeviceSettings />}
       </div>
     </div>
   );

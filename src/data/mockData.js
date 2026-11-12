@@ -366,6 +366,7 @@ export const INITIAL_SUPPLIERS = [
     zipcode: '10310',
     phone: '02-123-4567',
     created_at: '2026-10-20T09:00:00.000Z',
+    updated_at: '2026-10-20T09:00:00.000Z',
   },
   {
     id: 'sup-2',
@@ -377,6 +378,7 @@ export const INITIAL_SUPPLIERS = [
     zipcode: '12120',
     phone: '02-987-6543',
     created_at: '2026-10-22T10:30:00.000Z',
+    updated_at: '2026-10-22T10:30:00.000Z',
   },
 ];
 

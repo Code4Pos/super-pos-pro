@@ -14,8 +14,7 @@
   - **หน้าเลือกโหมด:** `src/components/layout/ModeSelectorScreen.jsx` ให้เลือกระหว่างหน้าร้านกับหลังร้าน
 - **Global state:** `src/context/POSContext.jsx` (context เดียว ใช้ผ่าน `usePOS()`, รับ `scope="pos" | "admin"`)
 - **ชั้นข้อมูล:** `src/services/posService.js` — ใช้ Supabase เมื่อตั้งค่า `.env` แล้ว ถ้าไม่ได้ตั้งค่าจะ fallback ไป LocalStorage (Demo Mode)
-- **Schema:** `supabase/schema.sql` มีเฉพาะ `categories`, `units`, `products`, `customers`, `orders`, `order_items`
-  ข้อมูล suppliers, stock imports, wholesale rules และ special rules ยังอยู่ใน LocalStorage เท่านั้น
+- **Schema:** `supabase/schema.sql` มีตารางครบทั้ง `categories`, `units`, `products`, `customers`, `orders`, `order_items`, `customer_payments`, `billing_notes`, `stock_ledger`, `tax_invoices`, `tax_notes`, `app_users`, `stock_counts`, `product_lots`, `lot_consumptions`, `warehouses`, `inventory_balances`, `stock_transfers`, `sales_orders`, `suppliers`, `stock_imports`, `wholesale_rules`, `special_rules` และ `shop_settings`
 - **Deploy:** push ขึ้น `main` แล้ว GitHub Actions จะ build และ deploy ไป GitHub Pages อัตโนมัติ
 
 ## 2. คำสั่งที่ใช้บ่อย
@@ -59,10 +58,10 @@ npm run build    # ต้องผ่านก่อน commit ทุกคร�
 
 | ไฟล์ | รูปแบบ |
 |---|---|
-| `package.json` | `"version": "0.3.6-beta"` |
-| `index.html` | `<title>SiamPOS Pro (version beta 0.3.6) — ...` |
-| `admin.html` | `<title>SiamPOS Pro (version beta 0.3.6) — ...` |
-| `src/context/POSContext.jsx` | `export const APP_VERSION = 'version beta 0.3.6';` |
+| `package.json` | `"version": "0.3.7-beta"` |
+| `index.html` | `<title>SiamPOS Pro (version beta 0.3.7) — ...` |
+| `admin.html` | `<title>SiamPOS Pro (version beta 0.3.7) — ...` |
+| `src/context/POSContext.jsx` | `export const APP_VERSION = 'version beta 0.3.7';` |
 
 ถ้า agent อีกตัวเพิ่งเพิ่มเวอร์ชันไปใน commit ที่ยังไม่ได้ push ให้ใช้เวอร์ชันนั้นต่อ ไม่ต้องเพิ่มซ้ำ
 
@@ -87,6 +86,7 @@ npm run build    # ต้องผ่านก่อน commit ทุกคร�
 > ให้ agent เขียนสั้นๆ เมื่อจบงานที่ยังไม่เสร็จ หรือเมื่อมีเรื่องที่อีกฝ่ายต้องรู้ (ลบรายการที่เสร็จแล้วทิ้ง)
 > รูปแบบ: `- [YYYY-MM-DD] (Claude|Gemini) สิ่งที่ทำ / สิ่งที่ค้าง / ไฟล์ที่เกี่ยวข้อง`
 
+- [2026-11-12] (Gemini) beta 0.3.7 (Phase 2 ขั้นที่ 1 ย้ายข้อมูลที่ยังอยู่ในเครื่องขึ้นฐานข้อมูล ตาม `update-phase2.md`): **เพิ่มตารางใน `supabase/schema.sql`** (`suppliers`, `stock_imports`, `wholesale_rules`, `special_rules`, `shop_settings` แถว `id = 'default'`, `lot_consumptions` รหัส `<reference_doc>:<product_id>`) พร้อม RLS `FOR ALL TO authenticated USING (true) WITH CHECK (true)` ทุกตารางใหม่ และเพิ่มคอลัมน์ `is_trashed`, `deleted_at` ใน `products` + `updated_at` ใน `customers` + `created_at` ใน `product_lots` / **อัปเดต `siampos_apply_lot_deltas(p_lots JSONB)`, `create_order`, `void_order`** ใน `supabase/schema.sql` ให้บันทึกและลบ `lot_consumptions` อัตโนมัติใน transaction เดียว และใน `voidOrder` โหลด `lot_consumptions` จากฐานข้อมูลเมื่อยกเลิกบิลข้ามเครื่อง / **แยกตั้งค่าร้านกับตั้งค่าเครื่องพิมพ์เฉพาะเครื่อง** ใน `printerService.js` (`SHARED_SHOP_SETTING_KEYS` เก็บใน `siampos_shop_settings_v1` และซิงค์ตาราง `shop_settings` ทุกเครื่อง ส่วนขนาดกระดาษ/การเชื่อมต่อ/ลิ้นชักเก็บเฉพาะเครื่องใน `siampos_printer_settings_v2`) / **ซิงค์ตารางใหม่ทั้งหมด** ใน `posService.js` (`fetchPOSData`, `fetchAllData`, `upsertOrQueue`, `deleteOrQueue` รองรับลบออฟไลน์ `kind: 'delete'`) / **เพิ่มปุ่ม "อัปโหลดข้อมูลจากเครื่องนี้ขึ้นฐานข้อมูล"** ใน `DeviceSettings.jsx` (แสดงที่หน้าตั้งค่าข้อมูลร้านและเครื่องพิมพ์) เรียก `posService.uploadLocalDataToSupabase()` เพื่อส่งข้อมูลเดิมจากเครื่องหลักขึ้น Supabase แบบ upsert ตาม id
 - [2026-11-12] (Claude) beta 0.3.6 (Phase 2 ขั้นที่ 0 ตาม `update-phase2.md`): **เลขที่บิลใหม่** `<รหัสเครื่อง>-YYMMDD-<เลขรัน 4 หลัก>` วันที่ท้องถิ่น (`src/utils/device.js` + `posService.getDeviceSettings/saveDeviceSettings`, key `DEVICE`, ตั้งที่หน้าตั้งค่าเครื่องพิมพ์ การ์ด "เครื่องนี้" `DeviceSettings.jsx`, ไม่ตั้ง = สุ่ม `POS-XXX`) / **บิลมี `id` UUID สร้างในเครื่อง** ใช้ id เดียวกันทั้งในเครื่องและฐานข้อมูล / **บิลขาย/ยกเลิกบิลใช้ RPC `create_order` / `void_order`** (transaction เดียว: บิล + ตัดสต็อกแบบ delta + Ledger + ล็อตแบบ delta, ส่งซ้ำได้) ผ่าน `pushOrderRpc` / `pushVoidRpc` ถ้ายังไม่ได้รัน Migration จะ fallback วิธีเดิมอัตโนมัติ / คิวออฟไลน์มี kind `order_rpc`, `void_rpc` (ยกเลิกบิลที่ยังรอซิงค์ = ต่อคิว) / `recordStockMovements` แยกเป็น `planStockMovements` + `commitStockMovements` (จุดแก้สต็อกอื่นยังเรียก `recordStockMovements` ได้ตามเดิม) / **สต็อกติดลบได้** (เลิก `Math.max(0, …)` ตอนขาย) / รายการที่ซิงค์ไม่ได้เพราะข้อมูลผิดเข้า `OFFLINE_FAILED` พร้อม `error` / **ล็อกอินบัญชีร้าน** `ShopAuthGate.jsx` ครอบ `main.jsx` และ `main-admin.jsx` (เฉพาะเมื่อตั้งค่า Supabase) แล้วจึงล็อกอินพนักงานด้วย PIN / Migration: ส่วน A อยู่ท้าย `supabase/schema.sql`, ส่วน B (ปิด RLS สาธารณะ → `TO authenticated`) แยกไว้ที่ `supabase/lockdown-rls.sql` ต้องรันหลังสร้างบัญชีร้าน + ปิด sign up + deploy แล้วเท่านั้น / **ถึง Gemini (ขั้นที่ 1): ตารางใหม่ต้องใช้ policy `TO authenticated` ไม่ใช่ `USING (true)` สาธารณะ และถ้าทำ `lot_consumptions` ให้ไปบันทึกใน `create_order`/`void_order` (ฟังก์ชัน `siampos_apply_lot_deltas`)**
 - [2026-11-12] (Gemini) beta 0.3.5 (แยกหน้าร้าน `index.html` กับหลังร้าน `admin.html`): แยก Vite Multi-Page (`vite.config.js`) หน้าร้าน `index.html` → `PosApp.jsx` (ไม่มี Sidebar/MobileNav, โหลดเฉพาะ `POSPage` และ `posService.fetchPOSData()` ไม่โหลดข้อมูล/หน้าหลังร้าน) / หลังร้าน `admin.html` → `AdminApp.jsx` (Sidebar และ MobileNav เอาเมนูขายหน้าร้านออก) / หน้าเลือกโหมด `ModeSelectorScreen.jsx` เลือกระหว่างหน้าร้านกับหลังร้าน / `Header.jsx` มีปุ่มสลับหน้าร้าน ↔ หลังร้าน และปุ่มกลับหน้าเลือกโหมด / ส่งต่อคำสั่ง "เปิดบิลขาย" ข้ามหน้าจาก `CustomersPage` และ `SalesOrdersPage` ผ่าน `posService.setPendingPOSAction` / อัปเดต `public/sw.js` ให้แคช `admin.html` ด้วย
 - [2026-11-12] (Claude) beta 0.3.4 (Module 3 ส่วนที่เหลือ): ใบนำเข้ามี `warehouse_id` เลือกคลังที่รับเข้าได้ (`applyImportItemsToStock` → `addToWarehouseBalances`, ค่าเริ่มต้นหน้าร้าน) / ใบสั่งขายส่ง `salesOrders` (หน้า `sales-orders`, `SalesOrdersPage.jsx`, `components/salesOrder/SalesOrderModal.jsx`) สถานะ `reserved` > `fulfilled`|`cancelled` ผ่าน `saveSalesOrder` / **Reserved = ผลรวม `base_qty` (หน่วยฐานสินค้าหลัก) ของใบ reserved, ATP = stock - reserved** ฟังก์ชันอยู่ใน `src/utils/salesOrders.js` / จองเกิน ATP ไม่ได้ / "เปิดบิลขาย" โหลดเข้าตะกร้า (`loadSalesOrderToCart`, ต้องตะกร้าว่าง) แล้วปิดใบอัตโนมัติใน `checkoutOrder` (`activeSalesOrder`) / ขายหน้าร้านเกิน ATP แค่เตือน ไม่บล็อก / สิทธิ์ `sales_order` / ต้องรัน Migration beta 0.3.4 / ข้อจำกัด: ล็อตยังไม่แยกคลัง

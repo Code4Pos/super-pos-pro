@@ -1,21 +1,25 @@
 import React, { useEffect, useState } from 'react';
-import { MonitorSmartphone, LogOut, Save } from 'lucide-react';
+import { MonitorSmartphone, LogOut, Save, UploadCloud, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { usePOS } from '../../context/POSContext';
 import { posService } from '../../services/posService';
 import { sanitizeDeviceCode, localDateCode } from '../../utils/device';
 import { signOutShop, getShopAccountEmail } from '../auth/ShopAuthGate';
 
 /**
- * ค่าตั้งเฉพาะเครื่องนี้ (ไม่ซิงค์ไปเครื่องอื่น): รหัสเครื่องที่ใช้ขึ้นต้นเลขที่บิล และบัญชีร้านที่ล็อกอินอยู่
+ * ค่าตั้งเฉพาะเครื่องนี้ (ไม่ซิงค์ไปเครื่องอื่น): รหัสเครื่องที่ใช้ขึ้นต้นเลขที่บิล, เครื่องมืออัปโหลดข้อมูลจากเครื่องหลัก และบัญชีร้านที่ล็อกอินอยู่
  */
 export default function DeviceSettings() {
-  const { showToast, dbMode } = usePOS();
+  const { showToast, dbMode, isOffline, uploadLocalData } = usePOS();
   const [device, setDevice] = useState(() => posService.getDeviceSettings());
   const [code, setCode] = useState(device.code);
   const [email, setEmail] = useState('');
+  const [uploading, setUploading] = useState(false);
+  const [uploadResult, setUploadResult] = useState(null);
+  const [localSummary, setLocalSummary] = useState(() => posService.getLocalDataSummary());
 
   useEffect(() => {
     getShopAccountEmail().then(setEmail);
+    setLocalSummary(posService.getLocalDataSummary());
   }, []);
 
   const clean = sanitizeDeviceCode(code);
@@ -32,6 +36,29 @@ export default function DeviceSettings() {
     }
   };
 
+  const handleUploadLocalData = async () => {
+    if (uploading) return;
+    setUploading(true);
+    setUploadResult(null);
+    try {
+      const res = await uploadLocalData();
+      setUploadResult(res);
+      setLocalSummary(posService.getLocalDataSummary());
+      if (res.errors?.length > 0) {
+        showToast(
+          `อัปโหลดบางส่วนสำเร็จ (มี ${res.errors.length} ตารางที่ยังไม่ได้รัน SQL Migration)`,
+          'warning'
+        );
+      } else {
+        showToast('อัปโหลดข้อมูลจากเครื่องนี้ขึ้นฐานข้อมูลสำเร็จครบทุกรายการ!', 'success');
+      }
+    } catch (err) {
+      showToast(err.message || 'เกิดข้อผิดพลาดในการอัปโหลดข้อมูล', 'error');
+    } finally {
+      setUploading(false);
+    }
+  };
+
   const handleSignOut = async () => {
     if (!window.confirm('ออกจากระบบบัญชีร้านในเครื่องนี้? ต้องล็อกอินใหม่ด้วยอีเมลและรหัสผ่านของร้าน')) return;
     await signOutShop();
@@ -45,7 +72,7 @@ export default function DeviceSettings() {
         </div>
         <div>
           <h2 className="text-sm font-extrabold text-slate-900">เครื่องนี้</h2>
-          <p className="text-xs text-slate-500">ค่าตั้งเฉพาะเครื่องนี้ ไม่ซิงค์ไปเครื่องอื่น</p>
+          <p className="text-xs text-slate-500">ค่าตั้งเฉพาะเครื่องนี้ และการซิงค์ข้อมูลจากเครื่องหลักขึ้นฐานข้อมูล</p>
         </div>
       </div>
       <div className="p-4 space-y-4">
@@ -76,6 +103,63 @@ export default function DeviceSettings() {
             {' '}ตั้งรหัสไม่ซ้ำกันในแต่ละเครื่อง (เช่น POS1, POS2) เพื่อให้เลขที่บิลไม่ชนกันแม้ขายตอนออฟไลน์
           </p>
         </div>
+
+        {dbMode === 'supabase' && (
+          <div className="pt-3 border-t border-slate-100 space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-50 border border-slate-200/80 rounded-xl p-3">
+              <div className="space-y-1">
+                <div className="text-xs font-extrabold text-slate-800">
+                  อัปโหลดข้อมูลจากเครื่องนี้ขึ้นฐานข้อมูล
+                </div>
+                <p className="text-[11px] text-slate-500 leading-relaxed">
+                  ส่งข้อมูลที่เคยเก็บในเครื่องหลักขึ้นฐานข้อมูลเพื่อให้เครื่องอื่นเห็นตรงกัน (กดซ้ำได้ปลอดภัย ไม่สร้างรายการซ้ำ):
+                  {' '}ผู้ผลิต {localSummary.suppliers} รายการ · ใบนำเข้า {localSummary.stockImports} ใบ · กฎราคาส่ง/พิเศษ{' '}
+                  {localSummary.wholesaleRules + localSummary.specialRules} กฎ · หน่วยนับ {localSummary.units} หน่วย · ประวัติตัดล็อต{' '}
+                  {localSummary.lotConsumptions} รายการ · ตั้งค่าร้านและข้อมูลเสริมสินค้า/ลูกค้า
+                </p>
+              </div>
+              <button
+                type="button"
+                disabled={uploading || isOffline}
+                onClick={handleUploadLocalData}
+                className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 text-white text-xs font-bold flex items-center gap-1.5 shrink-0 self-start sm:self-center"
+              >
+                <UploadCloud className="w-4 h-4" />
+                {uploading ? 'กำลังอัปโหลด...' : 'อัปโหลดข้อมูลจากเครื่องนี้ขึ้นฐานข้อมูล'}
+              </button>
+            </div>
+
+            {uploadResult && (
+              <div
+                className={`rounded-xl p-3 text-xs border ${
+                  uploadResult.errors?.length > 0
+                    ? 'bg-amber-50 border-amber-200 text-amber-800'
+                    : 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                }`}
+              >
+                <div className="font-bold flex items-center gap-1.5 mb-1">
+                  {uploadResult.errors?.length > 0 ? (
+                    <AlertTriangle className="w-4 h-4 shrink-0 text-amber-600" />
+                  ) : (
+                    <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600" />
+                  )}
+                  <span>
+                    อัปโหลดแล้ว: ตั้งค่าร้าน {uploadResult.counts.shopSettings} · หน่วยนับ {uploadResult.counts.units} · ผู้ผลิต{' '}
+                    {uploadResult.counts.suppliers} · ใบนำเข้า {uploadResult.counts.stockImports} · กฎราคาส่ง{' '}
+                    {uploadResult.counts.wholesaleRules} · กฎราคาพิเศษ {uploadResult.counts.specialRules} · ประวัติตัดล็อต{' '}
+                    {uploadResult.counts.lotConsumptions} · ข้อมูลเสริมสินค้า {uploadResult.counts.productsUpdated} · ลูกค้า{' '}
+                    {uploadResult.counts.customersUpdated}
+                  </span>
+                </div>
+                {uploadResult.errors?.length > 0 && (
+                  <div className="text-[11px] text-amber-700 mt-1">
+                    หมายเหตุ (กรุณารัน SQL Migration beta 0.3.7 บน Supabase): {uploadResult.errors.join(' | ')}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
 
         {dbMode === 'supabase' && (
           <div className="pt-3 border-t border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-2">

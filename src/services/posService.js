@@ -5,6 +5,7 @@ import { hashPin, generateSalt } from '../utils/rbac';
 import { consumeLots, addToLots, restoreToLots, summarizeLotsByProduct } from '../utils/lots';
 import { normalizeWarehouses, applyBalanceDelta, TRANSIT_WAREHOUSE_ID, SALES_WAREHOUSE_ID } from '../utils/warehouses';
 import { generateDeviceCode, generateUuid, isUuid, nextOrderNumber, sanitizeDeviceCode } from '../utils/device';
+import { printerService } from './printerService';
 import {
   INITIAL_CATEGORIES,
   INITIAL_UNITS,
@@ -44,6 +45,7 @@ const STORAGE_KEYS = {
   ORDERS: 'siampos_orders_v1',
   WHOLESALE_RULES: 'siampos_wholesale_rules_v1',
   SPECIAL_RULES: 'siampos_special_rules_v1',
+  SHOP_SETTINGS: 'siampos_shop_settings_v1',
   DEVICE: 'siampos_device_v1',
 };
 
@@ -164,12 +166,16 @@ export function syncInitialWholesaleRulesWithProducts(products = [], existingRul
       price: Number(t.price) || 0,
     }));
     return {
-      ...r,
+      id: r.id,
+      name: String(r.name || 'ราคาขายส่งหลายระดับ').trim(),
       type: isGroup ? 'group' : 'single',
       target_type: isGroup ? 'group' : 'single',
       product_id: pid,
       product_ids: pids,
       tiers,
+      is_active: r.is_active !== false,
+      created_at: r.created_at || nowIso,
+      updated_at: r.updated_at || r.created_at || nowIso,
     };
   });
 
@@ -219,6 +225,7 @@ export function syncInitialWholesaleRulesWithProducts(products = [], existingRul
 }
 
 export function normalizeSpecialRules(existingRules = []) {
+  const nowIso = new Date().toISOString();
   return (Array.isArray(existingRules) ? existingRules : []).map((r) => {
     const isGroup = r.target_type === 'group' || r.type === 'group';
     const pids = Array.isArray(r.product_ids)
@@ -236,14 +243,95 @@ export function normalizeSpecialRules(existingRules = []) {
       .filter((t) => t.price > 0)
       .sort((a, b) => a.step - b.step);
     return {
-      ...r,
+      id: r.id,
+      name: String(r.name || 'ราคาพิเศษ').trim(),
       type: isGroup ? 'group' : 'single',
       target_type: isGroup ? 'group' : 'single',
       product_id: pid,
       product_ids: pids,
       tiers,
+      is_active: r.is_active !== false,
+      created_at: r.created_at || nowIso,
+      updated_at: r.updated_at || r.created_at || nowIso,
     };
   });
+}
+
+function normalizeLotConsumptions(list = []) {
+  const nowIso = new Date().toISOString();
+  return (Array.isArray(list) ? list : [])
+    .filter((c) => c && c.reference_doc && c.product_id)
+    .map((c) => {
+      const ts = c.updated_at || c.created_at || c.at || nowIso;
+      return {
+        id: c.id || `${c.reference_doc}:${c.product_id}`,
+        reference_doc: c.reference_doc,
+        product_id: c.product_id,
+        consumed: Array.isArray(c.consumed) ? c.consumed : [],
+        created_at: c.created_at || c.at || ts,
+        updated_at: c.updated_at || c.at || ts,
+      };
+    });
+}
+
+const DEFAULT_SHOP_NAME = 'สยามค้าปลีก-ส่ง (SiamPOS Pro)';
+
+function shopSettingsToRow(settings = {}, nowIso = new Date().toISOString()) {
+  return {
+    id: 'default',
+    shop_name: String(settings.shopName ?? DEFAULT_SHOP_NAME).trim() || DEFAULT_SHOP_NAME,
+    shop_address: String(settings.shopAddress ?? '').trim(),
+    shop_phone: String(settings.shopPhone ?? '').trim(),
+    footer_text: String(settings.footerText ?? '').trim(),
+    promptpay_id: String(settings.promptpayId ?? '').trim(),
+    vat_registered: Boolean(settings.vatRegistered),
+    shop_tax_id: String(settings.shopTaxId ?? '').replace(/\D/g, '').slice(0, 13),
+    shop_branch: String(settings.shopBranch || '00000').padStart(5, '0').slice(-5),
+    vat_mode: ['no_vat', 'vat_in', 'vat_out'].includes(settings.vatMode) ? settings.vatMode : 'no_vat',
+    updated_at: settings.updated_at || nowIso,
+  };
+}
+
+function rowToShopSettings(row) {
+  if (!row) return null;
+  return {
+    shopName: row.shop_name ?? DEFAULT_SHOP_NAME,
+    shopAddress: row.shop_address ?? '',
+    shopPhone: row.shop_phone ?? '',
+    footerText: row.footer_text ?? '',
+    promptpayId: row.promptpay_id ?? '',
+    vatRegistered: Boolean(row.vat_registered),
+    shopTaxId: row.shop_tax_id ?? '',
+    shopBranch: row.shop_branch ?? '00000',
+    vatMode: ['no_vat', 'vat_in', 'vat_out'].includes(row.vat_mode) ? row.vat_mode : 'no_vat',
+    updated_at: row.updated_at || null,
+  };
+}
+
+/**
+ * โหลดค่าตั้งร้านที่ใช้ร่วมกันจากตาราง shop_settings (แถว id = 'default')
+ * ถ้ารายการบนฐานข้อมูลใหม่กว่าหรือยังไม่เคยตั้งในเครื่อง จะอัปเดตเฉพาะค่าตั้งร้านโดยไม่กระทบค่าตั้งเครื่องพิมพ์ของเครื่องนี้
+ */
+async function loadRemoteShopSettings() {
+  const localShop = printerService.getLocalShopSettings();
+  try {
+    const { data, error } = await supabase
+      .from('shop_settings')
+      .select('*')
+      .eq('id', 'default')
+      .maybeSingle();
+    if (error || !data) return localShop;
+    const remoteShop = rowToShopSettings(data);
+    if (
+      !localShop?.updated_at ||
+      new Date(remoteShop.updated_at || 0) >= new Date(localShop.updated_at || 0)
+    ) {
+      return printerService.applyRemoteShopSettings(remoteShop);
+    }
+    return localShop;
+  } catch {
+    return localShop;
+  }
 }
 
 /**
@@ -266,19 +354,16 @@ export const STOCK_IMPORT_TRANSITIONS = {
 };
 
 /**
- * เติมค่าเริ่มต้นให้ใบนำเข้า (ใบเก่าก่อน beta 0.2.1 ไม่มีสถานะ ถือว่านำเข้าสำเร็จแล้ว)
- */
-/**
  * โหลดเอกสารจากตารางใน Supabase แล้วรวมกับรายการที่บันทึกไว้ในเครื่อง (ไม่ซ้ำ id)
  * ถ้ายังไม่ได้สร้างตาราง (ยังไม่รัน Migration) จะใช้ข้อมูลในเครื่องอย่างเดียว
  */
-async function loadRemoteWithLocal(table, storageKey, limit = 1000) {
+async function loadRemoteWithLocal(table, storageKey, limit = 1000, orderField = 'created_at') {
   const localRows = getLocal(storageKey, []);
   try {
     const res = await supabase
       .from(table)
       .select('*')
-      .order('created_at', { ascending: false })
+      .order(orderField, { ascending: false })
       .limit(limit);
     if (res.error || !Array.isArray(res.data)) return localRows;
     const remoteIds = new Set(res.data.map((r) => r.id));
@@ -456,17 +541,24 @@ async function commitStockMovements(plan, isSupabaseActive, { remote = true } = 
   if (lotPlan) {
     setLocal(STORAGE_KEYS.PRODUCT_LOTS, lotPlan.lots);
     setLocal(STORAGE_KEYS.LOT_CONSUMPTIONS, lotPlan.consumptions);
-    if (remote) await upsertChangedLots(lotPlan.beforeLots, lotPlan.lots, isSupabaseActive);
+    if (remote) {
+      await upsertChangedLots(lotPlan.beforeLots, lotPlan.lots, isSupabaseActive);
+      if (isSupabaseActive && supabase && Array.isArray(lotPlan.addedConsumptions) && lotPlan.addedConsumptions.length > 0) {
+        const remoteConsumptions = lotPlan.addedConsumptions.filter((c) => isRemoteProductId(c.product_id));
+        if (remoteConsumptions.length > 0) await upsertOrQueue('lot_consumptions', remoteConsumptions);
+      }
+    }
   }
 }
 
 /**
- * ผลต่างของล็อตที่เปลี่ยน [{ row, delta }] สำหรับส่งให้ RPC บวก/ลบยอดบนฐานข้อมูล (ไม่เขียนทับยอดของเครื่องอื่น)
+ * ผลต่างของล็อตที่เปลี่ยน [{ row, delta, reference_doc }] สำหรับส่งให้ RPC บวก/ลบยอดบนฐานข้อมูล (ไม่เขียนทับยอดของเครื่องอื่น)
  */
-function buildLotDeltas(lotPlan) {
+function buildLotDeltas(lotPlan, referenceDoc = '') {
   if (!lotPlan) return [];
   const beforeById = new Map(lotPlan.beforeLots.map((l) => [l.id, l]));
   const unchanged = new Set(lotPlan.beforeLots);
+  const ref = referenceDoc || lotPlan.referenceDoc || '';
   return lotPlan.lots
     .filter((l) => !unchanged.has(l) && isRemoteProductId(l.product_id))
     .map((row) => ({
@@ -474,6 +566,7 @@ function buildLotDeltas(lotPlan) {
       delta:
         Math.round(((Number(row.remaining_qty) || 0) - (Number(beforeById.get(row.id)?.remaining_qty) || 0)) * 10000) /
         10000,
+      reference_doc: ref,
     }));
 }
 
@@ -483,7 +576,7 @@ function buildLotDeltas(lotPlan) {
  * - ยกเลิกบิล (VOID): คืนเข้าล็อตเดิมที่บิลนั้นตัดไป
  * - รับสินค้าเข้า (IMPORT): สร้างล็อตตามเลขล็อต/วันหมดอายุที่ระบุในใบนำเข้า
  * - อื่นๆ ที่สต็อกเพิ่ม: เข้า "ไม่ระบุล็อต"
- * คืนค่า { beforeLots, lots, consumptions } หรือ null ถ้าไม่มีสินค้าที่ติดตามล็อต (ยังไม่บันทึก)
+ * คืนค่า { beforeLots, lots, consumptions, addedConsumptions, referenceDoc } หรือ null ถ้าไม่มีสินค้าที่ติดตามล็อต (ยังไม่บันทึก)
  */
 function planLotChanges(entries, afterProducts, meta = {}) {
   const productMap = new Map(afterProducts.map((p) => [p.id, p]));
@@ -493,7 +586,8 @@ function planLotChanges(entries, afterProducts, meta = {}) {
   const nowIso = new Date().toISOString();
   const beforeLots = getLocal(STORAGE_KEYS.PRODUCT_LOTS, []);
   let lots = beforeLots;
-  let consumptions = getLocal(STORAGE_KEYS.LOT_CONSUMPTIONS, []);
+  let consumptions = normalizeLotConsumptions(getLocal(STORAGE_KEYS.LOT_CONSUMPTIONS, []));
+  const addedConsumptions = [];
 
   tracked.forEach((entry) => {
     const product = productMap.get(entry.product_id);
@@ -504,9 +598,18 @@ function planLotChanges(entries, afterProducts, meta = {}) {
       const result = consumeLots(lots, product.id, -delta, strategy, nowIso);
       lots = result.lots;
       if (meta.reference_doc && result.consumed.length > 0) {
+        const record = {
+          id: `${meta.reference_doc}:${product.id}`,
+          reference_doc: meta.reference_doc,
+          product_id: product.id,
+          consumed: result.consumed,
+          created_at: nowIso,
+          updated_at: nowIso,
+        };
+        addedConsumptions.push(record);
         consumptions = [
-          { reference_doc: meta.reference_doc, product_id: product.id, consumed: result.consumed, at: nowIso },
-          ...consumptions,
+          record,
+          ...consumptions.filter((c) => c.id !== record.id),
         ].slice(0, MAX_LOCAL_LEDGER_ENTRIES);
       }
       return;
@@ -531,7 +634,7 @@ function planLotChanges(entries, afterProducts, meta = {}) {
     if (remaining > 0) lots = addToLots(lots, product, remaining, null, meta, nowIso);
   });
 
-  return { beforeLots, lots, consumptions };
+  return { beforeLots, lots, consumptions, addedConsumptions, referenceDoc: meta.reference_doc || '' };
 }
 
 // ส่งเฉพาะล็อตที่เพิ่ม/เปลี่ยนขึ้น Supabase (ตาราง product_lots ใช้ id จากฝั่งแอป)
@@ -585,6 +688,26 @@ async function upsertOrQueue(table, rows) {
   } catch (err) {
     if (isNetworkError(err)) enqueueOffline({ kind: 'upsert', table, rows });
     else console.warn(`Supabase ${table} error:`, err.message);
+  }
+  return false;
+}
+
+/**
+ * ลบข้อมูลตาม id บน Supabase ถ้าเชื่อมต่อไม่ได้ให้เก็บเข้าคิว
+ */
+async function deleteOrQueue(table, rowId) {
+  if (!isOnline()) {
+    enqueueOffline({ kind: 'delete', table, rowId });
+    return false;
+  }
+  try {
+    const { error } = await supabase.from(table).delete().eq('id', rowId);
+    if (!error) return true;
+    if (isNetworkError(error)) enqueueOffline({ kind: 'delete', table, rowId });
+    else console.warn(`Supabase delete ${table} error:`, error.message);
+  } catch (err) {
+    if (isNetworkError(err)) enqueueOffline({ kind: 'delete', table, rowId });
+    else console.warn(`Supabase delete ${table} error:`, err.message);
   }
   return false;
 }
@@ -773,16 +896,48 @@ function mergeCustomerMeta(customer, customerMeta = {}) {
 }
 
 export function normalizeStockImports(list = []) {
-  return list.map((imp) => {
+  const nowIso = new Date().toISOString();
+  return (Array.isArray(list) ? list : []).map((imp) => {
     const status = imp.status || STOCK_IMPORT_STATUS.COMPLETED;
+    const createdAt = imp.created_at || nowIso;
+    const items = Array.isArray(imp.items) ? imp.items : [];
+    const totals = calculateImportTotals(items);
     return {
-      ...imp,
+      id: imp.id || `imp-${Date.now()}`,
+      import_number: imp.import_number || generateImportNumber(createdAt),
+      supplier_id: imp.supplier_id || null,
+      supplier_name: imp.supplier_name || '-',
+      supplier_phone: imp.supplier_phone || '',
+      warehouse_id: imp.warehouse_id || SALES_WAREHOUSE_ID,
+      items,
+      total_items: Number(imp.total_items ?? totals.total_items) || 0,
+      total_discount: Number(imp.total_discount ?? totals.total_discount) || 0,
+      grand_total: Number(imp.grand_total ?? totals.grand_total) || 0,
+      note: imp.note || '',
       status,
       status_history: Array.isArray(imp.status_history)
         ? imp.status_history
-        : [{ status, at: imp.created_at }],
+        : [{ status, at: createdAt }],
+      created_at: createdAt,
+      updated_at: imp.updated_at || createdAt,
     };
   });
+}
+
+function sanitizeSupplierRow(s = {}, nowIso = new Date().toISOString()) {
+  const createdAt = s.created_at || nowIso;
+  return {
+    id: s.id || `sup-${Date.now()}`,
+    name: String(s.name || '').trim(),
+    address: String(s.address || '').trim(),
+    tambon: String(s.tambon || '').trim(),
+    amphoe: String(s.amphoe || '').trim(),
+    province: String(s.province || '').trim(),
+    zipcode: String(s.zipcode || '').trim(),
+    phone: String(s.phone || '').trim(),
+    created_at: createdAt,
+    updated_at: s.updated_at || createdAt,
+  };
 }
 
 function generateImportNumber(nowIso) {
@@ -975,7 +1130,7 @@ export const posService = {
 
         const trashIds = new Set(localTrash.map((t) => t.id));
         const supaList = (prodRes.data || [])
-          .filter((p) => !trashIds.has(p.id))
+          .filter((p) => !p.is_trashed && !trashIds.has(p.id))
           .map((p) => {
             const meta = localMeta[p.id] || localMeta[p.sku] || {};
             return {
@@ -1016,11 +1171,6 @@ export const posService = {
         ]);
         setLocal(STORAGE_KEYS.PRODUCTS, syncedSupaProducts);
 
-        const wholesaleRules = syncInitialWholesaleRulesWithProducts(
-          syncedSupaProducts,
-          rawWholesaleRules
-        );
-
         const mergedCustomers = (cusRes.data || []).map((c) =>
           mergeCustomerMeta(c, localCustomerMeta)
         );
@@ -1028,14 +1178,51 @@ export const posService = {
         // โหลดเฉพาะตารางย่อยที่ต้องใช้ในหน้าขาย:
         // - customer_payments: คำนวณวงเงินเครดิตคงเหลือเมื่อขายเชื่อ
         // - app_users: ล็อกอิน PIN และตรวจสิทธิ์
-        // - product_lots: ตัดล็อต FEFO/FIFO ตอนขาย
+        // - product_lots / lot_consumptions: ตัดล็อต FEFO/FIFO ตอนขาย และคืนล็อตตอนยกเลิกบิลข้ามเครื่อง
         // - sales_orders: คำนวณยอดจอง ATP และปิดใบจองเมื่อเปิดบิลขาย
-        const [customerPayments, remoteUsers, remoteLots, remoteSalesOrders] = await Promise.all([
+        // - wholesale_rules / special_rules / shop_settings: กฎราคาขายส่ง ราคาพิเศษ และตั้งค่าร้าน/VAT
+        const [
+          customerPayments,
+          remoteUsers,
+          remoteLots,
+          remoteSalesOrders,
+          remoteWholesaleRules,
+          remoteSpecialRules,
+          remoteLotConsumptions,
+        ] = await Promise.all([
           loadRemoteWithLocal('customer_payments', STORAGE_KEYS.CUSTOMER_PAYMENTS),
           loadRemoteWithLocal('app_users', STORAGE_KEYS.USERS),
           loadRemoteWithLocal('product_lots', STORAGE_KEYS.PRODUCT_LOTS, 5000),
           loadRemoteWithLocal('sales_orders', STORAGE_KEYS.SALES_ORDERS, 1000),
+          loadRemoteWithLocal('wholesale_rules', STORAGE_KEYS.WHOLESALE_RULES, 1000),
+          loadRemoteWithLocal('special_rules', STORAGE_KEYS.SPECIAL_RULES, 1000),
+          loadRemoteWithLocal('lot_consumptions', STORAGE_KEYS.LOT_CONSUMPTIONS, 5000),
+          loadRemoteShopSettings(),
         ]);
+
+        const mergedWholesaleRaw = mergeByLatestUpdate(
+          remoteWholesaleRules,
+          getLocal(STORAGE_KEYS.WHOLESALE_RULES, [])
+        );
+        const wholesaleRules = syncInitialWholesaleRulesWithProducts(
+          syncedSupaProducts,
+          mergedWholesaleRaw
+        );
+        const syncedSpecialRules = normalizeSpecialRules(
+          mergeByLatestUpdate(
+            remoteSpecialRules,
+            getLocal(STORAGE_KEYS.SPECIAL_RULES, [])
+          )
+        );
+        setLocal(STORAGE_KEYS.SPECIAL_RULES, syncedSpecialRules);
+
+        const lotConsumptions = normalizeLotConsumptions(
+          mergeByLatestUpdate(
+            remoteLotConsumptions,
+            normalizeLotConsumptions(getLocal(STORAGE_KEYS.LOT_CONSUMPTIONS, []))
+          )
+        );
+        setLocal(STORAGE_KEYS.LOT_CONSUMPTIONS, lotConsumptions);
 
         const salesOrders = mergeByLatestUpdate(remoteSalesOrders, getLocal(STORAGE_KEYS.SALES_ORDERS, []));
         setLocal(STORAGE_KEYS.SALES_ORDERS, salesOrders);
@@ -1072,7 +1259,7 @@ export const posService = {
           stockImports: [],
           orders: ordRes.data || [],
           wholesaleRules,
-          specialRules,
+          specialRules: syncedSpecialRules,
         };
       } catch (err) {
         offlineFallback = isNetworkError(err) && Boolean(getLocal(STORAGE_KEYS.SUPABASE_CACHE_AT, null));
@@ -1164,31 +1351,49 @@ export const posService = {
           ...(catRes.data || []).filter((c) => c.id !== 'all'),
         ];
 
-        const trashIds = new Set(localTrash.map((t) => t.id));
+        const mapSupaProduct = (p) => {
+          const meta = localMeta[p.id] || localMeta[p.sku] || {};
+          return {
+            ...p,
+            is_wholesale_enabled:
+              p.is_wholesale_enabled !== undefined
+                ? p.is_wholesale_enabled
+                : meta.is_wholesale_enabled,
+            selling_units:
+              Array.isArray(p.selling_units) && p.selling_units.length > 0
+                ? p.selling_units
+                : meta.selling_units || [],
+            linked_product_id:
+              p.linked_product_id || meta.linked_product_id || null,
+            linked_deduct_qty:
+              p.linked_deduct_qty || meta.linked_deduct_qty || 1,
+            lead_time_days: p.lead_time_days ?? meta.lead_time_days,
+            safety_stock: p.safety_stock ?? meta.safety_stock,
+            track_lots: p.track_lots ?? meta.track_lots ?? false,
+            lot_strategy: p.lot_strategy ?? meta.lot_strategy ?? 'FEFO',
+          };
+        };
+
+        const remoteActiveById = new Map(
+          (prodRes.data || []).filter((p) => !p.is_trashed).map((p) => [p.id, p])
+        );
+        const activeLocalTrash = localTrash.filter((t) => {
+          const remoteActive = remoteActiveById.get(t.id);
+          if (!remoteActive) return true;
+          const trashTime = t.deleted_at || t.updated_at || '';
+          const remoteTime = remoteActive.updated_at || '';
+          return trashTime > remoteTime;
+        });
+        const remoteTrashed = (prodRes.data || [])
+          .filter((p) => p.is_trashed)
+          .map(mapSupaProduct);
+        const mergedTrash = mergeByLatestUpdate(remoteTrashed, activeLocalTrash);
+        setLocal(STORAGE_KEYS.TRASH_PRODUCTS, mergedTrash);
+
+        const trashIds = new Set(mergedTrash.map((t) => t.id));
         const supaList = (prodRes.data || [])
-          .filter((p) => !trashIds.has(p.id))
-          .map((p) => {
-            const meta = localMeta[p.id] || localMeta[p.sku] || {};
-            return {
-              ...p,
-              is_wholesale_enabled:
-                p.is_wholesale_enabled !== undefined
-                  ? p.is_wholesale_enabled
-                  : meta.is_wholesale_enabled,
-              selling_units:
-                Array.isArray(p.selling_units) && p.selling_units.length > 0
-                  ? p.selling_units
-                  : meta.selling_units || [],
-              linked_product_id:
-                p.linked_product_id || meta.linked_product_id || null,
-              linked_deduct_qty:
-                p.linked_deduct_qty || meta.linked_deduct_qty || 1,
-              lead_time_days: p.lead_time_days ?? meta.lead_time_days,
-              safety_stock: p.safety_stock ?? meta.safety_stock,
-              track_lots: p.track_lots ?? meta.track_lots ?? false,
-              lot_strategy: p.lot_strategy ?? meta.lot_strategy ?? 'FEFO',
-            };
-          });
+          .filter((p) => !p.is_trashed && !trashIds.has(p.id))
+          .map(mapSupaProduct);
 
         // รวมสินค้าที่อาจถูกสร้างใน Local ไว้ด้วยเพื่อไม่ให้สินค้าหาย
         const existingLocalProds = getLocal(STORAGE_KEYS.PRODUCTS, []);
@@ -1207,11 +1412,6 @@ export const posService = {
           ...supaList,
         ]);
         setLocal(STORAGE_KEYS.PRODUCTS, syncedSupaProducts);
-
-        const wholesaleRules = syncInitialWholesaleRulesWithProducts(
-          syncedSupaProducts,
-          rawWholesaleRules
-        );
 
         const mergedCustomers = (cusRes.data || []).map((c) =>
           mergeCustomerMeta(c, localCustomerMeta)
@@ -1236,6 +1436,66 @@ export const posService = {
           loadRemoteWithLocal('stock_transfers', STORAGE_KEYS.STOCK_TRANSFERS, 500),
           loadRemoteWithLocal('sales_orders', STORAGE_KEYS.SALES_ORDERS, 1000),
         ]);
+        // beta 0.3.7: ผู้ผลิต ใบนำเข้า กฎราคาขายส่ง/ราคาพิเศษ ประวัติตัดล็อต หน่วยนับ และตั้งค่าร้านค้า
+        const [
+          remoteSuppliers,
+          remoteStockImports,
+          remoteWholesaleRules,
+          remoteSpecialRules,
+          remoteLotConsumptions,
+          remoteUnits,
+        ] = await Promise.all([
+          loadRemoteWithLocal('suppliers', STORAGE_KEYS.SUPPLIERS, 1000),
+          loadRemoteWithLocal('stock_imports', STORAGE_KEYS.STOCK_IMPORTS, 2000),
+          loadRemoteWithLocal('wholesale_rules', STORAGE_KEYS.WHOLESALE_RULES, 1000),
+          loadRemoteWithLocal('special_rules', STORAGE_KEYS.SPECIAL_RULES, 1000),
+          loadRemoteWithLocal('lot_consumptions', STORAGE_KEYS.LOT_CONSUMPTIONS, 5000),
+          loadRemoteWithLocal('units', STORAGE_KEYS.UNITS, 500, 'name'),
+          loadRemoteShopSettings(),
+        ]);
+
+        const syncedSuppliers = mergeByLatestUpdate(
+          remoteSuppliers,
+          getLocal(STORAGE_KEYS.SUPPLIERS, INITIAL_SUPPLIERS)
+        ).map((s) => sanitizeSupplierRow(s));
+        setLocal(STORAGE_KEYS.SUPPLIERS, syncedSuppliers);
+
+        const syncedStockImports = normalizeStockImports(
+          mergeByLatestUpdate(
+            remoteStockImports,
+            getLocal(STORAGE_KEYS.STOCK_IMPORTS, [])
+          )
+        );
+        setLocal(STORAGE_KEYS.STOCK_IMPORTS, syncedStockImports);
+
+        const mergedWholesaleRaw = mergeByLatestUpdate(
+          remoteWholesaleRules,
+          getLocal(STORAGE_KEYS.WHOLESALE_RULES, [])
+        );
+        const wholesaleRules = syncInitialWholesaleRulesWithProducts(
+          syncedSupaProducts,
+          mergedWholesaleRaw
+        );
+
+        const syncedSpecialRules = normalizeSpecialRules(
+          mergeByLatestUpdate(
+            remoteSpecialRules,
+            getLocal(STORAGE_KEYS.SPECIAL_RULES, [])
+          )
+        );
+        setLocal(STORAGE_KEYS.SPECIAL_RULES, syncedSpecialRules);
+
+        const lotConsumptions = normalizeLotConsumptions(
+          mergeByLatestUpdate(
+            remoteLotConsumptions,
+            normalizeLotConsumptions(getLocal(STORAGE_KEYS.LOT_CONSUMPTIONS, []))
+          )
+        );
+        setLocal(STORAGE_KEYS.LOT_CONSUMPTIONS, lotConsumptions);
+
+        const syncedUnits = mergeByLatestUpdate(remoteUnits, localUnits);
+        if (syncedUnits.length > 0) setLocal(STORAGE_KEYS.UNITS, syncedUnits);
+
         const salesOrders = mergeByLatestUpdate(remoteSalesOrders, getLocal(STORAGE_KEYS.SALES_ORDERS, []));
         setLocal(STORAGE_KEYS.SALES_ORDERS, salesOrders);
         const warehouses = normalizeWarehouses(mergeByLatestUpdate(remoteWarehouses, getLocal(STORAGE_KEYS.WAREHOUSES, [])));
@@ -1259,9 +1519,9 @@ export const posService = {
         return {
           mode: 'supabase',
           categories: categories.length > 1 ? categories : INITIAL_CATEGORIES,
-          units: localUnits,
+          units: syncedUnits.length > 0 ? syncedUnits : localUnits,
           products: syncedSupaProducts,
-          trashedProducts: localTrash,
+          trashedProducts: mergedTrash,
           customers: mergedCustomers,
           customerPayments,
           billingNotes,
@@ -1275,11 +1535,11 @@ export const posService = {
           salesOrders,
           productLots,
           users,
-          suppliers,
-          stockImports,
+          suppliers: syncedSuppliers,
+          stockImports: syncedStockImports,
           orders: ordRes.data || [],
           wholesaleRules,
-          specialRules,
+          specialRules: syncedSpecialRules,
         };
       } catch (err) {
         // เน็ตหลุดและเคยโหลดข้อมูลจริงไว้แล้ว = ทำงานต่อด้วยข้อมูลในเครื่อง (ยังเป็นโหมด Supabase แต่ออฟไลน์)
@@ -1340,6 +1600,14 @@ export const posService = {
    */
   async upsertProduct(productData, isSupabaseActive, currentProducts = null) {
     const nowIso = new Date().toISOString();
+    const baseProducts =
+      Array.isArray(currentProducts) && currentProducts.length > 0
+        ? currentProducts
+        : getLocal(STORAGE_KEYS.PRODUCTS, INITIAL_PRODUCTS);
+    const existingProd = productData.id
+      ? baseProducts.find((p) => p.id === productData.id)
+      : null;
+
     const sanitizedSellingUnits = Array.isArray(productData.selling_units)
       ? productData.selling_units
           .filter((u) => u && (String(u.unit || '').trim() || String(u.barcode || '').trim()))
@@ -1380,8 +1648,27 @@ export const posService = {
       selling_units: sanitizedSellingUnits,
       linked_product_id: linkedProductId,
       linked_deduct_qty: linkedDeductQty,
+      lead_time_days:
+        productData.lead_time_days !== undefined
+          ? productData.lead_time_days
+          : existingProd?.lead_time_days ?? null,
+      safety_stock:
+        productData.safety_stock !== undefined
+          ? productData.safety_stock
+          : existingProd?.safety_stock ?? null,
+      track_lots:
+        productData.track_lots !== undefined
+          ? Boolean(productData.track_lots)
+          : Boolean(existingProd?.track_lots),
+      lot_strategy:
+        productData.lot_strategy || existingProd?.lot_strategy || 'FEFO',
       updated_at: nowIso,
       is_active: productData.is_active !== false,
+    };
+
+    const supaPayload = {
+      ...cleanPayload,
+      linked_product_id: isUuid(linkedProductId) ? linkedProductId : null,
     };
 
     const baseSupabasePayload = {
@@ -1409,7 +1696,7 @@ export const posService = {
         if (productData.id && !String(productData.id).startsWith('prod-')) {
           let { data, error } = await supabase
             .from('products')
-            .update(cleanPayload)
+            .update(supaPayload)
             .eq('id', productData.id)
             .select()
             .single();
@@ -1426,7 +1713,7 @@ export const posService = {
         } else {
           let { data, error } = await supabase
             .from('products')
-            .insert([cleanPayload])
+            .insert([supaPayload])
             .select()
             .single();
           if (error) {
@@ -1444,10 +1731,6 @@ export const posService = {
       }
     }
 
-    const baseProducts =
-      Array.isArray(currentProducts) && currentProducts.length > 0
-        ? currentProducts
-        : getLocal(STORAGE_KEYS.PRODUCTS, INITIAL_PRODUCTS);
     let updatedList = [...baseProducts];
 
     // กรณีบันทึกสินค้ารองที่มีการเชื่อมสินค้าสัมพันธ์ และมีการปรับแก้จำนวนสต็อกของสินค้ารอง ให้ซิงค์กลับไปที่สินค้าตัวหลักด้วย
@@ -1543,6 +1826,7 @@ export const posService = {
             r.product_ids[0] === targetId))
     );
 
+    let wsRuleToSync = null;
     if (isWholesaleEnabled && wholesalePriceNum > 0) {
       const tier1 = {
         step: 1,
@@ -1569,12 +1853,14 @@ export const posService = {
           product_ids: [targetId],
           tiers: [tier1, ...restTiers],
           is_active: true,
+          created_at: existingRule.created_at || nowIso,
           updated_at: nowIso,
         };
         const nextWsRules = currentWsRules.map((r, idx) =>
           idx === existingSingleRuleIndex ? updatedRule : r
         );
         setLocal(STORAGE_KEYS.WHOLESALE_RULES, nextWsRules);
+        wsRuleToSync = updatedRule;
       } else {
         const newRule = {
           id: `ws-rule-sync-${targetId}`,
@@ -1589,14 +1875,24 @@ export const posService = {
           updated_at: nowIso,
         };
         setLocal(STORAGE_KEYS.WHOLESALE_RULES, [newRule, ...currentWsRules]);
+        wsRuleToSync = newRule;
       }
     } else if (existingSingleRuleIndex > -1) {
+      const deactivatedRule = {
+        ...currentWsRules[existingSingleRuleIndex],
+        is_active: false,
+        created_at: currentWsRules[existingSingleRuleIndex].created_at || nowIso,
+        updated_at: nowIso,
+      };
       const nextWsRules = currentWsRules.map((r, idx) =>
-        idx === existingSingleRuleIndex
-          ? { ...r, is_active: false, updated_at: nowIso }
-          : r
+        idx === existingSingleRuleIndex ? deactivatedRule : r
       );
       setLocal(STORAGE_KEYS.WHOLESALE_RULES, nextWsRules);
+      wsRuleToSync = deactivatedRule;
+    }
+
+    if (isSupabaseActive && supabase && wsRuleToSync) {
+      await upsertOrQueue('wholesale_rules', [wsRuleToSync]);
     }
 
     return syncedList.find((p) => p.id === targetId) || mergedProduct;
@@ -1617,6 +1913,29 @@ export const posService = {
         ? currentProducts
         : getLocal(STORAGE_KEYS.PRODUCTS, INITIAL_PRODUCTS);
     const target = products.find((p) => p.id === productId);
+
+    if (isSupabaseActive && supabase && !String(productId).startsWith('prod-')) {
+      try {
+        await supabase
+          .from('products')
+          .update({
+            is_trashed: true,
+            deleted_at: nowIso,
+            linked_product_id: null,
+            linked_deduct_qty: 1,
+            updated_at: nowIso,
+          })
+          .eq('id', productId);
+        if (isUuid(productId)) {
+          await supabase
+            .from('products')
+            .update({ linked_product_id: null, linked_deduct_qty: 1, updated_at: nowIso })
+            .eq('linked_product_id', productId);
+        }
+      } catch {
+        // fallback local
+      }
+    }
 
     let unlinkedCount = 0;
     const remainingProducts = products
@@ -1641,9 +1960,11 @@ export const posService = {
     if (target) {
       trashedItem = {
         ...target,
+        is_trashed: true,
         linked_product_id: null,
         linked_deduct_qty: 1,
         deleted_at: nowIso,
+        updated_at: nowIso,
       };
       const currentTrash = getLocal(STORAGE_KEYS.TRASH_PRODUCTS, []);
       const updatedTrash = [
@@ -1663,17 +1984,33 @@ export const posService = {
   /**
    * กู้คืนสินค้าจากถังขยะกลับเข้าคลังสินค้าปกติ
    */
-  async restoreProductFromTrash(productId) {
+  async restoreProductFromTrash(productId, isSupabaseActive = false) {
     const nowIso = new Date().toISOString();
     const currentTrash = getLocal(STORAGE_KEYS.TRASH_PRODUCTS, []);
     const target = currentTrash.find((t) => t.id === productId);
     if (!target) return null;
+
+    if (isSupabaseActive && supabase && !String(productId).startsWith('prod-')) {
+      try {
+        await supabase
+          .from('products')
+          .update({
+            is_trashed: false,
+            deleted_at: null,
+            updated_at: nowIso,
+          })
+          .eq('id', productId);
+      } catch {
+        // fallback local
+      }
+    }
 
     const updatedTrash = currentTrash.filter((t) => t.id !== productId);
     setLocal(STORAGE_KEYS.TRASH_PRODUCTS, updatedTrash);
 
     const restoredProduct = {
       ...target,
+      is_trashed: false,
       deleted_at: null,
       updated_at: nowIso,
     };
@@ -1973,12 +2310,27 @@ export const posService = {
       } else if (item.kind === 'order') {
         // รายการที่เข้าคิวจากเวอร์ชันก่อน beta 0.3.6
         result = await pushOrderToSupabase(item.order, item.deductions || []);
+      } else if (item.kind === 'delete') {
+        try {
+          const { error } = await supabase.from(item.table).delete().eq('id', item.rowId);
+          result = {
+            ok: !error,
+            networkError: error ? isNetworkError(error) : false,
+            message: error?.message,
+          };
+        } catch (err) {
+          result = { ok: false, networkError: isNetworkError(err), message: err?.message };
+        }
       } else {
         try {
           const { error } = await supabase.from(item.table).upsert(item.rows);
-          result = { ok: !error, networkError: error ? isNetworkError(error) : false };
+          result = {
+            ok: !error,
+            networkError: error ? isNetworkError(error) : false,
+            message: error?.message,
+          };
         } catch (err) {
-          result = { ok: false, networkError: isNetworkError(err) };
+          result = { ok: false, networkError: isNetworkError(err), message: err?.message };
         }
       }
       if (result.networkError) break;
@@ -2246,7 +2598,7 @@ export const posService = {
   /**
    * เพิ่มหน่วยนับสินค้าใหม่
    */
-  async addUnit(unitData) {
+  async addUnit(unitData, isSupabaseActive = false) {
     const cleanName = String(unitData.name || '').trim();
     const units = getLocal(STORAGE_KEYS.UNITS, INITIAL_UNITS);
     const existing = units.find(
@@ -2260,13 +2612,14 @@ export const posService = {
     };
     const updated = [...units, newUnit];
     setLocal(STORAGE_KEYS.UNITS, updated);
+    if (isSupabaseActive && supabase) await upsertOrQueue('units', [newUnit]);
     return newUnit;
   },
 
   /**
    * แก้ไขหน่วยนับสินค้า
    */
-  async updateUnit(unitId, unitData) {
+  async updateUnit(unitId, unitData, isSupabaseActive = false) {
     const cleanName = String(unitData.name || '').trim();
     const units = getLocal(STORAGE_KEYS.UNITS, INITIAL_UNITS);
     const oldUnit = units.find((u) => u.id === unitId);
@@ -2274,6 +2627,9 @@ export const posService = {
       u.id === unitId ? { ...u, name: cleanName } : u
     );
     setLocal(STORAGE_KEYS.UNITS, updatedUnits);
+    if (isSupabaseActive && supabase) {
+      await upsertOrQueue('units', [{ id: unitId, name: cleanName }]);
+    }
 
     if (oldUnit && oldUnit.name !== cleanName) {
       const products = getLocal(STORAGE_KEYS.PRODUCTS, INITIAL_PRODUCTS);
@@ -2295,10 +2651,11 @@ export const posService = {
   /**
    * ลบหน่วยนับสินค้า
    */
-  async deleteUnit(unitId) {
+  async deleteUnit(unitId, isSupabaseActive = false) {
     const units = getLocal(STORAGE_KEYS.UNITS, INITIAL_UNITS);
     const updated = units.filter((u) => u.id !== unitId);
     setLocal(STORAGE_KEYS.UNITS, updated);
+    if (isSupabaseActive && supabase) await deleteOrQueue('units', unitId);
     return true;
   },
 
@@ -2306,6 +2663,7 @@ export const posService = {
    * เพิ่มหรือแก้ไขข้อมูลลูกค้า (ปลีก / ยี่ปั๊วขายส่ง + สิทธิระดับราคาพิเศษ ขั้นที่ 0-10)
    */
   async upsertCustomer(customerData, isSupabaseActive) {
+    const nowIso = new Date().toISOString();
     const specialTier = Math.max(
       0,
       Math.min(10, Math.floor(Number(customerData.special_price_tier) || 0))
@@ -2324,6 +2682,7 @@ export const posService = {
     const payload = {
       ...basePayload,
       ...metaEntry,
+      updated_at: nowIso,
     };
 
     const customerMeta = getLocal(STORAGE_KEYS.CUSTOMER_META, {});
@@ -2766,7 +3125,7 @@ export const posService = {
           .filter(([targetId]) => isRemoteProductId(targetId))
           .map(([product_id, qty]) => ({ product_id, qty })),
         p_ledger: stockPlan.entries.filter((e) => isRemoteProductId(e.product_id)),
-        p_lots: buildLotDeltas(stockPlan.lotPlan),
+        p_lots: buildLotDeltas(stockPlan.lotPlan, fullOrder.order_number),
       };
       // ออฟไลน์หรือเน็ตหลุด: เก็บบิลเข้าคิวไว้ซิงค์ทีหลัง หน้าร้านขายต่อได้ทันที
       const result = isOnline() ? await pushOrderRpc(payload) : { ok: false, networkError: true };
@@ -2835,6 +3194,32 @@ export const posService = {
       );
     }
 
+    // กรณียกเลิกบิลจากคนละเครื่อง: โหลดประวัติการตัดล็อตของบิลนี้จากฐานข้อมูลก่อนวางแผนคืนล็อต
+    if (isSupabaseActive && supabase && isOnline() && order.order_number) {
+      const localConsumptions = normalizeLotConsumptions(
+        getLocal(STORAGE_KEYS.LOT_CONSUMPTIONS, [])
+      );
+      const hasLocalRef = localConsumptions.some(
+        (c) => c.reference_doc === order.order_number
+      );
+      if (!hasLocalRef) {
+        try {
+          const { data: remoteCons } = await supabase
+            .from('lot_consumptions')
+            .select('*')
+            .eq('reference_doc', order.order_number);
+          if (Array.isArray(remoteCons) && remoteCons.length > 0) {
+            const mergedCons = normalizeLotConsumptions(
+              mergeByLatestUpdate(remoteCons, localConsumptions)
+            );
+            setLocal(STORAGE_KEYS.LOT_CONSUMPTIONS, mergedCons);
+          }
+        } catch {
+          // ใช้ข้อมูลในเครื่องตามเดิม
+        }
+      }
+    }
+
     const updatedProducts = products.map((prod) => {
       const restoreQty = restoreByProductId.get(prod.id);
       if (!restoreQty) return prod;
@@ -2862,7 +3247,7 @@ export const posService = {
           .filter(([id]) => isRemoteProductId(id))
           .map(([product_id, qty]) => ({ product_id, qty })),
         p_ledger: stockPlan.entries.filter((e) => isRemoteProductId(e.product_id)),
-        p_lots: buildLotDeltas(stockPlan.lotPlan),
+        p_lots: buildLotDeltas(stockPlan.lotPlan, order.order_number),
       };
       // บิลยังรอซิงค์อยู่ในคิว: ต่อคิวการยกเลิกไว้หลังบิล (คิวซิงค์ตามลำดับ)
       const queuedOrder = this.getOfflineQueue().some(
@@ -2977,6 +3362,9 @@ export const posService = {
       ? rules.map((r) => (r.id === payload.id ? payload : r))
       : [payload, ...rules];
     setLocal(STORAGE_KEYS.WHOLESALE_RULES, updated);
+    if (isSupabaseActive && supabase) {
+      await upsertOrQueue('wholesale_rules', [payload]);
+    }
 
     // ซิงก์ขั้นที่ 1 กลับไปยังสินค้า (กรณีตั้งราคาขายส่งแบบเดี่ยว)
     let updatedProducts = null;
@@ -3017,6 +3405,7 @@ export const posService = {
             await supabase
               .from('products')
               .update({
+                is_wholesale_enabled: nextWholesaleEnabled,
                 wholesale_price: nextWholesalePrice,
                 wholesale_min_qty: nextMinQty,
                 updated_at: nowIso,
@@ -3047,12 +3436,15 @@ export const posService = {
     return { savedRule: payload, updatedRules: updated, updatedProducts };
   },
 
-  async deleteWholesaleRule(ruleId, currentProducts = null) {
+  async deleteWholesaleRule(ruleId, currentProducts = null, isSupabaseActive = false) {
     const nowIso = new Date().toISOString();
     const rules = getLocal(STORAGE_KEYS.WHOLESALE_RULES, []);
     const targetRule = rules.find((r) => r.id === ruleId);
     const updated = rules.filter((r) => r.id !== ruleId);
     setLocal(STORAGE_KEYS.WHOLESALE_RULES, updated);
+    if (isSupabaseActive && supabase) {
+      await deleteOrQueue('wholesale_rules', ruleId);
+    }
 
     let updatedProducts = null;
     if (
@@ -3080,6 +3472,21 @@ export const posService = {
           }
           setLocal(STORAGE_KEYS.PRODUCT_META, localMeta);
 
+          if (isSupabaseActive && supabase && !String(pid).startsWith('prod-')) {
+            try {
+              await supabase
+                .from('products')
+                .update({
+                  is_wholesale_enabled: false,
+                  wholesale_price: Number(targetProd.retail_price) || 0,
+                  updated_at: nowIso,
+                })
+                .eq('id', pid);
+            } catch {
+              // fallback local
+            }
+          }
+
           updatedProducts = normalizeAndSyncProducts(
             baseProds.map((p) =>
               p.id === pid
@@ -3103,7 +3510,7 @@ export const posService = {
   /**
    * บันทึกรายการราคาพิเศษ (สูงสุด 10 ขั้น ตามสิทธิของลูกค้า รองรับทั้งแบบเดี่ยวและแบบกลุ่ม)
    */
-  async upsertSpecialRule(ruleData) {
+  async upsertSpecialRule(ruleData, isSupabaseActive = false) {
     const nowIso = new Date().toISOString();
     const rules = getLocal(STORAGE_KEYS.SPECIAL_RULES, []);
     const isGroup =
@@ -3168,20 +3575,26 @@ export const posService = {
       ? rules.map((r) => (r.id === payload.id ? payload : r))
       : [payload, ...rules];
     setLocal(STORAGE_KEYS.SPECIAL_RULES, updated);
+    if (isSupabaseActive && supabase) {
+      await upsertOrQueue('special_rules', [payload]);
+    }
     return { savedRule: payload, updatedRules: updated };
   },
 
-  async deleteSpecialRule(ruleId) {
+  async deleteSpecialRule(ruleId, isSupabaseActive = false) {
     const rules = getLocal(STORAGE_KEYS.SPECIAL_RULES, []);
     const updated = rules.filter((r) => r.id !== ruleId);
     setLocal(STORAGE_KEYS.SPECIAL_RULES, updated);
+    if (isSupabaseActive && supabase) {
+      await deleteOrQueue('special_rules', ruleId);
+    }
     return updated;
   },
 
   /**
    * บันทึกหรือแก้ไขข้อมูลผู้ผลิต (Supplier)
    */
-  async upsertSupplier(supplierData) {
+  async upsertSupplier(supplierData, isSupabaseActive = false) {
     const nowIso = new Date().toISOString();
     const suppliers = getLocal(STORAGE_KEYS.SUPPLIERS, INITIAL_SUPPLIERS);
     const payload = {
@@ -3202,13 +3615,19 @@ export const posService = {
       ? suppliers.map((s) => (s.id === payload.id ? payload : s))
       : [payload, ...suppliers];
     setLocal(STORAGE_KEYS.SUPPLIERS, updated);
+    if (isSupabaseActive && supabase) {
+      await upsertOrQueue('suppliers', [payload]);
+    }
     return { savedSupplier: payload, updatedSuppliers: updated };
   },
 
-  async deleteSupplier(supplierId) {
+  async deleteSupplier(supplierId, isSupabaseActive = false) {
     const suppliers = getLocal(STORAGE_KEYS.SUPPLIERS, INITIAL_SUPPLIERS);
     const updated = suppliers.filter((s) => s.id !== supplierId);
     setLocal(STORAGE_KEYS.SUPPLIERS, updated);
+    if (isSupabaseActive && supabase) {
+      await deleteOrQueue('suppliers', supplierId);
+    }
     return updated;
   },
 
@@ -3261,6 +3680,9 @@ export const posService = {
     const existingImports = getLocal(STORAGE_KEYS.STOCK_IMPORTS, []);
     const updatedImports = normalizeStockImports([importRecord, ...existingImports]);
     setLocal(STORAGE_KEYS.STOCK_IMPORTS, updatedImports);
+    if (isSupabaseActive && supabase) {
+      await upsertOrQueue('stock_imports', [importRecord]);
+    }
 
     return {
       savedImport: importRecord,
@@ -3324,6 +3746,9 @@ export const posService = {
       imp.id === importId ? savedImport : imp
     );
     setLocal(STORAGE_KEYS.STOCK_IMPORTS, updatedImports);
+    if (isSupabaseActive && supabase) {
+      await upsertOrQueue('stock_imports', [savedImport]);
+    }
 
     return { savedImport, updatedImports, updatedProducts: syncedProducts };
   },
@@ -3373,8 +3798,255 @@ export const posService = {
       imp.id === importId ? savedImport : imp
     );
     setLocal(STORAGE_KEYS.STOCK_IMPORTS, updatedImports);
+    if (isSupabaseActive && supabase) {
+      await upsertOrQueue('stock_imports', [savedImport]);
+    }
 
     return { savedImport, updatedImports, updatedProducts: syncedProducts };
+  },
+
+  /**
+   * บันทึกตั้งค่าร้านค้าที่ใช้ร่วมกันทุกเครื่องลงตาราง shop_settings
+   */
+  async saveShopSettings(settings, isSupabaseActive = false) {
+    const row = shopSettingsToRow(settings);
+    if (isSupabaseActive && supabase) {
+      await upsertOrQueue('shop_settings', [row]);
+    }
+    return row;
+  },
+
+  /**
+   * สรุปจำนวนข้อมูลในเครื่องที่พร้อมอัปโหลดขึ้นฐานข้อมูล
+   */
+  getLocalDataSummary() {
+    const suppliers = getLocal(STORAGE_KEYS.SUPPLIERS, []);
+    const stockImports = getLocal(STORAGE_KEYS.STOCK_IMPORTS, []);
+    const wholesaleRules = getLocal(STORAGE_KEYS.WHOLESALE_RULES, []);
+    const specialRules = getLocal(STORAGE_KEYS.SPECIAL_RULES, []);
+    const units = getLocal(STORAGE_KEYS.UNITS, []);
+    const lotConsumptions = getLocal(STORAGE_KEYS.LOT_CONSUMPTIONS, []);
+    const productMeta = getLocal(STORAGE_KEYS.PRODUCT_META, {});
+    const customerMeta = getLocal(STORAGE_KEYS.CUSTOMER_META, {});
+    return {
+      suppliers: suppliers.length,
+      stockImports: stockImports.length,
+      wholesaleRules: wholesaleRules.length,
+      specialRules: specialRules.length,
+      units: units.length,
+      lotConsumptions: lotConsumptions.length,
+      productMetaCount: Object.keys(productMeta).length,
+      customerMetaCount: Object.keys(customerMeta).length,
+    };
+  },
+
+  /**
+   * อัปโหลดข้อมูลที่เคยเก็บเฉพาะในเครื่องหลักขึ้นฐานข้อมูล Supabase (กดซ้ำได้ปลอดภัยด้วย upsert ตาม id)
+   * รวมถึงซิงค์คอลัมน์เสริมของสินค้า (PRODUCT_META / ถังขยะ) และลูกค้า (CUSTOMER_META)
+   */
+  async uploadLocalDataToSupabase() {
+    if (!isSupabaseConfigured || !supabase) {
+      throw new Error('ยังไม่ได้เชื่อมต่อ Supabase กรุณาตั้งค่า .env ก่อนอัปโหลด');
+    }
+    if (!isOnline()) {
+      throw new Error('ไม่สามารถอัปโหลดขณะออฟไลน์ได้ กรุณาเชื่อมต่ออินเทอร์เน็ต');
+    }
+
+    await this.flushOfflineQueue();
+
+    const nowIso = new Date().toISOString();
+    const errors = [];
+    const counts = {
+      shopSettings: 0,
+      units: 0,
+      suppliers: 0,
+      stockImports: 0,
+      wholesaleRules: 0,
+      specialRules: 0,
+      lotConsumptions: 0,
+      productsUpdated: 0,
+      customersUpdated: 0,
+    };
+
+    // 1. ตั้งค่าร้านค้าที่ใช้ร่วมกันทุกเครื่อง
+    try {
+      const shopRow = shopSettingsToRow(printerService.getLocalShopSettings(), nowIso);
+      const { error } = await supabase.from('shop_settings').upsert([shopRow]);
+      if (error) errors.push(`shop_settings: ${error.message}`);
+      else counts.shopSettings = 1;
+    } catch (err) {
+      errors.push(`shop_settings: ${err.message}`);
+    }
+
+    // 2. หน่วยนับสินค้า
+    const localUnits = getLocal(STORAGE_KEYS.UNITS, INITIAL_UNITS)
+      .filter((u) => u && u.id && String(u.name || '').trim())
+      .map((u) => ({ id: String(u.id), name: String(u.name).trim() }));
+    if (localUnits.length > 0) {
+      try {
+        const { error } = await supabase.from('units').upsert(localUnits);
+        if (error) errors.push(`units: ${error.message}`);
+        else counts.units = localUnits.length;
+      } catch (err) {
+        errors.push(`units: ${err.message}`);
+      }
+    }
+
+    // 3. ผู้ผลิต (Suppliers)
+    const localSuppliers = getLocal(STORAGE_KEYS.SUPPLIERS, []).map((s) =>
+      sanitizeSupplierRow(s, nowIso)
+    );
+    if (localSuppliers.length > 0) {
+      try {
+        const { error } = await supabase.from('suppliers').upsert(localSuppliers);
+        if (error) errors.push(`suppliers: ${error.message}`);
+        else counts.suppliers = localSuppliers.length;
+      } catch (err) {
+        errors.push(`suppliers: ${err.message}`);
+      }
+    }
+
+    // 4. ใบนำเข้าสินค้า (Stock Imports)
+    const localImports = normalizeStockImports(getLocal(STORAGE_KEYS.STOCK_IMPORTS, []));
+    if (localImports.length > 0) {
+      try {
+        const { error } = await supabase.from('stock_imports').upsert(localImports);
+        if (error) errors.push(`stock_imports: ${error.message}`);
+        else counts.stockImports = localImports.length;
+      } catch (err) {
+        errors.push(`stock_imports: ${err.message}`);
+      }
+    }
+
+    // 5. กฎราคาขายส่งหลายระดับ (Wholesale Rules)
+    const localProducts = getLocal(STORAGE_KEYS.PRODUCTS, []);
+    const localWholesaleRules = syncInitialWholesaleRulesWithProducts(
+      localProducts,
+      getLocal(STORAGE_KEYS.WHOLESALE_RULES, [])
+    ).map((r) => ({
+      id: r.id,
+      name: String(r.name || '').trim() || 'ราคาขายส่งหลายระดับ',
+      type: r.type || r.target_type || 'single',
+      target_type: r.target_type || r.type || 'single',
+      product_id: r.product_id || null,
+      product_ids: Array.isArray(r.product_ids) ? r.product_ids : [],
+      tiers: Array.isArray(r.tiers) ? r.tiers : [],
+      is_active: r.is_active !== false,
+      created_at: r.created_at || nowIso,
+      updated_at: r.updated_at || r.created_at || nowIso,
+    }));
+    if (localWholesaleRules.length > 0) {
+      try {
+        const { error } = await supabase.from('wholesale_rules').upsert(localWholesaleRules);
+        if (error) errors.push(`wholesale_rules: ${error.message}`);
+        else counts.wholesaleRules = localWholesaleRules.length;
+      } catch (err) {
+        errors.push(`wholesale_rules: ${err.message}`);
+      }
+    }
+
+    // 6. กฎราคาพิเศษตามขั้นลูกค้า (Special Rules)
+    const localSpecialRules = normalizeSpecialRules(
+      getLocal(STORAGE_KEYS.SPECIAL_RULES, [])
+    ).map((r) => ({
+      id: r.id,
+      name: String(r.name || '').trim() || 'ราคาพิเศษ',
+      type: r.type || r.target_type || 'single',
+      target_type: r.target_type || r.type || 'single',
+      product_id: r.product_id || null,
+      product_ids: Array.isArray(r.product_ids) ? r.product_ids : [],
+      tiers: Array.isArray(r.tiers) ? r.tiers : [],
+      is_active: r.is_active !== false,
+      created_at: r.created_at || nowIso,
+      updated_at: r.updated_at || r.created_at || nowIso,
+    }));
+    if (localSpecialRules.length > 0) {
+      try {
+        const { error } = await supabase.from('special_rules').upsert(localSpecialRules);
+        if (error) errors.push(`special_rules: ${error.message}`);
+        else counts.specialRules = localSpecialRules.length;
+      } catch (err) {
+        errors.push(`special_rules: ${err.message}`);
+      }
+    }
+
+    // 7. ประวัติการตัดล็อตตามเลขที่บิล (Lot Consumptions)
+    const localLotConsumptions = normalizeLotConsumptions(
+      getLocal(STORAGE_KEYS.LOT_CONSUMPTIONS, [])
+    );
+    if (localLotConsumptions.length > 0) {
+      try {
+        const { error } = await supabase.from('lot_consumptions').upsert(localLotConsumptions);
+        if (error) errors.push(`lot_consumptions: ${error.message}`);
+        else counts.lotConsumptions = localLotConsumptions.length;
+      } catch (err) {
+        errors.push(`lot_consumptions: ${err.message}`);
+      }
+    }
+
+    // 8. ซิงค์คอลัมน์เสริมของสินค้า (PRODUCT_META และถังขยะ) ขึ้นตาราง products
+    const localMeta = getLocal(STORAGE_KEYS.PRODUCT_META, {});
+    const localTrash = getLocal(STORAGE_KEYS.TRASH_PRODUCTS, []);
+    const allLocalProds = [
+      ...localProducts.map((p) => ({ ...p, is_trashed: false })),
+      ...localTrash.map((t) => ({ ...t, is_trashed: true })),
+    ].filter((p) => isRemoteProductId(p.id));
+
+    for (const p of allLocalProds) {
+      const meta = localMeta[p.id] || localMeta[p.sku] || {};
+      const linkedId = p.linked_product_id || meta.linked_product_id || null;
+      const patch = {
+        is_wholesale_enabled: Boolean(
+          p.is_wholesale_enabled ?? meta.is_wholesale_enabled
+        ),
+        selling_units:
+          Array.isArray(p.selling_units) && p.selling_units.length > 0
+            ? p.selling_units
+            : meta.selling_units || [],
+        linked_product_id: isUuid(linkedId) ? linkedId : null,
+        linked_deduct_qty: Math.max(
+          1,
+          Number(p.linked_deduct_qty || meta.linked_deduct_qty) || 1
+        ),
+        lead_time_days: p.lead_time_days ?? meta.lead_time_days ?? null,
+        safety_stock: p.safety_stock ?? meta.safety_stock ?? null,
+        track_lots: Boolean(p.track_lots ?? meta.track_lots ?? false),
+        lot_strategy: p.lot_strategy ?? meta.lot_strategy ?? 'FEFO',
+        is_trashed: Boolean(p.is_trashed),
+        deleted_at: p.is_trashed ? p.deleted_at || nowIso : null,
+      };
+      try {
+        const { error } = await supabase.from('products').update(patch).eq('id', p.id);
+        if (!error) counts.productsUpdated += 1;
+      } catch {
+        // ข้ามถ้าตารางยังไม่ได้เพิ่มคอลัมน์
+      }
+    }
+
+    // 9. ซิงค์คอลัมน์เสริมของลูกค้า (CUSTOMER_META) ขึ้นตาราง customers
+    const localCustomerMeta = getLocal(STORAGE_KEYS.CUSTOMER_META, {});
+    const localCustomers = getLocal(STORAGE_KEYS.CUSTOMERS, []).filter((c) =>
+      isUuid(c.id)
+    );
+    for (const c of localCustomers) {
+      const merged = mergeCustomerMeta(c, localCustomerMeta);
+      const patch = {
+        special_price_tier: Number(merged.special_price_tier) || 0,
+        tax_id: merged.tax_id || '',
+        branch_number: merged.branch_number || '00000',
+        credit_limit: Number(merged.credit_limit) || 0,
+        credit_term_days: Number(merged.credit_term_days) || 30,
+        is_blocked: Boolean(merged.is_blocked),
+      };
+      try {
+        const { error } = await supabase.from('customers').update(patch).eq('id', c.id);
+        if (!error) counts.customersUpdated += 1;
+      } catch {
+        // ข้ามถ้าตารางยังไม่ได้เพิ่มคอลัมน์
+      }
+    }
+
+    return { counts, errors };
   },
 
   /**

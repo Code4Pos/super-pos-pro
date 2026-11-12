@@ -104,6 +104,8 @@
    - PIN พนักงานและ RBAC ในแอปใช้แบบเดิม (ระยะถัดไปค่อยผูกบทบาทกับ JWT claims)
 
 ### ขั้นที่ 1: ย้ายข้อมูลที่ยังอยู่ในเครื่องขึ้นฐานข้อมูล
+> **สถานะ: Gemini ทำเสร็จแล้วใน beta 0.3.7** (รายละเอียดใน Handoff Notes ของ AGENTS.md)
+
 1. ตารางใหม่ใน `supabase/schema.sql` (+ `src/data/mockData.js`):
    - `suppliers`, `stock_imports`, `wholesale_rules`, `special_rules`
    - `shop_settings` (แถวเดียว)

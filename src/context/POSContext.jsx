@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { posService, normalizeAndSyncProducts } from '../services/posService';
-import { printerService } from '../services/printerService';
+import { printerService, SHARED_SHOP_SETTING_KEYS } from '../services/printerService';
 import { calculateEffectiveUnitPrice } from '../utils/formatters';
 import { summarizeSplitPayments } from '../utils/payments';
 import { calculateCustomerCredit, checkCreditSale } from '../utils/credit';
@@ -14,7 +14,7 @@ import {
 
 const SESSION_STORAGE_KEY = 'siampos_session_v1';
 
-export const APP_VERSION = 'version beta 0.3.6';
+export const APP_VERSION = 'version beta 0.3.7';
 const HELD_BILLS_STORAGE_KEY = 'siampos_held_bills_v1';
 
 const POSContext = createContext(null);
@@ -104,10 +104,21 @@ export function POSProvider({ children, scope = 'all' }) {
     return unsub;
   }, []);
 
-  const updatePrinterSettings = useCallback((newSettings) => {
-    const updated = printerService.saveSettings(newSettings);
-    setPrinterSettings(updated);
-  }, []);
+  const updatePrinterSettings = useCallback(
+    (newSettings) => {
+      const updated = printerService.saveSettings(newSettings);
+      setPrinterSettings(updated);
+      if (
+        newSettings &&
+        SHARED_SHOP_SETTING_KEYS.some((key) =>
+          Object.prototype.hasOwnProperty.call(newSettings, key)
+        )
+      ) {
+        posService.saveShopSettings(updated, dbMode === 'supabase');
+      }
+    },
+    [dbMode]
+  );
 
   const setVatMode = useCallback(
     (mode) => updatePrinterSettings({ vatMode: mode }),
@@ -178,6 +189,7 @@ export function POSProvider({ children, scope = 'all' }) {
       setOrders(data.orders);
       setWholesaleRules(data.wholesaleRules || []);
       setSpecialRules(data.specialRules || []);
+      setPrinterSettings(printerService.getSettings());
     } catch (err) {
       console.error('Error loading POS data:', err);
       showToast('เกิดข้อผิดพลาดในการโหลดข้อมูล', 'error');
@@ -782,7 +794,10 @@ export function POSProvider({ children, scope = 'all' }) {
   // กู้คืนสินค้าจากถังขยะ
   const restoreProductFromTrash = useCallback(
     async (productId) => {
-      const result = await posService.restoreProductFromTrash(productId);
+      const result = await posService.restoreProductFromTrash(
+        productId,
+        dbMode === 'supabase'
+      );
       if (!result) return null;
       setProducts(result.updatedProducts);
       setTrashedProducts(result.updatedTrash);
@@ -792,7 +807,7 @@ export function POSProvider({ children, scope = 'all' }) {
       );
       return result.restoredProduct;
     },
-    [showToast]
+    [dbMode, showToast]
   );
 
   // ลบสินค้าในถังขยะแบบถาวร
@@ -953,35 +968,35 @@ export function POSProvider({ children, scope = 'all' }) {
   const deleteWholesaleRule = useCallback(
     async (ruleId) => {
       const { updatedRules, updatedProducts } =
-        await posService.deleteWholesaleRule(ruleId, products);
+        await posService.deleteWholesaleRule(ruleId, products, dbMode === 'supabase');
       setWholesaleRules(updatedRules);
       if (updatedProducts) {
         setProducts(updatedProducts);
       }
       showToast('ลบรายการราคาขายส่งเรียบร้อยแล้ว', 'info');
     },
-    [products, showToast]
+    [products, dbMode, showToast]
   );
 
   // บันทึก/ลบ ราคาพิเศษ (สูงสุด 10 ขั้น)
   const saveSpecialRule = useCallback(
     async (ruleData) => {
       const { savedRule, updatedRules } =
-        await posService.upsertSpecialRule(ruleData);
+        await posService.upsertSpecialRule(ruleData, dbMode === 'supabase');
       setSpecialRules(updatedRules);
       showToast(`บันทึกราคาพิเศษ "${savedRule.name}" เรียบร้อย`, 'success');
       return savedRule;
     },
-    [showToast]
+    [dbMode, showToast]
   );
 
   const deleteSpecialRule = useCallback(
     async (ruleId) => {
-      const updatedRules = await posService.deleteSpecialRule(ruleId);
+      const updatedRules = await posService.deleteSpecialRule(ruleId, dbMode === 'supabase');
       setSpecialRules(updatedRules);
       showToast('ลบรายการราคาพิเศษเรียบร้อยแล้ว', 'info');
     },
-    [showToast]
+    [dbMode, showToast]
   );
 
   // เพิ่มหมวดหมู่สินค้า
@@ -1026,7 +1041,7 @@ export function POSProvider({ children, scope = 'all' }) {
   // เพิ่มหน่วยนับสินค้า
   const addUnit = useCallback(
     async (unitData) => {
-      const saved = await posService.addUnit(unitData);
+      const saved = await posService.addUnit(unitData, dbMode === 'supabase');
       setUnits((prev) => {
         if (prev.some((u) => u.id === saved.id)) return prev;
         return [...prev, saved];
@@ -1034,13 +1049,13 @@ export function POSProvider({ children, scope = 'all' }) {
       showToast(`เพิ่มหน่วยนับ "${saved.name}" สำเร็จ`, 'success');
       return saved;
     },
-    [showToast]
+    [dbMode, showToast]
   );
 
   // แก้ไขหน่วยนับสินค้า
   const updateUnit = useCallback(
     async (unitId, unitData) => {
-      const updated = await posService.updateUnit(unitId, unitData);
+      const updated = await posService.updateUnit(unitId, unitData, dbMode === 'supabase');
       setUnits((prev) =>
         prev.map((u) => (u.id === unitId ? { ...u, name: updated.name } : u))
       );
@@ -1062,17 +1077,17 @@ export function POSProvider({ children, scope = 'all' }) {
       showToast(`แก้ไขหน่วยนับเป็น "${updated.name}" สำเร็จ`, 'success');
       return updated;
     },
-    [showToast]
+    [dbMode, showToast]
   );
 
   // ลบหน่วยนับสินค้า
   const deleteUnit = useCallback(
     async (unitId) => {
-      await posService.deleteUnit(unitId);
+      await posService.deleteUnit(unitId, dbMode === 'supabase');
       setUnits((prev) => prev.filter((u) => u.id !== unitId));
       showToast('ลบหน่วยนับเรียบร้อยแล้ว', 'info');
     },
-    [showToast]
+    [dbMode, showToast]
   );
 
   // เพิ่ม/แก้ไขลูกค้า
@@ -1460,21 +1475,21 @@ export function POSProvider({ children, scope = 'all' }) {
   const saveSupplier = useCallback(
     async (supplierData) => {
       const { savedSupplier, updatedSuppliers } =
-        await posService.upsertSupplier(supplierData);
+        await posService.upsertSupplier(supplierData, dbMode === 'supabase');
       setSuppliers(updatedSuppliers);
       showToast(`บันทึกข้อมูลผู้ผลิต "${savedSupplier.name}" สำเร็จ`, 'success');
       return savedSupplier;
     },
-    [showToast]
+    [dbMode, showToast]
   );
 
   const deleteSupplier = useCallback(
     async (supplierId) => {
-      const updated = await posService.deleteSupplier(supplierId);
+      const updated = await posService.deleteSupplier(supplierId, dbMode === 'supabase');
       setSuppliers(updated);
       showToast('ลบข้อมูลผู้ผลิตเรียบร้อยแล้ว', 'info');
     },
-    [showToast]
+    [dbMode, showToast]
   );
 
   // ใบนำเข้าสินค้า (Stock Import): รออนุมัติ > ระหว่างขนส่ง > นำเข้าสำเร็จ
@@ -1631,7 +1646,11 @@ export function POSProvider({ children, scope = 'all' }) {
         } catch {
           setSessionUserId(null);
         }
-      } else if (e.key === 'siampos_printer_settings_v1') {
+      } else if (
+        e.key === 'siampos_printer_settings_v1' ||
+        e.key === 'siampos_printer_settings_v2' ||
+        e.key === 'siampos_shop_settings_v1'
+      ) {
         setPrinterSettings(printerService.getSettings());
       } else if (
         e.key === 'siampos_products_v1' ||
@@ -1647,6 +1666,13 @@ export function POSProvider({ children, scope = 'all' }) {
     };
     window.addEventListener('storage', handleStorageChange);
     return () => window.removeEventListener('storage', handleStorageChange);
+  }, [refreshData]);
+
+  // อัปโหลดข้อมูลที่เคยเก็บเฉพาะในเครื่องหลักขึ้นฐานข้อมูล Supabase (กดซ้ำได้ปลอดภัย)
+  const uploadLocalData = useCallback(async () => {
+    const result = await posService.uploadLocalDataToSupabase();
+    await refreshData();
+    return result;
   }, [refreshData]);
 
   const resetDemo = useCallback(async () => {
@@ -1840,6 +1866,7 @@ export function POSProvider({ children, scope = 'all' }) {
     updateStockImport,
     changeStockImportStatus,
     voidOrder,
+    uploadLocalData,
     refreshData,
     resetDemo,
     toast,

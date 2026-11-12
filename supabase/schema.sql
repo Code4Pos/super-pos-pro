@@ -510,6 +510,23 @@ BEGIN
       ON CONFLICT (id) DO NOTHING;
     END IF;
   END LOOP;
+
+  -- beta 0.3.7: บันทึกประวัติการตัดล็อตลง lot_consumptions เพื่อให้ยกเลิกบิลข้ามเครื่องแล้วคืนเข้าล็อตเดิมได้
+  INSERT INTO lot_consumptions (id, reference_doc, product_id, consumed, created_at, updated_at)
+  SELECT
+    (COALESCE(NULLIF(l->>'reference_doc', ''), l->'row'->>'reference_doc')) || ':' || (l->'row'->>'product_id'),
+    COALESCE(NULLIF(l->>'reference_doc', ''), l->'row'->>'reference_doc'),
+    l->'row'->>'product_id',
+    jsonb_agg(jsonb_build_object('lot_id', l->'row'->>'id', 'qty', -((l->>'delta')::numeric))),
+    NOW(),
+    NOW()
+  FROM jsonb_array_elements(COALESCE(p_lots, '[]'::jsonb)) l
+  WHERE COALESCE((l->>'delta')::numeric, 0) < 0
+    AND COALESCE(NULLIF(l->>'reference_doc', ''), NULLIF(l->'row'->>'reference_doc', '')) IS NOT NULL
+  GROUP BY COALESCE(NULLIF(l->>'reference_doc', ''), l->'row'->>'reference_doc'), l->'row'->>'product_id'
+  ON CONFLICT (id) DO UPDATE
+    SET consumed = EXCLUDED.consumed,
+        updated_at = NOW();
 END;
 $$;
 
@@ -595,6 +612,13 @@ BEGIN
 
   PERFORM siampos_insert_ledger(p_ledger, v_balances, v_number);
   PERFORM siampos_apply_lot_deltas(p_lots);
+  IF v_number <> (p_order->>'order_number') THEN
+    UPDATE lot_consumptions
+      SET id = v_number || ':' || product_id,
+          reference_doc = v_number,
+          updated_at = NOW()
+      WHERE reference_doc = (p_order->>'order_number');
+  END IF;
 
   RETURN jsonb_build_object('status', 'created', 'order_number', v_number, 'balances', v_balances);
 END;
@@ -642,12 +666,137 @@ BEGIN
 
   PERFORM siampos_insert_ledger(p_ledger, v_balances, v_order.order_number);
   PERFORM siampos_apply_lot_deltas(p_lots);
+  DELETE FROM lot_consumptions WHERE reference_doc = v_order.order_number;
 
   RETURN jsonb_build_object('status', 'voided', 'order_number', v_order.order_number, 'balances', v_balances);
 END;
 $$;
 
--- ให้ PostgREST รู้จักฟังก์ชันใหม่ทันที
+-- =================================================================================
+-- beta 0.3.7 (Phase 2 ขั้นที่ 1): ย้ายข้อมูลที่ยังอยู่ในเครื่องขึ้นฐานข้อมูล
+-- ตารางใหม่: suppliers, stock_imports, wholesale_rules, special_rules, shop_settings, lot_consumptions
+-- นโยบาย RLS ใช้ TO authenticated (ต้องล็อกอินบัญชีร้านก่อนจึงเข้าถึงได้)
+-- =================================================================================
+
+ALTER TABLE product_lots ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+
+-- 1. ตารางผู้ผลิต / ซัพพลายเออร์ (Suppliers)
+CREATE TABLE IF NOT EXISTS suppliers (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  address TEXT DEFAULT '',
+  tambon TEXT DEFAULT '',
+  amphoe TEXT DEFAULT '',
+  province TEXT DEFAULT '',
+  zipcode TEXT DEFAULT '',
+  phone TEXT DEFAULT '',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 2. ตารางใบนำเข้าสินค้า / ใบสั่งซื้อ (Stock Imports / PO)
+CREATE TABLE IF NOT EXISTS stock_imports (
+  id TEXT PRIMARY KEY,
+  import_number TEXT UNIQUE NOT NULL,
+  supplier_id TEXT,
+  supplier_name TEXT DEFAULT '-',
+  supplier_phone TEXT DEFAULT '',
+  warehouse_id TEXT DEFAULT 'wh-front',
+  items JSONB NOT NULL DEFAULT '[]'::jsonb,
+  total_items NUMERIC(12, 2) NOT NULL DEFAULT 0,
+  total_discount NUMERIC(12, 2) NOT NULL DEFAULT 0,
+  grand_total NUMERIC(12, 2) NOT NULL DEFAULT 0,
+  note TEXT DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'completed' CHECK (status IN ('pending', 'in_transit', 'completed', 'cancelled')),
+  status_history JSONB NOT NULL DEFAULT '[]'::jsonb,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_stock_imports_created_at ON stock_imports (created_at DESC);
+
+-- 3. ตารางกฎราคาขายส่งหลายระดับ (Wholesale Rules 1-10 ขั้น)
+CREATE TABLE IF NOT EXISTS wholesale_rules (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  type TEXT NOT NULL DEFAULT 'single' CHECK (type IN ('single', 'group')),
+  target_type TEXT NOT NULL DEFAULT 'single' CHECK (target_type IN ('single', 'group')),
+  product_id TEXT,
+  product_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+  tiers JSONB NOT NULL DEFAULT '[]'::jsonb,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 4. ตารางกฎราคาพิเศษตามขั้นสิทธิลูกค้า (Special Rules 1-10 ขั้น)
+CREATE TABLE IF NOT EXISTS special_rules (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  type TEXT NOT NULL DEFAULT 'single' CHECK (type IN ('single', 'group')),
+  target_type TEXT NOT NULL DEFAULT 'single' CHECK (target_type IN ('single', 'group')),
+  product_id TEXT,
+  product_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+  tiers JSONB NOT NULL DEFAULT '[]'::jsonb,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 5. ตารางค่าตั้งร้านที่ใช้ร่วมกันทุกเครื่อง (Shop Settings — แถวเดียว id = 'default')
+CREATE TABLE IF NOT EXISTS shop_settings (
+  id TEXT PRIMARY KEY DEFAULT 'default',
+  shop_name TEXT NOT NULL DEFAULT 'สยามค้าปลีก-ส่ง (SiamPOS Pro)',
+  shop_address TEXT DEFAULT '',
+  shop_phone TEXT DEFAULT '',
+  footer_text TEXT DEFAULT '',
+  promptpay_id TEXT DEFAULT '',
+  vat_registered BOOLEAN NOT NULL DEFAULT FALSE,
+  shop_tax_id VARCHAR(13) DEFAULT '',
+  shop_branch VARCHAR(5) DEFAULT '00000',
+  vat_mode TEXT NOT NULL DEFAULT 'no_vat' CHECK (vat_mode IN ('no_vat', 'vat_in', 'vat_out')),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 6. ตารางประวัติการตัดล็อตตามเลขที่เอกสาร (Lot Consumptions — ใช้คืนล็อตเดิมเมื่อยกเลิกบิลข้ามเครื่อง)
+CREATE TABLE IF NOT EXISTS lot_consumptions (
+  id TEXT PRIMARY KEY, -- '<reference_doc>:<product_id>'
+  reference_doc TEXT NOT NULL,
+  product_id TEXT NOT NULL,
+  consumed JSONB NOT NULL DEFAULT '[]'::jsonb,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_lot_consumptions_ref ON lot_consumptions (reference_doc);
+
+-- เปิด RLS และอนุญาตเฉพาะผู้ใช้ที่ล็อกอินบัญชีร้านแล้ว (TO authenticated)
+ALTER TABLE suppliers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE stock_imports ENABLE ROW LEVEL SECURITY;
+ALTER TABLE wholesale_rules ENABLE ROW LEVEL SECURITY;
+ALTER TABLE special_rules ENABLE ROW LEVEL SECURITY;
+ALTER TABLE shop_settings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE lot_consumptions ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Authenticated access to suppliers" ON suppliers;
+CREATE POLICY "Authenticated access to suppliers" ON suppliers FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Authenticated access to stock_imports" ON stock_imports;
+CREATE POLICY "Authenticated access to stock_imports" ON stock_imports FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Authenticated access to wholesale_rules" ON wholesale_rules;
+CREATE POLICY "Authenticated access to wholesale_rules" ON wholesale_rules FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Authenticated access to special_rules" ON special_rules;
+CREATE POLICY "Authenticated access to special_rules" ON special_rules FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Authenticated access to shop_settings" ON shop_settings;
+CREATE POLICY "Authenticated access to shop_settings" ON shop_settings FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Authenticated access to lot_consumptions" ON lot_consumptions;
+CREATE POLICY "Authenticated access to lot_consumptions" ON lot_consumptions FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+-- ให้ PostgREST รู้จักตารางและฟังก์ชันใหม่ทันที
 NOTIFY pgrst, 'reload schema';
 
 
