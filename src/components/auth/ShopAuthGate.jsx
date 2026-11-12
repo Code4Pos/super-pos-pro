@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { Store, Loader2, WifiOff } from 'lucide-react';
-import { supabase } from '../../lib/supabase';
+import { Store, Loader2, WifiOff, Server, RotateCcw } from 'lucide-react';
+import { supabase, getServerConfig, saveServerConfig, resetServerConfig } from '../../lib/supabase';
 
 /**
  * ล็อกอินบัญชีร้าน (Supabase Auth) ก่อนเข้าแอป เมื่อใช้ฐานข้อมูลจริง (beta 0.3.6)
@@ -46,7 +46,26 @@ function ShopLoginForm() {
   const [password, setPassword] = useState('');
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
+  const [showServerSetup, setShowServerSetup] = useState(false);
+  const serverCfg = getServerConfig();
+  const [serverUrl, setServerUrl] = useState(serverCfg.customUrl || serverCfg.url || '');
+  const [serverKey, setServerKey] = useState(serverCfg.customAnonKey || serverCfg.anonKey || '');
   const offline = typeof navigator !== 'undefined' && navigator.onLine === false;
+
+  const handleSaveServer = () => {
+    setMessage('');
+    try {
+      saveServerConfig({ url: serverUrl, anonKey: serverKey });
+      window.location.reload();
+    } catch (err) {
+      setMessage(err?.message || 'บันทึกเซิร์ฟเวอร์ไม่สำเร็จ');
+    }
+  };
+
+  const handleResetServer = () => {
+    resetServerConfig();
+    window.location.reload();
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -119,6 +138,65 @@ function ShopLoginForm() {
             บัญชีร้านสร้างโดยเจ้าของร้านที่ Supabase &gt; Authentication &gt; Users ล็อกอินครั้งเดียวต่อเครื่อง
             จากนั้นพนักงานเข้าใช้งานด้วย PIN ตามปกติ
           </p>
+
+          <div className="pt-2 border-t border-slate-100">
+            <button
+              type="button"
+              onClick={() => setShowServerSetup((v) => !v)}
+              className="w-full flex items-center justify-between text-[11px] font-bold text-slate-600 hover:text-indigo-600 py-1"
+            >
+              <span className="flex items-center gap-1.5">
+                <Server className="w-3.5 h-3.5" />
+                ตั้งค่าเซิร์ฟเวอร์ฐานข้อมูล (Supabase / VPS)
+              </span>
+              <span className="text-[10px] font-mono text-slate-400">
+                {showServerSetup ? 'ซ่อน' : 'เปลี่ยนเซิร์ฟเวอร์'}
+              </span>
+            </button>
+
+            {showServerSetup && (
+              <div className="mt-2 p-3 rounded-2xl bg-slate-50 border border-slate-200 space-y-2.5">
+                <label className="block space-y-1">
+                  <span className="text-[10px] font-bold text-slate-600">Server URL</span>
+                  <input
+                    type="url"
+                    placeholder="https://xxxx.supabase.co หรือ https://db.ร้านคุณ.com"
+                    value={serverUrl}
+                    onChange={(e) => setServerUrl(e.target.value)}
+                    className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 text-xs font-mono bg-white"
+                  />
+                </label>
+                <label className="block space-y-1">
+                  <span className="text-[10px] font-bold text-slate-600">Anon Public Key</span>
+                  <textarea
+                    rows={2}
+                    placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+                    value={serverKey}
+                    onChange={(e) => setServerKey(e.target.value)}
+                    className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 text-xs font-mono bg-white"
+                  />
+                </label>
+                <div className="flex items-center justify-between gap-2">
+                  {serverCfg.source === 'local' && (
+                    <button
+                      type="button"
+                      onClick={handleResetServer}
+                      className="px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white text-slate-700 text-[11px] font-bold flex items-center gap-1"
+                    >
+                      <RotateCcw className="w-3 h-3" /> คืนค่าเริ่มต้น
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={handleSaveServer}
+                    className="ml-auto px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-[11px] font-bold"
+                  >
+                    บันทึกเซิร์ฟเวอร์
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </form>
     </div>

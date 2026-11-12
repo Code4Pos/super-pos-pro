@@ -47,6 +47,7 @@ const STORAGE_KEYS = {
   SPECIAL_RULES: 'siampos_special_rules_v1',
   SHOP_SETTINGS: 'siampos_shop_settings_v1',
   DEVICE: 'siampos_device_v1',
+  SERVER_CONFIG: 'siampos_server_config_v1',
 };
 
 function getLocal(key, fallback) {
@@ -2264,23 +2265,41 @@ export const posService = {
   },
 
   /**
-   * ค่าตั้งของเครื่องนี้ (เก็บเฉพาะในเครื่อง ไม่ซิงค์): รหัสเครื่องที่ใช้ขึ้นต้นเลขที่บิล
-   * ถ้ายังไม่เคยตั้ง จะสุ่มรหัสให้ (เช่น POS-K7Q) เพื่อไม่ให้เลขที่บิลชนกับเครื่องอื่น
+   * ค่าตั้งของเครื่องนี้ (เก็บเฉพาะในเครื่อง ไม่ซิงค์):
+   * - code: รหัสเครื่องที่ใช้ขึ้นต้นเลขที่บิล (ถ้ายังไม่เคยตั้ง จะสุ่มรหัสให้ เช่น POS-K7Q)
+   * - defaultMode: โหมดเริ่มต้นเมื่อเปิดแอปในเครื่องนี้ ('ask' = ถามทุกครั้ง, 'pos' = หน้าร้านทันที, 'admin' = หลังร้านทันที)
    */
   getDeviceSettings() {
     const device = getLocal(STORAGE_KEYS.DEVICE, {});
-    if (sanitizeDeviceCode(device.code)) return device;
-    const created = { ...device, code: generateDeviceCode() };
+    const defaultMode = ['pos', 'admin'].includes(device.defaultMode)
+      ? device.defaultMode
+      : 'ask';
+    const cleanCode = sanitizeDeviceCode(device.code);
+    if (cleanCode) {
+      return { ...device, code: cleanCode, defaultMode };
+    }
+    const created = { ...device, code: generateDeviceCode(), defaultMode };
     setLocal(STORAGE_KEYS.DEVICE, created);
     return created;
   },
 
-  saveDeviceSettings({ code }) {
-    const clean = sanitizeDeviceCode(code);
-    if (!clean) throw new Error('กรุณาระบุรหัสเครื่อง (A-Z, 0-9 หรือ -)');
-    const device = getLocal(STORAGE_KEYS.DEVICE, {});
+  saveDeviceSettings(patch = {}) {
+    const device = this.getDeviceSettings();
+    const nextDefaultMode =
+      patch.defaultMode !== undefined
+        ? ['pos', 'admin'].includes(patch.defaultMode)
+          ? patch.defaultMode
+          : 'ask'
+        : device.defaultMode;
+    let nextCode = device.code;
+    if (patch.code !== undefined) {
+      const clean = sanitizeDeviceCode(patch.code);
+      if (!clean) throw new Error('กรุณาระบุรหัสเครื่อง (A-Z, 0-9 หรือ -)');
+      nextCode = clean;
+    }
     // เปลี่ยนรหัสเครื่อง = เริ่มเลขรันใหม่ของรหัสนั้น (เลขรันคำนวณจากบิลที่มีในเครื่องด้วย จึงไม่ซ้ำ)
-    const saved = clean === device.code ? device : { code: clean };
+    const base = nextCode === device.code ? device : { code: nextCode };
+    const saved = { ...base, code: nextCode, defaultMode: nextDefaultMode };
     setLocal(STORAGE_KEYS.DEVICE, saved);
     return saved;
   },

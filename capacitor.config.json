@@ -1,0 +1,9 @@
+{
+  "appId": "com.siampos.pro",
+  "appName": "SiamPOS Pro",
+  "webDir": "dist",
+  "bundledWebRuntime": false,
+  "server": {
+    "androidScheme": "https"
+  }
+}

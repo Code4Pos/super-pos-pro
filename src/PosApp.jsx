@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { CheckCircle2, AlertCircle, Info } from 'lucide-react';
 import { POSProvider, usePOS } from './context/POSContext';
+import { posService } from './services/posService';
+import { canAccessAnyAdminTab } from './utils/rbac';
 import Header from './components/layout/Header';
 import POSPage from './pages/POSPage';
 import LoginScreen from './components/auth/LoginScreen';
@@ -12,7 +14,7 @@ function PosAppContent() {
   const { toast, authEnabled, currentUser, canTab } = usePOS();
 
   // แสดงหน้าเลือกโหมด (หน้าร้าน / หลังร้าน) เมื่อเปิดเข้าแอปครั้งแรกใน Session นี้
-  // แต่ถ้าสลับมาจากหลังร้าน (?mode=pos) หรือเคยกดเลือกเข้าหน้าขายแล้ว จะเข้าหน้าขายทันที
+  // แต่ถ้าสลับมาจากหลังร้าน (?mode=pos), เคยกดเลือกเข้าหน้าขายแล้ว หรือตั้งโหมดเริ่มต้นของเครื่องเป็น 'pos' จะเข้าหน้าขายทันที
   const [showModeSelector, setShowModeSelector] = useState(() => {
     try {
       const params = new URLSearchParams(window.location.search);
@@ -25,11 +27,35 @@ function PosAppContent() {
         sessionStorage.setItem(ENTRY_SESSION_KEY, 'pos');
         return false;
       }
-      return sessionStorage.getItem(ENTRY_SESSION_KEY) !== 'pos';
+      if (sessionStorage.getItem(ENTRY_SESSION_KEY) === 'pos') {
+        return false;
+      }
+      const { defaultMode } = posService.getDeviceSettings();
+      if (defaultMode === 'pos') {
+        sessionStorage.setItem(ENTRY_SESSION_KEY, 'pos');
+        return false;
+      }
+      return true;
     } catch {
       return false;
     }
   });
+
+  // ถ้าตั้งโหมดเริ่มต้นของเครื่องนี้เป็น 'admin' (หลังร้านทันที) ให้เปลี่ยนหน้าไป admin.html อัตโนมัติเมื่อเปิดแอปครั้งแรก
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('mode') === 'select' || params.get('mode') === 'pos') return;
+      if (localStorage.getItem('siampos_pending_pos_action_v1')) return;
+      if (sessionStorage.getItem(ENTRY_SESSION_KEY) === 'pos') return;
+      const { defaultMode } = posService.getDeviceSettings();
+      if (defaultMode === 'admin' && canAccessAnyAdminTab(currentUser)) {
+        window.location.replace('./admin.html');
+      }
+    } catch {
+      // ignore redirect errors
+    }
+  }, [currentUser]);
 
   // ถ้าบทบาทของผู้ใช้ไม่มีสิทธิ์เข้าหน้าขายเลย (เช่น เจ้าหน้าที่คลัง / บัญชี) ให้แสดงหน้าเลือกโหมดเพื่อกดเข้าหลังร้าน
   useEffect(() => {

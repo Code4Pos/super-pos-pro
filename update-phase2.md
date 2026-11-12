@@ -178,3 +178,25 @@
   - ล็อต: `syncLotsWithMovements` + `LOT_CONSUMPTIONS` ใน `src/utils/lots.js`
   - ปิดใบสั่งขาย: `checkoutOrder` ใน `POSContext.jsx` (`activeSalesOrder`)
 - ทดสอบ RPC กับ Supabase โปรเจคทดสอบก่อน ห้ามรัน Migration ทดลองบนฐานข้อมูลจริงของร้าน
+
+---
+
+## 9. ความคืบหน้าการดำเนินการ (Implementation Status)
+
+- **[เสร็จแล้ว] ขั้นที่ 0 (`version beta 0.3.6` โดย Claude):**
+  - เลขบิลแบบ `<รหัสเครื่อง>-YYMMDD-<เลขรัน 4 หลัก>` + UUID ฝั่งเครื่อง
+  - RPC `create_order` และ `void_order` ทำงานใน Transaction เดียว
+  - ล็อกอินบัญชีร้าน `ShopAuthGate.jsx` + สคริปต์ปิด RLS สาธารณะ `supabase/lockdown-rls.sql`
+- **[เสร็จแล้ว] ขั้นที่ 1 (`version beta 0.3.7` โดย Gemini):**
+  - ย้ายข้อมูลที่ยังอยู่ในเครื่องขึ้นฐานข้อมูลครบทุกตาราง (`suppliers`, `stock_imports`, `wholesale_rules`, `special_rules`, `shop_settings`, `lot_consumptions` และคอลัมน์เสริมของ `products` / `customers`)
+  - แยกตั้งค่าร้านค้าที่ใช้ร่วมกันทุกเครื่อง (`siampos_shop_settings_v1`) ออกจากตั้งค่าเครื่องพิมพ์เฉพาะเครื่อง (`siampos_printer_settings_v2`)
+  - เพิ่มปุ่ม **"อัปโหลดข้อมูลจากเครื่องนี้ขึ้นฐานข้อมูล"** ในการ์ด "เครื่องนี้" (`DeviceSettings.jsx`)
+- **[เสร็จแล้ว] ขั้นที่ 3 (`version beta 0.3.8` โดย Gemini — ทำเป็น Application ก่อนย้ายขึ้น VPS):**
+  - ติดตั้ง **Capacitor Android** (`capacitor.config.json`, โฟลเดอร์ `android/`) สำหรับแพ็กเกจแอปเป็น `.apk` ลงเครื่อง Sunmi T2 / แท็บเล็ต / มือถือ Android
+  - เพิ่ม GitHub Actions `.github/workflows/build-apk.yml` สร้างไฟล์ `.apk` อัตโนมัติบนคลาวด์โดยไม่ต้องลง Android Studio ในคอม
+  - เพิ่มการตั้งค่า **"โหมดเริ่มต้นเมื่อเปิดแอปในเครื่องนี้"** (`ถามทุกครั้ง` | `ขายหน้าร้านทันที` | `จัดการหลังร้านทันที`)
+  - เพิ่มการตั้งค่า **Server URL & Anon Key ผ่านหน้าแอป** (`siampos_server_config_v1`) เพื่อให้สลับไปชี้ VPS ของตัวเองในอนาคตได้ทันทีโดยไม่ต้องสร้างไฟล์ `.apk` ใหม่
+  - เพิ่ม PWA Shortcuts และสคริปต์เปิดโหมด Kiosk บน Windows (`scripts/start-pos-kiosk.bat`, `scripts/start-admin-app.bat`) พร้อม `--kiosk-printing`
+- **[ขั้นถัดไปเมื่อพร้อม] ขั้นที่ 2 (ติดตั้ง Self-Hosted Supabase บน VPS ของตัวเอง):**
+  - เช่า VPS Ubuntu 24.04 LTS -> รัน Docker Compose ของ Supabase -> รัน `supabase/schema.sql` และ `supabase/lockdown-rls.sql` -> กรอก URL ของ VPS ในหน้าตั้งค่าแอปได้ทันที
+

@@ -1,12 +1,19 @@
 import React, { useEffect, useState } from 'react';
-import { MonitorSmartphone, LogOut, Save, UploadCloud, CheckCircle2, AlertTriangle } from 'lucide-react';
+import { MonitorSmartphone, LogOut, Save, UploadCloud, CheckCircle2, AlertTriangle, Server, RotateCcw } from 'lucide-react';
 import { usePOS } from '../../context/POSContext';
 import { posService } from '../../services/posService';
 import { sanitizeDeviceCode, localDateCode } from '../../utils/device';
 import { signOutShop, getShopAccountEmail } from '../auth/ShopAuthGate';
+import { getServerConfig, saveServerConfig, resetServerConfig } from '../../lib/supabase';
+
+const DEFAULT_MODE_OPTIONS = [
+  { id: 'ask', label: 'ถามทุกครั้ง (แสดงหน้าเลือกโหมด)' },
+  { id: 'pos', label: 'ขายหน้าร้านทันที (เหมาะกับเครื่องแคชเชียร์ / Sunmi)' },
+  { id: 'admin', label: 'จัดการหลังร้านทันที (เหมาะกับคอมออฟฟิศ / เจ้าของร้าน)' },
+];
 
 /**
- * ค่าตั้งเฉพาะเครื่องนี้ (ไม่ซิงค์ไปเครื่องอื่น): รหัสเครื่องที่ใช้ขึ้นต้นเลขที่บิล, เครื่องมืออัปโหลดข้อมูลจากเครื่องหลัก และบัญชีร้านที่ล็อกอินอยู่
+ * ค่าตั้งเฉพาะเครื่องนี้ (ไม่ซิงค์ไปเครื่องอื่น): รหัสเครื่องที่ใช้ขึ้นต้นเลขที่บิล, โหมดเริ่มต้นของเครื่อง, เซิร์ฟเวอร์ฐานข้อมูล, เครื่องมืออัปโหลดข้อมูลจากเครื่องหลัก และบัญชีร้านที่ล็อกอินอยู่
  */
 export default function DeviceSettings() {
   const { showToast, dbMode, isOffline, uploadLocalData } = usePOS();
@@ -16,6 +23,16 @@ export default function DeviceSettings() {
   const [uploading, setUploading] = useState(false);
   const [uploadResult, setUploadResult] = useState(null);
   const [localSummary, setLocalSummary] = useState(() => posService.getLocalDataSummary());
+  const [serverCfg, setServerCfg] = useState(() => getServerConfig());
+  const [serverUrl, setServerUrl] = useState(() => {
+    const cfg = getServerConfig();
+    return cfg.customUrl || cfg.url || '';
+  });
+  const [serverKey, setServerKey] = useState(() => {
+    const cfg = getServerConfig();
+    return cfg.customAnonKey || cfg.anonKey || '';
+  });
+  const [showServerForm, setShowServerForm] = useState(false);
 
   useEffect(() => {
     getShopAccountEmail().then(setEmail);
@@ -34,6 +51,37 @@ export default function DeviceSettings() {
     } catch (err) {
       showToast(err.message, 'error');
     }
+  };
+
+  const handleChangeDefaultMode = (nextMode) => {
+    try {
+      const saved = posService.saveDeviceSettings({ defaultMode: nextMode });
+      setDevice(saved);
+      const label = DEFAULT_MODE_OPTIONS.find((o) => o.id === saved.defaultMode)?.label || '';
+      showToast(`บันทึกโหมดเริ่มต้น: ${label}`, 'success');
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  };
+
+  const handleSaveServerConfig = (e) => {
+    e.preventDefault();
+    try {
+      saveServerConfig({ url: serverUrl, anonKey: serverKey });
+      setServerCfg(getServerConfig());
+      showToast('บันทึกเซิร์ฟเวอร์ฐานข้อมูลแล้ว กำลังโหลดระบบใหม่...', 'success');
+      setTimeout(() => window.location.reload(), 600);
+    } catch (err) {
+      showToast(err.message || 'บันทึกการตั้งค่าเซิร์ฟเวอร์ไม่สำเร็จ', 'error');
+    }
+  };
+
+  const handleResetServerConfig = () => {
+    if (!window.confirm('คืนค่าเซิร์ฟเวอร์กลับเป็นค่าเริ่มต้นจากระบบ (.env)?')) return;
+    resetServerConfig();
+    setServerCfg(getServerConfig());
+    showToast('คืนค่าเซิร์ฟเวอร์เริ่มต้นแล้ว กำลังโหลดระบบใหม่...', 'info');
+    setTimeout(() => window.location.reload(), 600);
   };
 
   const handleUploadLocalData = async () => {
@@ -102,6 +150,121 @@ export default function DeviceSettings() {
             ตัวอย่างเลขที่บิล: <span className="font-mono font-bold text-slate-700">{clean || '???'}-{localDateCode()}-0001</span>
             {' '}ตั้งรหัสไม่ซ้ำกันในแต่ละเครื่อง (เช่น POS1, POS2) เพื่อให้เลขที่บิลไม่ชนกันแม้ขายตอนออฟไลน์
           </p>
+        </div>
+
+        {/* โหมดเริ่มต้นเมื่อเปิดแอปในเครื่องนี้ */}
+        <div className="pt-3 border-t border-slate-100 space-y-2">
+          <div className="text-[11px] font-bold text-slate-600">
+            โหมดเริ่มต้นเมื่อเปิดแอปในเครื่องนี้
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+            {DEFAULT_MODE_OPTIONS.map((opt) => {
+              const active = (device.defaultMode || 'ask') === opt.id;
+              return (
+                <button
+                  key={opt.id}
+                  type="button"
+                  onClick={() => handleChangeDefaultMode(opt.id)}
+                  className={`p-2.5 rounded-xl border text-left text-xs font-bold transition-colors ${
+                    active
+                      ? 'bg-indigo-50 border-indigo-500 text-indigo-800'
+                      : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              );
+            })}
+          </div>
+          <p className="text-[11px] text-slate-500">
+            ถึงแม้จะตั้งให้เข้าหน้าขายหรือหลังร้านทันที คุณยังกดปุ่มสลับโหมดบนแถบด้านบนได้ตลอดเวลา
+          </p>
+        </div>
+
+        {/* การเชื่อมต่อเซิร์ฟเวอร์ฐานข้อมูล (Supabase Cloud / Self-Hosted VPS) */}
+        <div className="pt-3 border-t border-slate-100 space-y-2.5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div className="space-y-0.5">
+              <div className="text-xs font-extrabold text-slate-800 flex items-center gap-1.5">
+                <Server className="w-3.5 h-3.5 text-indigo-600" />
+                <span>เซิร์ฟเวอร์ฐานข้อมูล (Supabase Cloud / Self-Hosted VPS)</span>
+              </div>
+              <div className="text-[11px] text-slate-500 font-mono truncate max-w-md">
+                {serverCfg.url ? (
+                  <>
+                    เชื่อมต่อกับ: <span className="font-bold text-slate-700">{serverCfg.url}</span>{' '}
+                    ({serverCfg.source === 'local' ? 'ตั้งค่าผ่านหน้าแอป' : 'ค่าเริ่มต้น .env'})
+                  </>
+                ) : (
+                  'ยังไม่ได้ตั้งค่าเซิร์ฟเวอร์ (ทำงานในโหมดสาธิต Demo)'
+                )}
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowServerForm((v) => !v)}
+              className="px-3 py-1.5 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-bold self-start sm:self-center shrink-0"
+            >
+              {showServerForm ? 'ซ่อนฟอร์มตั้งค่า' : 'ตั้งค่า / ย้ายเซิร์ฟเวอร์ VPS'}
+            </button>
+          </div>
+
+          {showServerForm && (
+            <form
+              onSubmit={handleSaveServerConfig}
+              className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 space-y-3"
+            >
+              <div className="grid grid-cols-1 gap-2.5">
+                <label className="block space-y-1">
+                  <span className="text-[11px] font-bold text-slate-600">
+                    Server URL (Supabase URL หรือ VPS URL ของร้าน)
+                  </span>
+                  <input
+                    type="url"
+                    required
+                    placeholder="https://xxxx.supabase.co หรือ https://db.ร้านคุณ.com"
+                    value={serverUrl}
+                    onChange={(e) => setServerUrl(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-mono bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </label>
+                <label className="block space-y-1">
+                  <span className="text-[11px] font-bold text-slate-600">
+                    Anon Public Key
+                  </span>
+                  <textarea
+                    rows={2}
+                    required
+                    placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+                    value={serverKey}
+                    onChange={(e) => setServerKey(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-mono bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </label>
+              </div>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                {serverCfg.source === 'local' ? (
+                  <button
+                    type="button"
+                    onClick={handleResetServerConfig}
+                    className="px-3 py-1.5 rounded-xl border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 text-xs font-bold flex items-center gap-1.5"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" /> คืนค่าเริ่มต้น (.env)
+                  </button>
+                ) : (
+                  <span className="text-[11px] text-slate-500">
+                    เปลี่ยนไปชี้ VPS ของตัวเองได้ทันทีโดยไม่ต้องลงแอป (.apk) ใหม่
+                  </span>
+                )}
+                <button
+                  type="submit"
+                  className="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold flex items-center gap-1.5 ml-auto"
+                >
+                  <Save className="w-3.5 h-3.5" /> บันทึกและเชื่อมต่อใหม่
+                </button>
+              </div>
+            </form>
+          )}
         </div>
 
         {dbMode === 'supabase' && (

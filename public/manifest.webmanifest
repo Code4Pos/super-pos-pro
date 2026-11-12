@@ -12,5 +12,21 @@
   "icons": [
     { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
     { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    {
+      "name": "ขายหน้าร้าน (POS)",
+      "short_name": "ขายหน้าร้าน",
+      "description": "เปิดหน้าขายหน้าร้านทันที",
+      "url": "./index.html?mode=pos",
+      "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" }]
+    },
+    {
+      "name": "จัดการหลังร้าน (Admin)",
+      "short_name": "หลังร้าน",
+      "description": "เปิดหน้าคลังสินค้าและจัดการหลังร้าน",
+      "url": "./admin.html",
+      "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" }]
+    }
   ]
 }
