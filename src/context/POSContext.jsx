@@ -14,7 +14,7 @@ import {
 
 const SESSION_STORAGE_KEY = 'siampos_session_v1';
 
-export const APP_VERSION = 'version beta 0.3.5';
+export const APP_VERSION = 'version beta 0.3.6';
 const HELD_BILLS_STORAGE_KEY = 'siampos_held_bills_v1';
 
 const POSContext = createContext(null);
@@ -1560,6 +1560,8 @@ export function POSProvider({ children, scope = 'all' }) {
       if (updatedProducts) {
         setProducts(updatedProducts);
       }
+      // ยกเลิกบิลตอนออฟไลน์ (หรือบิลยังรอซิงค์) จะเข้าคิว
+      setPendingSyncCount(posService.getOfflineQueue().length);
       showToast(`ยกเลิกบิล ${order.order_number} และคืนสต็อกสินค้าแล้ว`, 'warning');
     },
     [products, dbMode, showToast]

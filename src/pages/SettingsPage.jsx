@@ -4,6 +4,7 @@ import TaxSettings from '../components/settings/TaxSettings';
 import PaymentSettings from '../components/settings/PaymentSettings';
 import PrinterSettings from '../components/settings/PrinterSettings';
 import UsersSettings from '../components/settings/UsersSettings';
+import DeviceSettings from '../components/settings/DeviceSettings';
 
 const SECTIONS = {
   'settings-shop': ShopSettings,
@@ -20,8 +21,10 @@ export default function SettingsPage({ section }) {
   const Section = SECTIONS[section] || ShopSettings;
   return (
     <div className="flex-1 overflow-y-auto bg-slate-50 p-3 sm:p-5 pb-24 lg:pb-5">
-      <div className="max-w-3xl mx-auto">
+      <div className="max-w-3xl mx-auto space-y-4">
         <Section />
+        {/* ค่าตั้งเฉพาะเครื่อง (รหัสเครื่อง / บัญชีร้าน) อยู่คู่กับเครื่องพิมพ์ */}
+        {section === 'settings-printer' && <DeviceSettings />}
       </div>
     </div>
   );

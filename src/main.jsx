@@ -1,11 +1,14 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import PosApp from './PosApp.jsx';
+import ShopAuthGate from './components/auth/ShopAuthGate.jsx';
 import './index.css';
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
-    <PosApp />
+    <ShopAuthGate>
+      <PosApp />
+    </ShopAuthGate>
   </React.StrictMode>
 );
 

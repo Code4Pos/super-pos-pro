@@ -4,6 +4,7 @@ import { calculateOrderVat, getNextTaxInvoiceNumber, getTaxInvoicePrefix } from 
 import { hashPin, generateSalt } from '../utils/rbac';
 import { consumeLots, addToLots, restoreToLots, summarizeLotsByProduct } from '../utils/lots';
 import { normalizeWarehouses, applyBalanceDelta, TRANSIT_WAREHOUSE_ID, SALES_WAREHOUSE_ID } from '../utils/warehouses';
+import { generateDeviceCode, generateUuid, isUuid, nextOrderNumber, sanitizeDeviceCode } from '../utils/device';
 import {
   INITIAL_CATEGORIES,
   INITIAL_UNITS,
@@ -43,6 +44,7 @@ const STORAGE_KEYS = {
   ORDERS: 'siampos_orders_v1',
   WHOLESALE_RULES: 'siampos_wholesale_rules_v1',
   SPECIAL_RULES: 'siampos_special_rules_v1',
+  DEVICE: 'siampos_device_v1',
 };
 
 function getLocal(key, fallback) {
@@ -415,19 +417,64 @@ function buildStockMovements(beforeProducts = [], afterProducts = [], meta = {})
  * บันทึกรายการเคลื่อนไหวสต็อกลงเครื่อง (และ Supabase ถ้าใช้งานอยู่และมีตาราง stock_ledger)
  */
 async function recordStockMovements(beforeProducts, afterProducts, meta, isSupabaseActive) {
+  const plan = planStockMovements(beforeProducts, afterProducts, meta);
+  await commitStockMovements(plan, isSupabaseActive, { remote: true });
+  return plan.entries;
+}
+
+// สินค้าที่มีในฐานข้อมูลจริง (สินค้าที่สร้างในเครื่องโหมดสาธิตขึ้นต้นด้วย prod-)
+function isRemoteProductId(id) {
+  return !String(id).startsWith('prod-');
+}
+
+/**
+ * วางแผนการเคลื่อนไหวสต็อก (Ledger + ล็อต) โดยยังไม่บันทึกอะไร
+ * ใช้กับบิลขาย/ยกเลิกบิล ที่ต้องส่งทุกอย่างขึ้นฐานข้อมูลในคำสั่งเดียว (RPC) ก่อนบันทึกในเครื่อง
+ */
+function planStockMovements(beforeProducts, afterProducts, meta = {}) {
   const entries = buildStockMovements(beforeProducts, afterProducts, meta);
-  if (entries.length === 0) return entries;
+  const lotPlan = entries.length > 0 ? planLotChanges(entries, afterProducts, meta) : null;
+  return { entries, lotPlan };
+}
+
+/**
+ * บันทึกแผนการเคลื่อนไหวสต็อกลงเครื่อง
+ * remote: true = ส่ง Ledger/ล็อตขึ้น Supabase แยกตาราง (แบบเดิม), false = ส่งไปแล้วผ่าน RPC
+ */
+async function commitStockMovements(plan, isSupabaseActive, { remote = true } = {}) {
+  const { entries, lotPlan } = plan;
+  if (entries.length === 0) return;
 
   const ledger = getLocal(STORAGE_KEYS.STOCK_LEDGER, []);
   setLocal(STORAGE_KEYS.STOCK_LEDGER, [...entries, ...ledger].slice(0, MAX_LOCAL_LEDGER_ENTRIES));
 
   // ใช้ id เดียวกับในเครื่อง เพื่อรวมข้อมูลจากฐานข้อมูลกับในเครื่องโดยไม่ซ้ำกัน
-  const remoteEntries = entries.filter((e) => !String(e.product_id).startsWith('prod-'));
-  if (isSupabaseActive && supabase && remoteEntries.length > 0) {
+  const remoteEntries = entries.filter((e) => isRemoteProductId(e.product_id));
+  if (remote && isSupabaseActive && supabase && remoteEntries.length > 0) {
     await upsertOrQueue('stock_ledger', remoteEntries);
   }
-  await syncLotsWithMovements(entries, afterProducts, meta, isSupabaseActive);
-  return entries;
+  if (lotPlan) {
+    setLocal(STORAGE_KEYS.PRODUCT_LOTS, lotPlan.lots);
+    setLocal(STORAGE_KEYS.LOT_CONSUMPTIONS, lotPlan.consumptions);
+    if (remote) await upsertChangedLots(lotPlan.beforeLots, lotPlan.lots, isSupabaseActive);
+  }
+}
+
+/**
+ * ผลต่างของล็อตที่เปลี่ยน [{ row, delta }] สำหรับส่งให้ RPC บวก/ลบยอดบนฐานข้อมูล (ไม่เขียนทับยอดของเครื่องอื่น)
+ */
+function buildLotDeltas(lotPlan) {
+  if (!lotPlan) return [];
+  const beforeById = new Map(lotPlan.beforeLots.map((l) => [l.id, l]));
+  const unchanged = new Set(lotPlan.beforeLots);
+  return lotPlan.lots
+    .filter((l) => !unchanged.has(l) && isRemoteProductId(l.product_id))
+    .map((row) => ({
+      row,
+      delta:
+        Math.round(((Number(row.remaining_qty) || 0) - (Number(beforeById.get(row.id)?.remaining_qty) || 0)) * 10000) /
+        10000,
+    }));
 }
 
 /**
@@ -436,11 +483,12 @@ async function recordStockMovements(beforeProducts, afterProducts, meta, isSupab
  * - ยกเลิกบิล (VOID): คืนเข้าล็อตเดิมที่บิลนั้นตัดไป
  * - รับสินค้าเข้า (IMPORT): สร้างล็อตตามเลขล็อต/วันหมดอายุที่ระบุในใบนำเข้า
  * - อื่นๆ ที่สต็อกเพิ่ม: เข้า "ไม่ระบุล็อต"
+ * คืนค่า { beforeLots, lots, consumptions } หรือ null ถ้าไม่มีสินค้าที่ติดตามล็อต (ยังไม่บันทึก)
  */
-async function syncLotsWithMovements(entries, afterProducts, meta = {}, isSupabaseActive) {
+function planLotChanges(entries, afterProducts, meta = {}) {
   const productMap = new Map(afterProducts.map((p) => [p.id, p]));
   const tracked = entries.filter((e) => productMap.get(e.product_id)?.track_lots);
-  if (tracked.length === 0) return;
+  if (tracked.length === 0) return null;
 
   const nowIso = new Date().toISOString();
   const beforeLots = getLocal(STORAGE_KEYS.PRODUCT_LOTS, []);
@@ -483,9 +531,7 @@ async function syncLotsWithMovements(entries, afterProducts, meta = {}, isSupaba
     if (remaining > 0) lots = addToLots(lots, product, remaining, null, meta, nowIso);
   });
 
-  setLocal(STORAGE_KEYS.PRODUCT_LOTS, lots);
-  setLocal(STORAGE_KEYS.LOT_CONSUMPTIONS, consumptions);
-  await upsertChangedLots(beforeLots, lots, isSupabaseActive);
+  return { beforeLots, lots, consumptions };
 }
 
 // ส่งเฉพาะล็อตที่เพิ่ม/เปลี่ยนขึ้น Supabase (ตาราง product_lots ใช้ id จากฝั่งแอป)
@@ -588,7 +634,7 @@ async function pushOrderToSupabase(orderData, deductions = []) {
       for (const row of rows || []) {
         await supabase
           .from('products')
-          .update({ stock: Math.max(0, (Number(row.stock) || 0) - deductById.get(row.id)), updated_at: nowIso })
+          .update({ stock: (Number(row.stock) || 0) - deductById.get(row.id), updated_at: nowIso })
           .eq('id', row.id);
       }
     }
@@ -596,6 +642,113 @@ async function pushOrderToSupabase(orderData, deductions = []) {
   } catch (err) {
     return { ok: false, networkError: isNetworkError(err) };
   }
+}
+
+// =================================================================================
+// beta 0.3.6: บิลขาย / ยกเลิกบิล ผ่าน RPC (transaction เดียวบนฐานข้อมูล)
+// ถ้ายังไม่ได้รัน Migration beta 0.3.6 (ไม่มีฟังก์ชัน) จะใช้วิธีเดิมที่ส่งหลายคำสั่งแยกกัน
+// =================================================================================
+
+function isMissingRpcError(error) {
+  return (
+    error?.code === 'PGRST202' ||
+    error?.code === '42883' ||
+    /could not find the function/i.test(String(error?.message || ''))
+  );
+}
+
+// คืนค่า { ok, data, networkError, missing }
+async function callRpc(name, params) {
+  try {
+    const { data, error } = await supabase.rpc(name, params);
+    if (!error) return { ok: true, data };
+    if (isNetworkError(error)) return { ok: false, networkError: true };
+    if (isMissingRpcError(error)) return { ok: false, missing: true };
+    console.warn(`Supabase ${name} error:`, error.message);
+    return { ok: false, networkError: false, message: error.message };
+  } catch (err) {
+    return { ok: false, networkError: isNetworkError(err), message: err?.message };
+  }
+}
+
+/**
+ * ส่งบิลขาย: บันทึกบิล + ตัดสต็อกแบบลบจากยอดบนฐานข้อมูล + Ledger + ล็อต ในคำสั่งเดียว
+ * ส่งซ้ำได้ (id เดิม = ไม่บันทึกซ้ำ) ใช้ทั้งตอนขายและตอนซิงค์คิวออฟไลน์
+ * payload: { p_order, p_deductions: [{product_id, qty}], p_ledger, p_lots: [{row, delta}] }
+ */
+async function pushOrderRpc(payload) {
+  const result = await callRpc('create_order', payload);
+  if (!result.missing) return result;
+
+  const legacy = await pushOrderToSupabase(
+    payload.p_order,
+    payload.p_deductions.map((d) => [d.product_id, d.qty])
+  );
+  if (legacy.ok) {
+    if (payload.p_ledger.length > 0) await upsertOrQueue('stock_ledger', payload.p_ledger);
+    if (payload.p_lots.length > 0) await upsertOrQueue('product_lots', payload.p_lots.map((l) => l.row));
+  }
+  return legacy;
+}
+
+/**
+ * ยกเลิกบิล: เปลี่ยนสถานะเฉพาะบิลที่ยัง completed + คืนสต็อก + Ledger + ล็อต ในคำสั่งเดียว
+ * data.status = 'voided' | 'already_voided' | 'not_found'
+ * payload: { p_order_id, p_order_number, p_restores: [{product_id, qty}], p_ledger, p_lots: [{row, delta}] }
+ */
+async function pushVoidRpc(payload) {
+  const result = await callRpc('void_order', payload);
+  if (!result.missing) return result;
+
+  // วิธีเดิม (ยังไม่ได้รัน Migration): หลายคำสั่งแยกกัน
+  try {
+    let query = supabase.from('orders').update({ status: 'voided' }).eq('status', 'completed');
+    query = payload.p_order_id ? query.eq('id', payload.p_order_id) : query.eq('order_number', payload.p_order_number);
+    const { data: voidedRows, error: voidError } = await query.select('id');
+    if (voidError) {
+      return isNetworkError(voidError)
+        ? { ok: false, networkError: true }
+        : { ok: false, networkError: false, message: voidError.message };
+    }
+    if (!Array.isArray(voidedRows) || voidedRows.length === 0) {
+      return { ok: true, data: { status: 'already_voided' } };
+    }
+    const restoreById = new Map(payload.p_restores.map((r) => [r.product_id, r.qty]));
+    if (restoreById.size > 0) {
+      const { data: stockRows } = await supabase.from('products').select('id, stock').in('id', [...restoreById.keys()]);
+      const nowIso = new Date().toISOString();
+      for (const row of stockRows || []) {
+        await supabase
+          .from('products')
+          .update({ stock: (Number(row.stock) || 0) + restoreById.get(row.id), updated_at: nowIso })
+          .eq('id', row.id);
+      }
+    }
+    if (payload.p_ledger.length > 0) await upsertOrQueue('stock_ledger', payload.p_ledger);
+    if (payload.p_lots.length > 0) await upsertOrQueue('product_lots', payload.p_lots.map((l) => l.row));
+    return { ok: true, data: { status: 'voided' } };
+  } catch (err) {
+    return { ok: false, networkError: isNetworkError(err), message: err?.message };
+  }
+}
+
+// เก็บรายการที่ส่งไม่สำเร็จเพราะข้อมูลผิด (ไม่ใช่เน็ต) ไว้ตรวจสอบภายหลัง ไม่ให้บิลหายเงียบ
+function recordFailedSync(item, message) {
+  const failedItems = getLocal(STORAGE_KEYS.OFFLINE_FAILED, []);
+  setLocal(STORAGE_KEYS.OFFLINE_FAILED, [
+    ...failedItems,
+    { ...item, error: message || '', failed_at: new Date().toISOString() },
+  ]);
+}
+
+// ปรับสต็อกในเครื่องให้ตรงกับยอดล่าสุดที่ฐานข้อมูลคืนมา ({ [productId]: stock })
+function applyRemoteBalances(products, balances) {
+  if (!balances || typeof balances !== 'object' || Object.keys(balances).length === 0) return products;
+  return normalizeAndSyncProducts(
+    products.map((p) =>
+      Object.prototype.hasOwnProperty.call(balances, p.id) ? { ...p, stock: Number(balances[p.id]) || 0 } : p
+    )
+  );
 }
 
 /**
@@ -1774,6 +1927,28 @@ export const posService = {
   },
 
   /**
+   * ค่าตั้งของเครื่องนี้ (เก็บเฉพาะในเครื่อง ไม่ซิงค์): รหัสเครื่องที่ใช้ขึ้นต้นเลขที่บิล
+   * ถ้ายังไม่เคยตั้ง จะสุ่มรหัสให้ (เช่น POS-K7Q) เพื่อไม่ให้เลขที่บิลชนกับเครื่องอื่น
+   */
+  getDeviceSettings() {
+    const device = getLocal(STORAGE_KEYS.DEVICE, {});
+    if (sanitizeDeviceCode(device.code)) return device;
+    const created = { ...device, code: generateDeviceCode() };
+    setLocal(STORAGE_KEYS.DEVICE, created);
+    return created;
+  },
+
+  saveDeviceSettings({ code }) {
+    const clean = sanitizeDeviceCode(code);
+    if (!clean) throw new Error('กรุณาระบุรหัสเครื่อง (A-Z, 0-9 หรือ -)');
+    const device = getLocal(STORAGE_KEYS.DEVICE, {});
+    // เปลี่ยนรหัสเครื่อง = เริ่มเลขรันใหม่ของรหัสนั้น (เลขรันคำนวณจากบิลที่มีในเครื่องด้วย จึงไม่ซ้ำ)
+    const saved = clean === device.code ? device : { code: clean };
+    setLocal(STORAGE_KEYS.DEVICE, saved);
+    return saved;
+  },
+
+  /**
    * ซิงค์คิวออฟไลน์ขึ้น Supabase ตามลำดับ หยุดทันทีเมื่อยังเชื่อมต่อไม่ได้ (ทำต่อรอบหน้า)
    * รายการที่ผิดพลาดจากข้อมูล (ไม่ใช่เน็ต) จะถูกย้ายไปเก็บแยกเพื่อไม่ให้คิวค้าง
    * คืนค่า { synced, remaining, failed }
@@ -1791,7 +1966,12 @@ export const posService = {
     for (; index < queue.length; index += 1) {
       const item = queue[index];
       let result;
-      if (item.kind === 'order') {
+      if (item.kind === 'order_rpc') {
+        result = await pushOrderRpc(item.payload);
+      } else if (item.kind === 'void_rpc') {
+        result = await pushVoidRpc(item.payload);
+      } else if (item.kind === 'order') {
+        // รายการที่เข้าคิวจากเวอร์ชันก่อน beta 0.3.6
         result = await pushOrderToSupabase(item.order, item.deductions || []);
       } else {
         try {
@@ -1805,8 +1985,7 @@ export const posService = {
       if (result.ok) synced += 1;
       else {
         failed += 1;
-        const failedItems = getLocal(STORAGE_KEYS.OFFLINE_FAILED, []);
-        setLocal(STORAGE_KEYS.OFFLINE_FAILED, [...failedItems, { ...item, failed_at: new Date().toISOString() }]);
+        recordFailedSync(item, result.message);
       }
     }
     // รายการที่เข้าคิวเพิ่มระหว่างซิงค์ (ต่อท้ายคิว) ต้องเก็บไว้ด้วย
@@ -2511,11 +2690,14 @@ export const posService = {
    */
   async createOrder(orderPayload, isSupabaseActive) {
     const nowIso = new Date().toISOString();
-    const datePart = nowIso.slice(2, 10).replace(/-/g, '');
-    const randomPart = Math.floor(100 + Math.random() * 900);
-    const orderNumber = `INV-${datePart}-${randomPart}`;
+    const orders = getLocal(STORAGE_KEYS.ORDERS, INITIAL_ORDERS);
+    // เลขที่บิลแบบ <รหัสเครื่อง>-YYMMDD-<เลขรัน> และ id ฝั่งแอป (ใช้ id เดียวกันทั้งในเครื่องและฐานข้อมูล)
+    const { orderNumber, device } = nextOrderNumber(getLocal(STORAGE_KEYS.DEVICE, {}), orders);
+    setLocal(STORAGE_KEYS.DEVICE, device);
+    const orderId = generateUuid();
 
     const fullOrder = {
+      id: orderId,
       order_number: orderNumber,
       customer_id: orderPayload.customer?.id || null,
       customer_name: orderPayload.customer?.name || 'ลูกค้าทั่วไป',
@@ -2557,49 +2739,54 @@ export const posService = {
       );
     }
 
-    if (isSupabaseActive && supabase) {
-      const supabaseOrderData = {
-        ...fullOrder,
-        customer_id:
-          fullOrder.customer_id && !String(fullOrder.customer_id).startsWith('cus-')
-            ? fullOrder.customer_id
-            : null,
-      };
-      const deductions = [...deductionByProductId.entries()].filter(
-        ([targetId]) => !String(targetId).startsWith('prod-')
-      );
-      // ออฟไลน์หรือเน็ตหลุด: เก็บบิลเข้าคิวไว้ซิงค์ทีหลัง หน้าร้านขายต่อได้ทันที
-      const result = isOnline()
-        ? await pushOrderToSupabase(supabaseOrderData, deductions)
-        : { ok: false, networkError: true };
-      if (!result.ok && result.networkError) {
-        enqueueOffline({ kind: 'order', order: supabaseOrderData, deductions });
-      }
-    }
-
-    // บันทึกใน LocalStorage
-    const localOrder = { ...fullOrder, id: `ord-${Date.now()}` };
-    const orders = getLocal(STORAGE_KEYS.ORDERS, INITIAL_ORDERS);
-    setLocal(STORAGE_KEYS.ORDERS, [localOrder, ...orders]);
-
     // ตัดสต็อกจากสินค้าหลักและซิงค์สต็อกสินค้ารองทั้งหมด
+    // ยอมให้สต็อกติดลบ (ขายเกินสต็อก) เพื่อให้ Ledger ตรงกับสต็อกเสมอ แล้วค่อยปรับยอดภายหลัง
     const updatedProducts = products.map((prod) => {
       const deduct = deductionByProductId.get(prod.id);
       if (!deduct) return prod;
       return {
         ...prod,
-        stock: Math.max(0, (Number(prod.stock) || 0) - deduct),
+        stock: (Number(prod.stock) || 0) - deduct,
         updated_at: nowIso,
       };
     });
-    const syncedProducts = normalizeAndSyncProducts(updatedProducts);
+    let syncedProducts = normalizeAndSyncProducts(updatedProducts);
+    const stockPlan = planStockMovements(products, syncedProducts, {
+      movement_type: 'SALE',
+      reference_doc: fullOrder.order_number,
+    });
+
+    if (isSupabaseActive && supabase) {
+      const payload = {
+        p_order: {
+          ...fullOrder,
+          customer_id: isUuid(fullOrder.customer_id) ? fullOrder.customer_id : null,
+        },
+        p_deductions: [...deductionByProductId.entries()]
+          .filter(([targetId]) => isRemoteProductId(targetId))
+          .map(([product_id, qty]) => ({ product_id, qty })),
+        p_ledger: stockPlan.entries.filter((e) => isRemoteProductId(e.product_id)),
+        p_lots: buildLotDeltas(stockPlan.lotPlan),
+      };
+      // ออฟไลน์หรือเน็ตหลุด: เก็บบิลเข้าคิวไว้ซิงค์ทีหลัง หน้าร้านขายต่อได้ทันที
+      const result = isOnline() ? await pushOrderRpc(payload) : { ok: false, networkError: true };
+      if (result.networkError) {
+        enqueueOffline({ kind: 'order_rpc', payload });
+      } else if (!result.ok) {
+        recordFailedSync({ kind: 'order_rpc', payload }, result.message);
+      } else if (result.data) {
+        // เลขที่บิลชนกับบิลเดิมในฐานข้อมูล ฐานข้อมูลจะต่อท้ายเลขให้ไม่ซ้ำ
+        if (result.data.order_number) fullOrder.order_number = result.data.order_number;
+        syncedProducts = applyRemoteBalances(syncedProducts, result.data.balances);
+      }
+    }
+
+    // บันทึกใน LocalStorage
+    const localOrder = { ...fullOrder };
+    setLocal(STORAGE_KEYS.ORDERS, [localOrder, ...orders]);
     setLocal(STORAGE_KEYS.PRODUCTS, syncedProducts);
-    await recordStockMovements(
-      products,
-      syncedProducts,
-      { movement_type: 'SALE', reference_doc: fullOrder.order_number },
-      isSupabaseActive
-    );
+    // บิลส่งขึ้นฐานข้อมูลพร้อม Ledger/ล็อตแล้ว (หรือเข้าคิว) จึงบันทึกเฉพาะในเครื่อง
+    await commitStockMovements(stockPlan, isSupabaseActive, { remote: false });
 
     if (orderPayload.customer?.id) {
       const customers = getLocal(STORAGE_KEYS.CUSTOMERS, INITIAL_CUSTOMERS);
@@ -2648,46 +2835,50 @@ export const posService = {
       );
     }
 
-    // ยกเลิกบิลและคืนสต็อกใน Supabase
-    // - อ้างอิงบิลด้วย order_number เพราะบิลที่เพิ่งขายในเครื่องนี้มี id ในเครื่อง (ord-...) ไม่ใช่ id ในฐานข้อมูล
-    // - เปลี่ยนสถานะเฉพาะบิลที่ยัง completed เพื่อกันการคืนสต็อกซ้ำ ถ้าเครื่องอื่นยกเลิกไปแล้ว
-    // - อ่านสต็อกล่าสุดจากฐานข้อมูลก่อนบวกคืน (ไม่ใช้ค่าที่แคชไว้ในเครื่อง)
-    let alreadyVoidedRemotely = false;
-    if (isSupabaseActive && supabase && order.order_number) {
-      try {
-        const { data: voidedRows, error: voidError } = await supabase
-          .from('orders')
-          .update({ status: 'voided' })
-          .eq('order_number', order.order_number)
-          .eq('status', 'completed')
-          .select('id');
-        // ไม่มีแถวถูกเปลี่ยน = บิลนี้ถูกยกเลิกจากเครื่องอื่นไปแล้ว (หรือไม่มีในฐานข้อมูล)
-        alreadyVoidedRemotely = !voidError && Array.isArray(voidedRows) && voidedRows.length === 0;
+    const updatedProducts = products.map((prod) => {
+      const restoreQty = restoreByProductId.get(prod.id);
+      if (!restoreQty) return prod;
+      return {
+        ...prod,
+        stock: (Number(prod.stock) || 0) + restoreQty,
+        updated_at: nowIso,
+      };
+    });
+    let syncedProducts = normalizeAndSyncProducts(updatedProducts);
+    const stockPlan = planStockMovements(products, syncedProducts, {
+      movement_type: 'VOID',
+      reference_doc: order.order_number,
+    });
 
-        const remoteIds = [...restoreByProductId.keys()].filter(
-          (id) => !String(id).startsWith('prod-')
-        );
-        if (!voidError && Array.isArray(voidedRows) && voidedRows.length > 0 && remoteIds.length > 0) {
-          const { data: stockRows, error: stockError } = await supabase
-            .from('products')
-            .select('id, stock')
-            .in('id', remoteIds);
-          if (!stockError && Array.isArray(stockRows)) {
-            for (const row of stockRows) {
-              await supabase
-                .from('products')
-                .update({
-                  stock: (Number(row.stock) || 0) + restoreByProductId.get(row.id),
-                  updated_at: nowIso,
-                })
-                .eq('id', row.id);
-            }
-          }
-        } else if (voidError) {
-          console.warn('Supabase void order error:', voidError.message);
-        }
-      } catch (err) {
-        console.warn('Supabase void order fallback:', err.message);
+    // ยกเลิกบิลและคืนสต็อกในฐานข้อมูลด้วยคำสั่งเดียว (RPC void_order)
+    // - อ้างอิงบิลด้วย id (บิลตั้งแต่ beta 0.3.6) หรือ order_number (บิลเก่าที่ id ในเครื่องเป็น ord-...)
+    // - ฐานข้อมูลเปลี่ยนสถานะเฉพาะบิลที่ยัง completed กันคืนสต็อกซ้ำ ถ้าเครื่องอื่นยกเลิกไปแล้ว
+    let alreadyVoidedRemotely = false;
+    if (isSupabaseActive && supabase && (order.order_number || isUuid(order.id))) {
+      const payload = {
+        p_order_id: isUuid(order.id) ? order.id : null,
+        p_order_number: order.order_number || null,
+        p_restores: [...restoreByProductId.entries()]
+          .filter(([id]) => isRemoteProductId(id))
+          .map(([product_id, qty]) => ({ product_id, qty })),
+        p_ledger: stockPlan.entries.filter((e) => isRemoteProductId(e.product_id)),
+        p_lots: buildLotDeltas(stockPlan.lotPlan),
+      };
+      // บิลยังรอซิงค์อยู่ในคิว: ต่อคิวการยกเลิกไว้หลังบิล (คิวซิงค์ตามลำดับ)
+      const queuedOrder = this.getOfflineQueue().some(
+        (q) =>
+          (q.kind === 'order_rpc' && q.payload?.p_order?.id === order.id) ||
+          (q.kind === 'order' && q.order?.order_number === order.order_number)
+      );
+      const result =
+        queuedOrder || !isOnline() ? { ok: false, networkError: true } : await pushVoidRpc(payload);
+      if (result.networkError) {
+        enqueueOffline({ kind: 'void_rpc', payload });
+      } else if (!result.ok) {
+        recordFailedSync({ kind: 'void_rpc', payload }, result.message);
+      } else {
+        alreadyVoidedRemotely = result.data?.status === 'already_voided';
+        if (!alreadyVoidedRemotely) syncedProducts = applyRemoteBalances(syncedProducts, result.data?.balances);
       }
     }
 
@@ -2704,23 +2895,9 @@ export const posService = {
       return { updatedOrder: { ...order, status: 'voided' }, updatedProducts: products };
     }
 
-    const updatedProducts = products.map((prod) => {
-      const restoreQty = restoreByProductId.get(prod.id);
-      if (!restoreQty) return prod;
-      return {
-        ...prod,
-        stock: (Number(prod.stock) || 0) + restoreQty,
-        updated_at: nowIso,
-      };
-    });
-    const syncedProducts = normalizeAndSyncProducts(updatedProducts);
     setLocal(STORAGE_KEYS.PRODUCTS, syncedProducts);
-    await recordStockMovements(
-      products,
-      syncedProducts,
-      { movement_type: 'VOID', reference_doc: order.order_number },
-      isSupabaseActive
-    );
+    // ฐานข้อมูลรับ Ledger/ล็อตไปพร้อมคำสั่งยกเลิกแล้ว (หรือเข้าคิว) จึงบันทึกเฉพาะในเครื่อง
+    await commitStockMovements(stockPlan, isSupabaseActive, { remote: false });
 
     return {
       updatedOrder: { ...order, status: 'voided' },
