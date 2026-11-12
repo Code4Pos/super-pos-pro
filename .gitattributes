@@ -1,0 +1,4 @@
+# บังคับให้สคริปต์ gradlew ของ Android ใช้บรรทัดแบบ LF เสมอ เพื่อให้รันบน Linux / GitHub Actions ได้ไม่ติด \r
+android/gradlew text eol=lf
+*.sh text eol=lf
+*.bat text eol=crlf

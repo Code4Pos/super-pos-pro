@@ -16,7 +16,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: 'npm'
 
       - name: Setup Java 21 (Required by Capacitor 8 / Android Gradle)
@@ -31,8 +31,9 @@ jobs:
 
       - name: Build web bundle and sync Capacitor Android
         env:
-          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
-          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL || 'https://ziojdrmmvnpxgjrfrmbs.supabase.co' }}
+          VITE_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.VITE_SUPABASE_PUBLISHABLE_KEY || 'sb_publishable_D_Hn7t084zz7kKk0pAZ2HA_4VUF75FF' }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY || 'sb_publishable_D_Hn7t084zz7kKk0pAZ2HA_4VUF75FF' }}
         run: |
           npm run build
           npx cap sync android
@@ -40,8 +41,9 @@ jobs:
       - name: Build Android APK (Debug installable package)
         working-directory: ./android
         run: |
+          sed -i 's/\r$//' gradlew
           chmod +x gradlew
-          ./gradlew assembleDebug
+          ./gradlew assembleDebug --no-daemon
 
       - name: Upload SiamPOS-Pro APK Artifact
         uses: actions/upload-artifact@v4
