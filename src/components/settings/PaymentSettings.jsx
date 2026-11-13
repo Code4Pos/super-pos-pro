@@ -1,7 +1,7 @@
 import React from 'react';
 import { Wallet, QrCode, Inbox } from 'lucide-react';
 import SettingsCard, { useSettingsForm, FieldLabel, inputClass } from './SettingsCard';
-import { printerService } from '../../services/printerService';
+import { printerService, CASH_DRAWER_COMMANDS } from '../../services/printerService';
 import { usePOS } from '../../context/POSContext';
 import { parsePromptPayId } from '../../utils/promptpay';
 
@@ -55,7 +55,7 @@ export default function PaymentSettings() {
                 เปิดลิ้นชักเก็บเงินอัตโนมัติเมื่อรับเงินสด
               </div>
               <div className="text-[11px] text-slate-500">
-                ลิ้นชักต้องต่อสาย RJ11 กับเครื่องพิมพ์ และเชื่อมแบบ USB / Serial / RawBT
+                ลิ้นชักต้องต่อสาย RJ11 กับเครื่องพิมพ์ (หรือพอร์ตของเครื่อง Sunmi) และเชื่อมแบบ Bluetooth / USB / Serial / RawBT
               </div>
             </div>
           </div>
@@ -76,6 +76,18 @@ export default function PaymentSettings() {
             <option value="2">Pin 2 (ลิ้นชักทั่วไป)</option>
             <option value="5">Pin 5</option>
           </select>
+          <FieldLabel>คำสั่ง</FieldLabel>
+          <select
+            value={form.cashDrawerCommand || 'auto'}
+            onChange={(e) => setForm({ ...form, cashDrawerCommand: e.target.value })}
+            className="px-2.5 py-1.5 rounded-xl border border-slate-300 bg-white text-xs font-bold"
+          >
+            {Object.entries(CASH_DRAWER_COMMANDS).map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </select>
           <button
             type="button"
             onClick={handleOpenDrawer}
@@ -84,6 +96,10 @@ export default function PaymentSettings() {
             ทดสอบเปิดลิ้นชัก
           </button>
         </div>
+        <p className="text-[11px] text-slate-500">
+          ถ้ากดทดสอบแล้วลิ้นชักไม่เด้ง ให้ลองเปลี่ยน "คำสั่ง" ทีละแบบแล้วกดทดสอบอีกครั้ง (เครื่องพิมพ์แต่ละยี่ห้อรับคำสั่งต่างกัน)
+          {' '}โหมดไดรเวอร์ระบบ / ระบบพิมพ์ของ Android สั่งเปิดลิ้นชักไม่ได้
+        </p>
       </div>
     </SettingsCard>
   );

@@ -15,7 +15,7 @@ export function isNativePrinterAvailable() {
 }
 
 // แปลง Uint8Array เป็น base64 ทีละช่วง (กัน call stack เต็มเมื่อภาพใบเสร็จยาว)
-function bytesToBase64(bytes) {
+export function bytesToBase64(bytes) {
   let binary = '';
   const chunk = 0x8000;
   for (let i = 0; i < bytes.length; i += chunk) {

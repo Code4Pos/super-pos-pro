@@ -1,7 +1,7 @@
 import { formatCurrency, formatDateTime } from '../utils/formatters';
 import { PAYMENT_METHOD_LABELS, getOrderPayments } from '../utils/payments';
 import { calculateOrderVat, bahtText } from '../utils/tax';
-import { isNativePrinterAvailable, nativePrintHtml, bluetoothWrite, bluetoothStatus } from './nativePrinter';
+import { isNativePrinterAvailable, nativePrintHtml, bluetoothWrite, bluetoothStatus, bytesToBase64 } from './nativePrinter';
 
 function formatBranch(branch) {
   const b = String(branch || '00000');
@@ -48,6 +48,7 @@ const DEFAULT_DEVICE_PRINTER_SETTINGS = {
   systemPrinterReady: true,
   cashDrawerEnabled: false, // เปิดลิ้นชักเก็บเงินอัตโนมัติเมื่อรับเงินสด
   cashDrawerPin: '2', // ขาสัญญาณลิ้นชัก '2' (Pin 2) | '5' (Pin 5)
+  cashDrawerCommand: 'auto', // ดู CASH_DRAWER_COMMANDS
 };
 
 const DEFAULT_PRINTER_SETTINGS = {
@@ -78,11 +79,45 @@ function getPaymentLines(order) {
 }
 
 /**
- * คำสั่ง ESC/POS เปิดลิ้นชักเก็บเงิน: ESC p m t1 t2
- * m = 0 (Pin 2) หรือ 1 (Pin 5), t1/t2 = ระยะเวลาพัลส์เปิด/ปิด (หน่วย 2ms)
+ * คำสั่งเปิดลิ้นชักเก็บเงิน (เครื่องพิมพ์แต่ละยี่ห้อรับคำสั่งต่างกัน)
+ * - escp: ESC p m t1 t2 มาตรฐาน Epson และเครื่องพิมพ์ทั่วไป (m = 0 Pin 2 / 1 Pin 5, t1/t2 หน่วย 2ms)
+ * - realtime: DLE DC4 1 m t สั่งพัลส์แบบ Real-time (เครื่องพิมพ์บางรุ่นรับเฉพาะคำสั่งนี้)
+ * - sunmi: DLE DC4 0 0 0 คำสั่งเปิดลิ้นชักของเครื่อง Sunmi (ลิ้นชักต่อกับพอร์ตของเครื่อง ผ่าน InnerPrinter)
+ * - all: ส่งทุกแบบต่อกัน (ลิ้นชักอาจได้รับพัลส์มากกว่า 1 ครั้ง แต่เปิดแน่นอน)
  */
-function buildCashDrawerKickBytes(pin = '2') {
-  return new Uint8Array([0x1b, 0x70, pin === '5' ? 0x01 : 0x00, 0x19, 0xfa]);
+export const CASH_DRAWER_COMMANDS = {
+  auto: 'อัตโนมัติ (แนะนำ)',
+  escp: 'มาตรฐาน ESC p (Epson / ทั่วไป)',
+  realtime: 'Real-time DLE DC4',
+  sunmi: 'Sunmi (DLE DC4 0)',
+  all: 'ส่งทุกแบบ',
+};
+
+// เครื่อง Sunmi: เลือก Bluetooth "InnerPrinter" หรือใช้ RawBT/Sunmi Bridge
+function isSunmiPrinter(settings) {
+  return (
+    /innerprinter/i.test(settings.bluetoothName || '') ||
+    typeof window !== 'undefined' && Boolean(window.sunmi || window.SunmiInnerPrinter) ||
+    (typeof navigator !== 'undefined' && /sunmi/i.test(navigator.userAgent || ''))
+  );
+}
+
+function resolveCashDrawerCommand(settings) {
+  const mode = settings.cashDrawerCommand || 'auto';
+  if (mode !== 'auto') return mode;
+  // Sunmi ส่งทั้งคำสั่งของ Sunmi และแบบมาตรฐาน เพราะแต่ละรุ่น/เฟิร์มแวร์รับต่างกัน
+  return isSunmiPrinter(settings) || settings.connectionType === 'rawbt' ? 'all' : 'escp';
+}
+
+function buildCashDrawerKickBytes(pin = '2', mode = 'escp') {
+  const m = pin === '5' ? 0x01 : 0x00;
+  const escp = [0x1b, 0x70, m, 0x19, 0xfa];
+  const realtime = [0x10, 0x14, 0x01, m, 0x05];
+  const sunmi = [0x10, 0x14, 0x00, 0x00, 0x00];
+  if (mode === 'realtime') return new Uint8Array(realtime);
+  if (mode === 'sunmi') return new Uint8Array(sunmi);
+  if (mode === 'all') return new Uint8Array([...escp, ...realtime, ...sunmi]);
+  return new Uint8Array(escp);
 }
 
 let activeUsbDevice = null;
@@ -1765,17 +1800,28 @@ export const printerService = {
     if (settings.connectionType === 'system') {
       return {
         ok: false,
-        message: 'โหมดไดรเวอร์ระบบ (System Print) สั่งเปิดลิ้นชักไม่ได้ กรุณาเชื่อมแบบ Bluetooth / WebUSB / WebSerial',
+        message: isNativePrinterAvailable()
+          ? 'โหมดระบบพิมพ์ของ Android สั่งเปิดลิ้นชักไม่ได้ กรุณาเลือกเชื่อมต่อแบบ Bluetooth (เครื่อง Sunmi เลือก InnerPrinter)'
+          : 'โหมดไดรเวอร์ระบบ (System Print) สั่งเปิดลิ้นชักไม่ได้ กรุณาเชื่อมแบบ WebUSB / WebSerial',
       };
     }
     try {
-      const ok = await this.sendRawBytes(
-        buildCashDrawerKickBytes(settings.cashDrawerPin),
-        settings
-      );
-      return ok
-        ? { ok: true, message: 'ส่งคำสั่งเปิดลิ้นชักเก็บเงินแล้ว' }
-        : { ok: false, message: 'ยังไม่ได้เชื่อมต่อเครื่องพิมพ์ จึงเปิดลิ้นชักไม่ได้' };
+      const kickBytes = buildCashDrawerKickBytes(settings.cashDrawerPin, resolveCashDrawerCommand(settings));
+      const ok = await this.sendRawBytes(kickBytes, settings);
+      if (ok) return { ok: true, message: 'ส่งคำสั่งเปิดลิ้นชักเก็บเงินแล้ว' };
+
+      // RawBT ที่ไม่ได้เปิด WebSocket: ส่งไบต์ดิบผ่าน intent ของแอป RawBT (แบบเดียวกับที่ใบเสร็จส่งเป็นรูปภาพ)
+      if (settings.connectionType === 'rawbt') {
+        window.location.href = `rawbt:base64,${bytesToBase64(kickBytes)}`;
+        return { ok: true, message: 'ส่งคำสั่งเปิดลิ้นชักผ่านแอป RawBT แล้ว' };
+      }
+      return {
+        ok: false,
+        message:
+          settings.connectionType === 'bluetooth'
+            ? 'ยังไม่ได้เลือกเครื่องพิมพ์ Bluetooth จึงเปิดลิ้นชักไม่ได้'
+            : 'ยังไม่ได้เชื่อมต่อเครื่องพิมพ์ จึงเปิดลิ้นชักไม่ได้',
+      };
     } catch (err) {
       return { ok: false, message: `เปิดลิ้นชักไม่สำเร็จ: ${err.message}` };
     }
