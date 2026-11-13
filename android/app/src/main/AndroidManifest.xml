@@ -40,4 +40,20 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!-- กล้อง: สแกนบาร์โค้ดสด (getUserMedia) และถ่ายรูปบาร์โค้ด/รูปสินค้า (input capture)
+         แอปจะเด้งถามสิทธิ์ตอนเปิดกล้องครั้งแรก (Capacitor BridgeWebChromeClient จัดการให้) -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <!-- ไม่บังคับให้เครื่องต้องมีกล้อง (เครื่อง POS บางรุ่นไม่มีกล้องหลัง ก็ยังติดตั้งได้) -->
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.front" android:required="false" />
+
+    <!-- Bluetooth: ส่งคำสั่ง ESC/POS ไปเครื่องพิมพ์ความร้อน Bluetooth ที่จับคู่ไว้แล้ว (SiamPrinterPlugin)
+         Android 11 ลงไปใช้ BLUETOOTH/BLUETOOTH_ADMIN (ได้ตอนติดตั้ง)
+         Android 12 ขึ้นไปใช้ BLUETOOTH_CONNECT (เด้งถามสิทธิ์ "อุปกรณ์ใกล้เคียง" ตอนใช้งานครั้งแรก) -->
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-feature android:name="android.hardware.bluetooth" android:required="false" />
 </manifest>

@@ -1,6 +1,7 @@
 import { formatCurrency, formatDateTime } from '../utils/formatters';
 import { PAYMENT_METHOD_LABELS, getOrderPayments } from '../utils/payments';
 import { calculateOrderVat, bahtText } from '../utils/tax';
+import { isNativePrinterAvailable, nativePrintHtml, bluetoothWrite, bluetoothStatus } from './nativePrinter';
 
 function formatBranch(branch) {
   const b = String(branch || '00000');
@@ -38,7 +39,9 @@ const DEFAULT_SHOP_SETTINGS = {
 // ค่าตั้งเฉพาะเครื่องนี้ (ชนิดเครื่องพิมพ์ ขนาดกระดาษ ลิ้นชักเก็บเงิน — เก็บใน localStorage ของแต่ละเครื่อง ไม่ซิงค์ข้ามเครื่อง)
 const DEFAULT_DEVICE_PRINTER_SETTINGS = {
   paperSize: '80mm', // '58mm' | '80mm'
-  connectionType: 'system', // 'system' | 'webusb' | 'webserial' | 'rawbt'
+  connectionType: 'system', // 'system' | 'webusb' | 'webserial' | 'rawbt' | 'bluetooth' (เฉพาะแอป Android)
+  bluetoothAddress: '', // MAC ของเครื่องพิมพ์ Bluetooth ที่เลือก (จับคู่ในตั้งค่าเครื่องก่อน)
+  bluetoothName: '',
   baudRate: 115200, // 9600 | 115200
   autoPrint: false,
   performanceMode: true,
@@ -373,6 +376,15 @@ function renderSlipToCanvas(order, settings, mode = 'receipt') {
  * สั่งพิมพ์ HTML ผ่านซ่อน Iframe แยกอิสระ (แก้ปัญหาหน้าขาว/ถูกตัดขอบจาก Modal 100%)
  */
 function printHtmlViaHiddenIframe(htmlDocumentString) {
+  // แอป Android: WebView ไม่รองรับ window.print() จึงส่งให้ระบบพิมพ์ของ Android (เลือกเครื่องพิมพ์ / บันทึก PDF ได้)
+  if (isNativePrinterAvailable()) {
+    nativePrintHtml(htmlDocumentString).catch((err) => {
+      console.error('Native print failed:', err);
+      notifyStatusChange('error', `สั่งพิมพ์ไม่สำเร็จ: ${err?.message || err}`);
+    });
+    return;
+  }
+
   let iframe = document.getElementById('siampos-dedicated-print-iframe');
   if (iframe) {
     document.body.removeChild(iframe);
@@ -1445,6 +1457,37 @@ export const printerService = {
     const settings = customSettings || this.getSettings();
     const conn = settings.connectionType;
 
+    if (conn === 'bluetooth') {
+      if (!isNativePrinterAvailable()) {
+        notifyStatusChange('error', 'Bluetooth ใช้ได้เฉพาะในแอป Android');
+        return 'error';
+      }
+      if (!settings.bluetoothAddress) {
+        notifyStatusChange('error', 'ยังไม่ได้เลือกเครื่องพิมพ์ Bluetooth');
+        return 'error';
+      }
+      try {
+        const st = await bluetoothStatus(settings.bluetoothAddress);
+        if (!st.permission) {
+          notifyStatusChange('warning', 'ยังไม่ได้อนุญาตสิทธิ์ Bluetooth (กดค้นหาเครื่องพิมพ์เพื่ออนุญาต)');
+          return 'warning';
+        }
+        if (!st.enabled) {
+          notifyStatusChange('error', 'Bluetooth ของเครื่องปิดอยู่');
+          return 'error';
+        }
+        if (!st.bonded) {
+          notifyStatusChange('error', 'เครื่องพิมพ์ที่เลือกไม่ได้จับคู่ไว้แล้ว กรุณาจับคู่ในตั้งค่า Bluetooth');
+          return 'error';
+        }
+        notifyStatusChange('ready', `Bluetooth พร้อมพิมพ์ (${settings.bluetoothName || settings.bluetoothAddress})`);
+        return 'ready';
+      } catch (err) {
+        notifyStatusChange('error', `ตรวจสอบ Bluetooth ไม่ได้: ${err?.message || err}`);
+        return 'error';
+      }
+    }
+
     if (conn === 'webusb') {
       if (!('usb' in navigator)) {
         notifyStatusChange('error', 'เบราว์เซอร์ไม่รองรับ WebUSB');
@@ -1627,6 +1670,19 @@ export const printerService = {
    * คืนค่า false ถ้าส่งไม่ได้ (เช่น ใช้ไดรเวอร์ระบบ หรือยังไม่ได้เชื่อมต่อ)
    */
   async sendRawBytes(rasterBytes, settings) {
+    // 0. Bluetooth (แอป Android) ส่งผ่าน SiamPrinterPlugin แบบ SPP
+    if (settings.connectionType === 'bluetooth') {
+      if (!isNativePrinterAvailable() || !settings.bluetoothAddress) return false;
+      try {
+        await bluetoothWrite(settings.bluetoothAddress, rasterBytes);
+        notifyStatusChange('ready', `พิมพ์ผ่าน Bluetooth สำเร็จ (${settings.bluetoothName || settings.bluetoothAddress})`);
+        return true;
+      } catch (err) {
+        notifyStatusChange('error', err?.message || 'ส่งข้อมูลไปเครื่องพิมพ์ Bluetooth ไม่สำเร็จ');
+        throw err;
+      }
+    }
+
     // 1. WebUSB
     if (settings.connectionType === 'webusb') {
       if (!activeUsbDevice || !activeUsbDevice.opened || !activeUsbEndpoint) {
@@ -1709,7 +1765,7 @@ export const printerService = {
     if (settings.connectionType === 'system') {
       return {
         ok: false,
-        message: 'โหมดไดรเวอร์ระบบ (System Print) สั่งเปิดลิ้นชักไม่ได้ กรุณาเชื่อมแบบ WebUSB / WebSerial',
+        message: 'โหมดไดรเวอร์ระบบ (System Print) สั่งเปิดลิ้นชักไม่ได้ กรุณาเชื่อมแบบ Bluetooth / WebUSB / WebSerial',
       };
     }
     try {

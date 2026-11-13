@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Printer, Check, Zap, Usb, Smartphone, FileText, Cable, RefreshCw } from 'lucide-react';
+import { Printer, Check, Zap, Usb, Smartphone, FileText, Cable, RefreshCw, Bluetooth, Loader2 } from 'lucide-react';
 import SettingsCard, { useSettingsForm } from './SettingsCard';
 import { printerService } from '../../services/printerService';
+import { isNativePrinterAvailable, listBluetoothPrinters, bluetoothDisconnect } from '../../services/nativePrinter';
 import { usePOS } from '../../context/POSContext';
 
 const PAPER_OPTIONS = [
@@ -9,7 +10,18 @@ const PAPER_OPTIONS = [
   { id: '58mm', title: 'ขนาด 58 mm (384px)', desc: 'สำหรับสลิปขนาดเล็กหรือเครื่องพิมพ์ 2 นิ้ว' },
 ];
 
-const CONNECTION_OPTIONS = [
+// แอป Android: WebView ไม่รองรับ WebUSB / WebSerial แต่มี Bluetooth และระบบพิมพ์ของ Android ผ่านปลั๊กอินในแอป
+const IS_NATIVE_APP = isNativePrinterAvailable();
+const NATIVE_ONLY = ['bluetooth'];
+const WEB_ONLY = ['webusb', 'webserial'];
+
+const CONNECTION_OPTIONS_ALL = [
+  {
+    id: 'bluetooth',
+    icon: Bluetooth,
+    title: 'เครื่องพิมพ์ Bluetooth (ESC/POS)',
+    desc: 'เครื่องพิมพ์ความร้อนพกพา/ตั้งโต๊ะที่จับคู่ไว้แล้ว รวมถึง InnerPrinter ในตัวเครื่อง Sunmi',
+  },
   {
     id: 'system',
     icon: FileText,
@@ -36,6 +48,14 @@ const CONNECTION_OPTIONS = [
   },
 ];
 
+const CONNECTION_OPTIONS = CONNECTION_OPTIONS_ALL.filter((opt) =>
+  IS_NATIVE_APP ? !WEB_ONLY.includes(opt.id) : !NATIVE_ONLY.includes(opt.id)
+).map((opt) =>
+  IS_NATIVE_APP && opt.id === 'system'
+    ? { ...opt, title: 'ระบบพิมพ์ของ Android', desc: 'เปิดหน้าต่างพิมพ์ของเครื่อง เลือกเครื่องพิมพ์ / Sunmi Print Service หรือบันทึก PDF' }
+    : opt
+);
+
 const SAMPLE_ORDER = {
   order_number: 'TEST-PRINT-001',
   customer_name: 'ลูกค้าทดสอบระบบพิมพ์',
@@ -60,6 +80,8 @@ export default function PrinterSettings({ onSaved = null }) {
   const { showToast, printerStatus, refreshPrinterStatus, updatePrinterSettings } = usePOS();
   const { form, setForm, isDirty, save } = useSettingsForm();
   const [testing, setTesting] = useState(false);
+  const [btDevices, setBtDevices] = useState(null); // null = ยังไม่ได้ค้นหา
+  const [btLoading, setBtLoading] = useState(false);
 
   useEffect(() => {
     refreshPrinterStatus();
@@ -79,6 +101,30 @@ export default function PrinterSettings({ onSaved = null }) {
     } catch (err) {
       showToast(err.message || 'ไม่สามารถเชื่อมต่อเครื่องพิมพ์ได้', 'warning');
     }
+  };
+
+  // รายชื่อเครื่องที่จับคู่ไว้ในตั้งค่า Bluetooth ของเครื่อง (Android 12+ จะถามสิทธิ์ "อุปกรณ์ใกล้เคียง" ครั้งแรก)
+  const loadBluetoothDevices = async () => {
+    setBtLoading(true);
+    try {
+      const result = await listBluetoothPrinters();
+      if (!result.enabled) {
+        showToast('Bluetooth ของเครื่องปิดอยู่ กรุณาเปิด Bluetooth ก่อน', 'warning');
+      }
+      setBtDevices(result.devices || []);
+    } catch (err) {
+      showToast(err?.message || 'ค้นหาเครื่องพิมพ์ Bluetooth ไม่สำเร็จ', 'warning');
+    } finally {
+      setBtLoading(false);
+    }
+  };
+
+  const selectBluetoothDevice = async (device) => {
+    await bluetoothDisconnect();
+    const next = { ...form, connectionType: 'bluetooth', bluetoothAddress: device.address, bluetoothName: device.name };
+    setForm(next);
+    updatePrinterSettings(next);
+    showToast(`เลือกเครื่องพิมพ์ ${device.name} แล้ว`, 'success');
   };
 
   const handleTestPrint = async () => {
@@ -180,6 +226,55 @@ export default function PrinterSettings({ onSaved = null }) {
                 <div className="flex-1 min-w-0">
                   <div className="text-xs sm:text-sm font-bold text-slate-900">{conn.title}</div>
                   <div className="text-[11px] text-slate-500">{conn.desc}</div>
+
+                  {conn.id === 'bluetooth' && active && (
+                    <div onClick={(e) => e.stopPropagation()} className="mt-2 space-y-2">
+                      <div className="text-[11px] text-slate-600">
+                        เครื่องที่เลือก:{' '}
+                        <span className="font-bold text-slate-900">
+                          {form.bluetoothAddress ? `${form.bluetoothName || '-'} (${form.bluetoothAddress})` : 'ยังไม่ได้เลือก'}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        disabled={btLoading}
+                        onClick={loadBluetoothDevices}
+                        className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 text-white text-xs font-bold flex items-center gap-1.5"
+                      >
+                        {btLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Bluetooth className="w-3.5 h-3.5" />}
+                        ค้นหาเครื่องพิมพ์ที่จับคู่แล้ว
+                      </button>
+                      {btDevices && btDevices.length === 0 && (
+                        <div className="text-[11px] text-amber-700">
+                          ไม่พบเครื่องที่จับคู่ไว้ กรุณาจับคู่เครื่องพิมพ์ในตั้งค่า Bluetooth ของเครื่องก่อน แล้วกดค้นหาอีกครั้ง
+                        </div>
+                      )}
+                      {btDevices && btDevices.length > 0 && (
+                        <div className="border border-slate-200 rounded-xl divide-y divide-slate-100 bg-white">
+                          {btDevices.map((d) => {
+                            const selected = d.address === form.bluetoothAddress;
+                            return (
+                              <button
+                                key={d.address}
+                                type="button"
+                                onClick={() => selectBluetoothDevice(d)}
+                                className={`w-full px-3 py-2 text-left flex items-center justify-between gap-2 ${selected ? 'bg-indigo-50' : 'hover:bg-slate-50'}`}
+                              >
+                                <span className="min-w-0">
+                                  <span className="block text-xs font-bold text-slate-900 truncate">{d.name}</span>
+                                  <span className="block text-[10px] font-mono text-slate-500">{d.address}</span>
+                                </span>
+                                {selected && <Check className="w-4 h-4 text-indigo-600 stroke-[3] shrink-0" />}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                      <p className="text-[10px] text-slate-500">
+                        เครื่อง Sunmi ให้เลือก "InnerPrinter" เพื่อพิมพ์ออกหัวพิมพ์ในตัวเครื่อง / ลิ้นชักเก็บเงินที่ต่อกับเครื่องพิมพ์สั่งเปิดผ่าน Bluetooth ได้
+                      </p>
+                    </div>
+                  )}
 
                   {conn.id === 'webusb' && active && (
                     <button

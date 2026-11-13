@@ -140,8 +140,13 @@ export default function MobileBarcodeModal({
       }
     } catch (err) {
       console.warn('Camera start error:', err);
+      // ในแอป Android: ถ้าเคยกดปฏิเสธสิทธิ์กล้องแบบถาวร ต้องเปิดเองในตั้งค่าเครื่อง
+      const isNativeApp = Boolean(window.Capacitor?.isNativePlatform?.());
+      const denied = err?.name === 'NotAllowedError' || err?.name === 'SecurityError';
       setCameraError(
-        'ไม่สามารถเข้าถึงกล้องมือถือได้ (อาจยังไม่ได้อนุญาตสิทธิ์กล้อง) คุณสามารถกด "ถ่ายภาพบาร์โค้ดผ่านมือถือ" ด้านล่างได้ทันที'
+        isNativeApp && denied
+          ? 'แอปยังไม่ได้รับสิทธิ์ใช้กล้อง กรุณาเปิดที่ ตั้งค่าเครื่อง > แอป > SiamPOS Pro > สิทธิ์ > กล้อง แล้วลองใหม่ หรือพิมพ์รหัสด้านล่างแทน'
+          : 'ไม่สามารถเข้าถึงกล้องมือถือได้ (อาจยังไม่ได้อนุญาตสิทธิ์กล้อง) คุณสามารถกด "ถ่ายภาพบาร์โค้ดผ่านมือถือ" ด้านล่างได้ทันที'
       );
     }
   };
