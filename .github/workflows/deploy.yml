@@ -33,10 +33,21 @@ jobs:
 
       - name: Build production bundle
         env:
+          VITE_BUILD_ID: ${{ github.sha }}
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL || 'https://ziojdrmmvnpxgjrfrmbs.supabase.co' }}
           VITE_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.VITE_SUPABASE_PUBLISHABLE_KEY || 'sb_publishable_D_Hn7t084zz7kKk0pAZ2HA_4VUF75FF' }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY || 'sb_publishable_D_Hn7t084zz7kKk0pAZ2HA_4VUF75FF' }}
         run: npm run build
+
+      # ชุดไฟล์สำหรับอัปเดตแอป Android แบบ OTA (ไม่ต้องลง APK ใหม่): app-bundle.zip + app-update.json
+      - name: Build OTA update bundle for the Android app
+        env:
+          VITE_BUILD_ID: ${{ github.sha }}
+        run: |
+          cd dist && zip -qr ../app-bundle.zip . && cd ..
+          mv app-bundle.zip dist/app-bundle.zip
+          node scripts/write-update-manifest.mjs
+          cat dist/app-update.json
 
       - name: Deploy to gh-pages branch
         uses: peaceiris/actions-gh-pages@v4

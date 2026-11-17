@@ -18,6 +18,7 @@ import {
   CloudUpload,
 } from 'lucide-react';
 import { usePOS } from '../../context/POSContext';
+import { AppUpdateHeaderButton } from '../common/AppUpdate';
 import { formatCurrency } from '../../utils/formatters';
 import { ROLES, canAccessAnyAdminTab } from '../../utils/rbac';
 
@@ -46,6 +47,7 @@ export default function Header({
     currentUser,
     logout,
     canTab,
+    showToast,
   } = usePOS();
 
   const isPosPage = mode === 'pos';
@@ -294,6 +296,9 @@ export default function Header({
             )}
           </button>
         )}
+
+        {/* อัปเดตแอป Android พร้อมใช้ (OTA) หรือมี APK ใหม่ แสดงเฉพาะในแอป */}
+        <AppUpdateHeaderButton onError={(message) => showToast(message, 'warning')} />
 
         {lowStockCount > 0 && canTab('inventory') && (
           <button

@@ -56,4 +56,7 @@
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <uses-feature android:name="android.hardware.bluetooth" android:required="false" />
+
+    <!-- ติดตั้ง APK เวอร์ชันใหม่จากปุ่ม "อัปเดตแอป" (SiamAppPlugin) ผู้ใช้ต้องอนุญาตและกดติดตั้งเอง -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 </manifest>

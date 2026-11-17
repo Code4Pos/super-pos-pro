@@ -2,7 +2,11 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import PosApp from './PosApp.jsx';
 import ShopAuthGate from './components/auth/ShopAuthGate.jsx';
+import { initAppUpdater } from './services/appUpdater';
 import './index.css';
+
+// แอป Android: ยืนยันว่าเปิดสำเร็จ (กันย้อนกลับเวอร์ชัน) และตรวจหาอัปเดต OTA / APK
+initAppUpdater();
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>

@@ -30,3 +30,8 @@ dist-ssr
 *.sln
 *.sw?
 
+
+# กุญแจเซ็นแอป Android (ห้าม commit เด็ดขาด)
+.signing/
+*.keystore
+*.jks

@@ -5,6 +5,7 @@ import { posService } from '../../services/posService';
 import { sanitizeDeviceCode, localDateCode } from '../../utils/device';
 import { signOutShop, getShopAccountEmail } from '../auth/ShopAuthGate';
 import { getServerConfig, saveServerConfig, resetServerConfig } from '../../lib/supabase';
+import { AppUpdatePanel } from '../common/AppUpdate';
 
 const DEFAULT_MODE_OPTIONS = [
   { id: 'ask', label: 'ถามทุกครั้ง (แสดงหน้าเลือกโหมด)' },
@@ -338,6 +339,9 @@ export default function DeviceSettings() {
             </button>
           </div>
         )}
+
+        {/* อัปเดตแอป Android (OTA / APK) แสดงเฉพาะในแอป */}
+        <AppUpdatePanel onError={(message) => showToast(message, 'warning')} />
       </div>
     </div>
   );

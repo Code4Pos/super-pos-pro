@@ -6,9 +6,23 @@ on:
     branches:
       - main
 
+# ต้องเขียน Release ได้ เพื่ออัปโหลด APK ล่าสุดให้ปุ่ม "อัปเดตแอป" ในแอปดาวน์โหลด
+permissions:
+  contents: write
+
+concurrency:
+  group: 'build-apk'
+  cancel-in-progress: true
+
 jobs:
   build-apk:
     runs-on: ubuntu-latest
+    env:
+      # ใช้ buildId เดียวกับเว็บ (deploy.yml) เพื่อให้แอปที่เพิ่งลงไม่ดาวน์โหลด OTA ของ commit เดียวกันซ้ำ
+      VITE_BUILD_ID: ${{ github.sha }}
+      VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL || 'https://ziojdrmmvnpxgjrfrmbs.supabase.co' }}
+      VITE_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.VITE_SUPABASE_PUBLISHABLE_KEY || 'sb_publishable_D_Hn7t084zz7kKk0pAZ2HA_4VUF75FF' }}
+      VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY || 'sb_publishable_D_Hn7t084zz7kKk0pAZ2HA_4VUF75FF' }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -30,24 +44,78 @@ jobs:
         run: npm ci
 
       - name: Build web bundle and sync Capacitor Android
-        env:
-          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL || 'https://ziojdrmmvnpxgjrfrmbs.supabase.co' }}
-          VITE_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.VITE_SUPABASE_PUBLISHABLE_KEY || 'sb_publishable_D_Hn7t084zz7kKk0pAZ2HA_4VUF75FF' }}
-          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY || 'sb_publishable_D_Hn7t084zz7kKk0pAZ2HA_4VUF75FF' }}
         run: |
           npm run build
           npx cap sync android
 
-      - name: Build Android APK (Debug installable package)
+      # versionCode เพิ่มขึ้นทุกครั้งที่ build (ติดตั้งทับเวอร์ชันเก่าได้)
+      - name: Set version code
+        run: echo "SIAMPOS_VERSION_CODE=$((GITHUB_RUN_NUMBER + 1000))" >> "$GITHUB_ENV"
+
+      # กุญแจเซ็นแอปตัวเดียวตลอด (เก็บใน GitHub Secrets) ถ้ายังไม่ได้ใส่ Secret จะ build แบบ debug เหมือนเดิม
+      - name: Decode release keystore
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/siampos-release.keystore"
+            echo "SIAMPOS_KEYSTORE_PATH=$RUNNER_TEMP/siampos-release.keystore" >> "$GITHUB_ENV"
+            echo "SIGNED_BUILD=true" >> "$GITHUB_ENV"
+          else
+            echo "::warning::ยังไม่ได้ตั้ง Secret ANDROID_KEYSTORE_BASE64 จึง build แบบ debug (ติดตั้งทับเวอร์ชันเก่าไม่ได้)"
+            echo "SIGNED_BUILD=false" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build Android APK
         working-directory: ./android
+        env:
+          SIAMPOS_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          SIAMPOS_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          SIAMPOS_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           sed -i 's/\r$//' gradlew
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon
+          if [ "$SIGNED_BUILD" = "true" ]; then
+            ./gradlew assembleRelease --no-daemon
+            cp app/build/outputs/apk/release/app-release.apk "$GITHUB_WORKSPACE/SiamPOS-Pro.apk"
+          else
+            ./gradlew assembleDebug --no-daemon
+            cp app/build/outputs/apk/debug/app-debug.apk "$GITHUB_WORKSPACE/SiamPOS-Pro.apk"
+          fi
 
       - name: Upload SiamPOS-Pro APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: SiamPOS-Pro-Android-APK
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          path: SiamPOS-Pro.apk
           retention-days: 30
+
+      # ข้อมูล APK ล่าสุดสำหรับแอป (อ่านผ่าน GitHub API: releases/tags/android-latest)
+      - name: Prepare release notes
+        if: env.SIGNED_BUILD == 'true'
+        run: |
+          node -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            const nativeApi = JSON.parse(fs.readFileSync('native-version.json', 'utf8')).nativeApi;
+            fs.writeFileSync('apk-info.json', JSON.stringify({
+              versionCode: Number(process.env.SIAMPOS_VERSION_CODE),
+              versionName: pkg.version,
+              nativeApi,
+              buildId: process.env.VITE_BUILD_ID,
+            }));
+          "
+          cat apk-info.json
+
+      # อัปเดต Release เดียว (tag android-latest) แทนที่ไฟล์เดิมทุกครั้ง ลิงก์ดาวน์โหลดจึงคงที่
+      - name: Publish APK to release android-latest
+        if: env.SIGNED_BUILD == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: android-latest
+          name: SiamPOS Pro Android (ล่าสุด)
+          body_path: apk-info.json
+          make_latest: true
+          files: |
+            SiamPOS-Pro.apk
+            apk-info.json

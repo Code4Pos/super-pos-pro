@@ -10,6 +10,7 @@ public class MainActivity extends BridgeActivity {
     public void onCreate(Bundle savedInstanceState) {
         // ปลั๊กอินในแอป (ไม่ได้มาจาก npm) ต้องลงทะเบียนก่อน super.onCreate
         registerPlugin(SiamPrinterPlugin.class);
+        registerPlugin(SiamAppPlugin.class);
         super.onCreate(savedInstanceState);
     }
 }

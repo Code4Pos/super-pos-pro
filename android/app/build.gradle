@@ -1,5 +1,17 @@
 apply plugin: 'com.android.application'
 
+// เวอร์ชันแอป: versionName จาก package.json, nativeApi จาก native-version.json (ใช้ตัดสินว่าต้องลง APK ใหม่หรืออัปเดต OTA ได้)
+// versionCode ส่งมาจาก GitHub Actions (SIAMPOS_VERSION_CODE) เพื่อให้เพิ่มขึ้นทุกครั้งและติดตั้งทับเวอร์ชันเก่าได้
+def rootDirFile = rootProject.projectDir.parentFile
+def appPackageJson = new groovy.json.JsonSlurper().parse(new File(rootDirFile, 'package.json'))
+def nativeVersionJson = new groovy.json.JsonSlurper().parse(new File(rootDirFile, 'native-version.json'))
+def siamposVersionCode = (System.getenv('SIAMPOS_VERSION_CODE') ?: '1').toInteger()
+def siamposNativeApi = (nativeVersionJson.nativeApi ?: 1) as Integer
+
+// กุญแจเซ็นแอป (ใช้ตัวเดียวตลอด จึงติดตั้ง APK ใหม่ทับได้โดยข้อมูลในเครื่องไม่หาย) ส่งมาจาก GitHub Secrets
+def releaseKeystorePath = System.getenv('SIAMPOS_KEYSTORE_PATH')
+def hasReleaseKeystore = releaseKeystorePath && new File(releaseKeystorePath).exists()
+
 android {
     namespace = "com.siampos.pro"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -7,8 +19,9 @@ android {
         applicationId "com.siampos.pro"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        versionCode siamposVersionCode
+        versionName appPackageJson.version
+        buildConfigField "int", "NATIVE_API", "${siamposNativeApi}"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -16,8 +29,24 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    buildFeatures {
+        buildConfig true
+    }
+    signingConfigs {
+        release {
+            if (hasReleaseKeystore) {
+                storeFile file(releaseKeystorePath)
+                storePassword System.getenv('SIAMPOS_KEYSTORE_PASSWORD')
+                keyAlias System.getenv('SIAMPOS_KEY_ALIAS')
+                keyPassword System.getenv('SIAMPOS_KEY_PASSWORD')
+            }
+        }
+    }
     buildTypes {
         release {
+            if (hasReleaseKeystore) {
+                signingConfig signingConfigs.release
+            }
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
