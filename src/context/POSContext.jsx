@@ -14,10 +14,16 @@ import {
 
 const SESSION_STORAGE_KEY = 'siampos_session_v1';
 
-export const APP_VERSION = 'version beta 0.3.11';
+export const APP_VERSION = 'version beta 0.3.12';
 const HELD_BILLS_STORAGE_KEY = 'siampos_held_bills_v1';
 
 const POSContext = createContext(null);
+
+// รวมรายการ 2 ชุดตาม id (ชุดแรกมีผลเหนือกว่า)
+function mergeById(primary = [], secondary = []) {
+  const ids = new Set(primary.map((r) => r.id));
+  return [...primary, ...secondary.filter((r) => !ids.has(r.id))];
+}
 
 export function POSProvider({ children, scope = 'all' }) {
   const [dbMode, setDbMode] = useState('demo');
@@ -72,6 +78,9 @@ export function POSProvider({ children, scope = 'all' }) {
   const [suppliers, setSuppliers] = useState([]);
   const [stockImports, setStockImports] = useState([]);
   const [orders, setOrders] = useState([]);
+  // หน้าขาย: บิลขายเชื่อที่โหลดเมื่อจำเป็น (เลือกลูกค้าขายเชื่อ / เปิดหน้าต่างเครดิต) ไม่โหลดรอตอนเปิดแอป
+  const [creditOrders, setCreditOrders] = useState([]);
+  const [creditLoadedFor, setCreditLoadedFor] = useState(() => new Set());
   const [wholesaleRules, setWholesaleRules] = useState([]);
   const [specialRules, setSpecialRules] = useState([]);
 
@@ -187,6 +196,9 @@ export function POSProvider({ children, scope = 'all' }) {
       setSuppliers(data.suppliers || []);
       setStockImports(data.stockImports || []);
       setOrders(data.orders);
+      // ยอดเครดิตที่โหลดไว้อาจเก่าแล้ว ให้โหลดใหม่เมื่อใช้ครั้งถัดไป
+      setCreditOrders([]);
+      setCreditLoadedFor(new Set());
       setWholesaleRules(data.wholesaleRules || []);
       setSpecialRules(data.specialRules || []);
       setPrinterSettings(printerService.getSettings());
@@ -545,9 +557,40 @@ export function POSProvider({ children, scope = 'all' }) {
   );
 
   // สรุปเครดิตลูกค้า: ยอดค้างชำระ วงเงินคงเหลือ และยอดเกินกำหนด
+  // หน้าขาย (scope = 'pos') ใช้บิลเครดิตที่โหลดเมื่อจำเป็น รวมกับบิลที่ขายในเครื่องนี้ / creditLoaded บอกว่าโหลดยอดของลูกค้าคนนี้แล้วหรือยัง
   const getCustomerCredit = useCallback(
-    (customer) => calculateCustomerCredit(customer, orders, customerPayments),
-    [orders, customerPayments]
+    (customer) => {
+      if (scope !== 'pos') return calculateCustomerCredit(customer, orders, customerPayments);
+      const summary = calculateCustomerCredit(customer, mergeById(creditOrders, orders), customerPayments);
+      const creditLoaded = !customer || creditLoadedFor.has('all') || creditLoadedFor.has(customer.id);
+      return { ...summary, creditLoaded };
+    },
+    [scope, orders, creditOrders, creditLoadedFor, customerPayments]
+  );
+
+  // โหลดยอดเครดิตจากฐานข้อมูล (customerId = รายเดียว, ไม่ระบุ = ทุกคน) คืน { orders, payments, offline }
+  const loadCreditData = useCallback(
+    async (customerId = null) => {
+      const result = await posService.fetchCreditData({ customerId, isSupabaseActive: dbMode === 'supabase' });
+      setCreditOrders((prev) => {
+        const kept = customerId ? prev.filter((o) => o.customer_id !== customerId) : [];
+        return mergeById(result.orders, kept);
+      });
+      setCustomerPayments((prev) => {
+        const kept = customerId ? prev.filter((p) => p.customer_id !== customerId) : [];
+        return mergeById(result.payments, kept);
+      });
+      setCreditLoadedFor((prev) => new Set([...prev, customerId || 'all']));
+      return result;
+    },
+    [dbMode]
+  );
+
+  // โหลดประวัติบิลสำหรับหน้าต่างประวัติบิลในหน้าขาย
+  const fetchRecentOrders = useCallback(
+    (search = '', limit = 100) =>
+      posService.fetchRecentOrders({ search, limit, isSupabaseActive: dbMode === 'supabase' }),
+    [dbMode]
   );
 
   // บันทึกการขาย (Checkout)
@@ -604,11 +647,22 @@ export function POSProvider({ children, scope = 'all' }) {
         .reduce((sum, p) => sum + p.amount, 0);
       let creditDueDate = null;
       if (creditAmount > 0) {
-        const creditCheck = checkCreditSale(
-          selectedCustomer,
-          creditAmount,
-          getCustomerCredit(selectedCustomer)
-        );
+        // หน้าขาย: โหลดยอดค้างล่าสุดของลูกค้าจากฐานข้อมูลก่อนตรวจวงเงิน (ออฟไลน์ = ใช้ข้อมูลในเครื่อง)
+        let creditSummary = getCustomerCredit(selectedCustomer);
+        if (scope === 'pos' && selectedCustomer?.id) {
+          try {
+            const fresh = await loadCreditData(selectedCustomer.id);
+            creditSummary = calculateCustomerCredit(
+              selectedCustomer,
+              mergeById(fresh.orders, orders),
+              mergeById(fresh.payments, customerPayments)
+            );
+          } catch (err) {
+            showToast(`ตรวจยอดค้างเครดิตไม่สำเร็จ: ${err.message}`, 'error');
+            return null;
+          }
+        }
+        const creditCheck = checkCreditSale(selectedCustomer, creditAmount, creditSummary);
         if (!creditCheck.ok) {
           showToast(creditCheck.message, 'error');
           return null;
@@ -712,6 +766,10 @@ export function POSProvider({ children, scope = 'all' }) {
       showToast,
       printerSettings,
       getCustomerCredit,
+      loadCreditData,
+      scope,
+      orders,
+      customerPayments,
       currentUser,
       salesOrders,
       products,
@@ -1571,13 +1629,15 @@ export function POSProvider({ children, scope = 'all' }) {
         products,
         dbMode === 'supabase'
       );
-      setOrders((prev) => prev.map((o) => (o.id === order.id ? updatedOrder : o)));
+      setOrders((prev) => prev.map((o) => (o.id === order.id ? { ...o, status: 'voided' } : o)));
+      setCreditOrders((prev) => prev.map((o) => (o.id === order.id ? { ...o, status: 'voided' } : o)));
       if (updatedProducts) {
         setProducts(updatedProducts);
       }
       // ยกเลิกบิลตอนออฟไลน์ (หรือบิลยังรอซิงค์) จะเข้าคิว
       setPendingSyncCount(posService.getOfflineQueue().length);
       showToast(`ยกเลิกบิล ${order.order_number} และคืนสต็อกสินค้าแล้ว`, 'warning');
+      return updatedOrder;
     },
     [products, dbMode, showToast]
   );
@@ -1830,6 +1890,8 @@ export function POSProvider({ children, scope = 'all' }) {
     saveCustomer,
     customerPayments,
     getCustomerCredit,
+    loadCreditData,
+    fetchRecentOrders,
     recordCustomerPayment,
     stockLedger,
     taxInvoices,

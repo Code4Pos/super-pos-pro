@@ -1853,6 +1853,16 @@ export const printerService = {
   },
 
   /**
+   * HTML ใบเสร็จความร้อน สำหรับแสดงตัวอย่างบนหน้าจอ (หน้าต่างประวัติบิลในหน้าขาย)
+   */
+  getThermalReceiptHtml(order, customPaperSize = null) {
+    if (!order) return '';
+    const settings = this.getSettings();
+    const paperSize = customPaperSize || settings.paperSize || '80mm';
+    return buildThermalReceiptHtml(order, { ...settings, paperSize }, paperSize);
+  },
+
+  /**
    * 2. พิมพ์ใบเสร็จรับเงิน / ใบส่งของ ขนาด A4
    */
   async printA4Receipt(order) {

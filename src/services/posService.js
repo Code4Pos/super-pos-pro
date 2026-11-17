@@ -6,6 +6,7 @@ import { consumeLots, addToLots, restoreToLots, summarizeLotsByProduct } from '.
 import { normalizeWarehouses, applyBalanceDelta, TRANSIT_WAREHOUSE_ID, SALES_WAREHOUSE_ID } from '../utils/warehouses';
 import { generateDeviceCode, generateUuid, isUuid, nextOrderNumber, sanitizeDeviceCode } from '../utils/device';
 import { printerService } from './printerService';
+import { getOrderPayments } from '../utils/payments';
 import {
   INITIAL_CATEGORIES,
   INITIAL_UNITS,
@@ -358,6 +359,56 @@ export const STOCK_IMPORT_TRANSITIONS = {
  * โหลดเอกสารจากตารางใน Supabase แล้วรวมกับรายการที่บันทึกไว้ในเครื่อง (ไม่ซ้ำ id)
  * ถ้ายังไม่ได้สร้างตาราง (ยังไม่รัน Migration) จะใช้ข้อมูลในเครื่องอย่างเดียว
  */
+// คอลัมน์สรุปของบิลที่หน้าขายโหลดตอนเปิด (ไม่มี items เพื่อให้โหลดเร็ว)
+const TODAY_ORDER_COLUMNS =
+  'id, order_number, customer_id, customer_name, status, grand_total, payment_method, payments, credit_due_date, created_at';
+// จำนวนบิลที่เก็บไว้ในเครื่อง (โหมดหน้าขาย)
+const LOCAL_ORDER_KEEP = 300;
+// จำนวนบิลสูงสุดที่โหลดมาคำนวณยอดค้างเครดิต
+const CREDIT_ORDER_LIMIT = 5000;
+
+function startOfLocalDayIso(date = new Date()) {
+  const d = new Date(date);
+  d.setHours(0, 0, 0, 0);
+  return d.toISOString();
+}
+
+// ตัดอักขระที่มีความหมายพิเศษในตัวกรอง or() ของ Supabase ออกจากคำค้น
+function sanitizeOrderSearch(text) {
+  return String(text || '')
+    .replace(/[%,()*]/g, ' ')
+    .trim()
+    .slice(0, 60);
+}
+
+/**
+ * รวมบิลจากฐานข้อมูลกับบิลในเครื่องที่ยังไม่ขึ้นฐานข้อมูล (บันทึกตอนออฟไลน์/รอซิงค์)
+ * - สถานะยกเลิกในเครื่องมีผลเหนือฐานข้อมูล (การยกเลิกอาจยังรอซิงค์)
+ */
+function mergeLocalUnsyncedOrders(remoteOrders = [], { todayOnly = false, filter = null } = {}) {
+  const localOrders = getLocal(STORAGE_KEYS.ORDERS, []);
+  const localById = new Map(localOrders.map((o) => [o.id, o]));
+  const remoteIds = new Set(remoteOrders.map((o) => o.id));
+  const dayStart = todayOnly ? new Date(startOfLocalDayIso()) : null;
+  const queue = [...getLocal(STORAGE_KEYS.OFFLINE_QUEUE, []), ...getLocal(STORAGE_KEYS.OFFLINE_FAILED, [])];
+  const queuedIds = new Set(
+    queue
+      .map((q) => q.payload?.p_order?.id || q.order?.id)
+      .filter(Boolean)
+  );
+  const extras = localOrders.filter((o) => {
+    if (remoteIds.has(o.id)) return false;
+    if (!queuedIds.has(o.id) && !String(o.id).startsWith('ord-')) return false;
+    if (dayStart && new Date(o.created_at) < dayStart) return false;
+    return filter ? filter(o) : true;
+  });
+  const merged = remoteOrders.map((o) => {
+    const local = localById.get(o.id);
+    return local?.status === 'voided' && o.status !== 'voided' ? { ...o, status: 'voided' } : o;
+  });
+  return [...extras, ...merged].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+}
+
 async function loadRemoteWithLocal(table, storageKey, limit = 1000, orderField = 'created_at') {
   const localRows = getLocal(storageKey, []);
   try {
@@ -1116,7 +1167,14 @@ export const posService = {
           supabase.from('categories').select('*').order('created_at', { ascending: true }),
           supabase.from('products').select('*').order('name', { ascending: true }),
           supabase.from('customers').select('*').order('created_at', { ascending: false }),
-          supabase.from('orders').select('*').order('created_at', { ascending: false }).limit(200),
+          // หน้าขายโหลดเฉพาะยอดบิลของวันนี้ (คอลัมน์สรุป ไม่มีรายการสินค้า) ใช้แสดงยอดขายวันนี้บน Header
+          // ประวัติบิลและยอดค้างเครดิตโหลดเมื่อเปิดหน้าต่าง/เลือกลูกค้าเท่านั้น (fetchRecentOrders, fetchCreditData)
+          supabase
+            .from('orders')
+            .select(TODAY_ORDER_COLUMNS)
+            .gte('created_at', startOfLocalDayIso())
+            .order('created_at', { ascending: false })
+            .limit(2000),
         ]);
 
         if (catRes.error) throw catRes.error;
@@ -1234,7 +1292,8 @@ export const posService = {
 
         if (categories.length > 1) setLocal(STORAGE_KEYS.CATEGORIES, categories);
         setLocal(STORAGE_KEYS.CUSTOMERS, cusRes.data || []);
-        setLocal(STORAGE_KEYS.ORDERS, ordRes.data || []);
+        // บิลในเครื่องใช้รันเลขที่บิลและเปิดดูตอนออฟไลน์ เก็บไว้แค่ล่าสุด 300 ใบ
+        setLocal(STORAGE_KEYS.ORDERS, getLocal(STORAGE_KEYS.ORDERS, []).slice(0, LOCAL_ORDER_KEEP));
         setLocal(STORAGE_KEYS.SUPABASE_CACHE_AT, new Date().toISOString());
 
         return {
@@ -1258,7 +1317,7 @@ export const posService = {
           users,
           suppliers: [],
           stockImports: [],
-          orders: ordRes.data || [],
+          orders: mergeLocalUnsyncedOrders(ordRes.data || [], { todayOnly: true }),
           wholesaleRules,
           specialRules: syncedSpecialRules,
         };
@@ -1312,6 +1371,92 @@ export const posService = {
       wholesaleRules,
       specialRules,
     };
+  },
+
+  /**
+   * โหลดประวัติบิลล่าสุดสำหรับหน้าต่าง "ประวัติบิล" ในหน้าขาย (โหลดเมื่อเปิดหน้าต่างเท่านั้น)
+   * ค้นหาได้ด้วยเลขที่บิลหรือชื่อลูกค้า / ออฟไลน์ = ใช้บิลในเครื่อง
+   */
+  async fetchRecentOrders({ search = '', limit = 100, isSupabaseActive = false } = {}) {
+    const q = sanitizeOrderSearch(search);
+    const matches = (o) =>
+      !q ||
+      String(o.order_number || '').toLowerCase().includes(q.toLowerCase()) ||
+      String(o.customer_name || '').toLowerCase().includes(q.toLowerCase());
+    const localResult = (offline) => ({
+      orders: getLocal(STORAGE_KEYS.ORDERS, INITIAL_ORDERS).filter(matches).slice(0, limit),
+      offline,
+    });
+
+    if (!isSupabaseActive || !supabase) return localResult(false);
+    if (!isOnline()) return localResult(true);
+    try {
+      let query = supabase.from('orders').select('*').order('created_at', { ascending: false }).limit(limit);
+      if (q) query = query.or(`order_number.ilike.%${q}%,customer_name.ilike.%${q}%`);
+      const { data, error } = await query;
+      if (error) throw error;
+      const orders = mergeLocalUnsyncedOrders(data || [], { filter: matches }).slice(0, limit);
+      return { orders, offline: false };
+    } catch (err) {
+      if (isNetworkError(err)) return localResult(true);
+      throw err;
+    }
+  },
+
+  /**
+   * โหลดข้อมูลเครดิต (บิลขายเชื่อที่ยังไม่ยกเลิก + การรับชำระหนี้) เมื่อจำเป็นเท่านั้น
+   * - customerId = ลูกค้ารายเดียว (ตอนขายเชื่อ) / ไม่ระบุ = ทุกคน (หน้าต่าง "เครดิต")
+   */
+  async fetchCreditData({ customerId = null, isSupabaseActive = false } = {}) {
+    // รวมบิลที่ยกเลิกแล้วด้วย เพื่อให้สถานะยกเลิกล่าสุดทับข้อมูลเก่าในเครื่อง (บิลยกเลิกไม่นับยอดค้างอยู่แล้ว)
+    const isCreditOrder = (o) =>
+      o.customer_id &&
+      (!customerId || o.customer_id === customerId) &&
+      getOrderPayments(o).some((p) => p.method === 'credit' && Number(p.amount) > 0);
+    const isTargetPayment = (p) => !customerId || p.customer_id === customerId;
+    const localResult = (offline) => ({
+      orders: getLocal(STORAGE_KEYS.ORDERS, INITIAL_ORDERS).filter(isCreditOrder),
+      payments: getLocal(STORAGE_KEYS.CUSTOMER_PAYMENTS, []).filter(isTargetPayment),
+      offline,
+    });
+
+    if (!isSupabaseActive || !supabase) return localResult(false);
+    if (!isOnline()) return localResult(true);
+    try {
+      let orderQuery = supabase
+        .from('orders')
+        .select(TODAY_ORDER_COLUMNS)
+        .in('payment_method', ['credit', 'split'])
+        .not('customer_id', 'is', null)
+        .order('created_at', { ascending: false })
+        .limit(CREDIT_ORDER_LIMIT);
+      let paymentQuery = supabase
+        .from('customer_payments')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(CREDIT_ORDER_LIMIT);
+      if (customerId) {
+        orderQuery = orderQuery.eq('customer_id', customerId);
+        paymentQuery = paymentQuery.eq('customer_id', customerId);
+      }
+      const [ordRes, payRes] = await Promise.all([orderQuery, paymentQuery]);
+      if (ordRes.error) throw ordRes.error;
+      if (payRes.error) throw payRes.error;
+
+      const orders = mergeLocalUnsyncedOrders(ordRes.data || [], { filter: isCreditOrder }).filter(isCreditOrder);
+      const remotePayments = payRes.data || [];
+      const remotePaymentIds = new Set(remotePayments.map((p) => p.id));
+      const payments = [
+        ...remotePayments,
+        ...getLocal(STORAGE_KEYS.CUSTOMER_PAYMENTS, []).filter(
+          (p) => isTargetPayment(p) && !remotePaymentIds.has(p.id)
+        ),
+      ];
+      return { orders, payments, offline: false };
+    } catch (err) {
+      if (isNetworkError(err)) return localResult(true);
+      throw err;
+    }
   },
 
   /**

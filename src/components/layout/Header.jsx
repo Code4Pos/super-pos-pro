@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { usePOS } from '../../context/POSContext';
 import { AppUpdateHeaderButton } from '../common/AppUpdate';
+import PosQuickMenu from '../pos/PosQuickMenu';
 import { formatCurrency } from '../../utils/formatters';
 import { ROLES, canAccessAnyAdminTab } from '../../utils/rbac';
 
@@ -250,6 +251,9 @@ export default function Header({
             </div>
           </div>
         </button>
+
+        {/* เมนูลัดหน้าขาย: ประวัติบิล / เครดิต / เปิดลิ้นชัก (เฉพาะหน้าร้าน) */}
+        {isPosPage && <PosQuickMenu />}
 
         {/* ตะกร้าที่เปิดจากใบสั่งขายส่ง (ปิดใบอัตโนมัติเมื่อชำระเงิน) */}
         {activeSalesOrder && (

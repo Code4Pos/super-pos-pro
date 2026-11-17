@@ -93,8 +93,13 @@ export default function CheckoutModal({ isOpen, onClose, onOrderSuccess }) {
     setCashStr('0');
   }, []);
 
-  const handleShortcutPrice = (val) => {
-    setCashStr(String(val));
+  // ปุ่มลัดธนบัตร: กดซ้ำ = บวกเพิ่ม (เช่น ฿500 สองครั้ง = 1,000) ส่วนปุ่ม "พอดี" ตั้งเป็นยอดบิล
+  const handleShortcutPrice = (val, isExact = false) => {
+    setCashStr((prev) => {
+      if (isExact) return String(val);
+      const next = Math.round(((parseFloat(prev) || 0) + val) * 100) / 100;
+      return String(next);
+    });
     setIsFresh(true);
   };
 
@@ -314,7 +319,7 @@ export default function CheckoutModal({ isOpen, onClose, onOrderSuccess }) {
                     <button
                       key={btn.label}
                       type="button"
-                      onClick={() => handleShortcutPrice(btn.val)}
+                      onClick={() => handleShortcutPrice(btn.val, btn.isExact)}
                       className={`h-10 sm:h-12 rounded-xl sm:rounded-2xl font-extrabold text-xs sm:text-base border transition-colors ${
                         btn.isExact
                           ? 'bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-600'

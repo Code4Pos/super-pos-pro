@@ -1,7 +1,7 @@
 {
   "name": "siam-wholesale-pos",
   "private": true,
-  "version": "0.3.11-beta",
+  "version": "0.3.12-beta",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -16,6 +16,8 @@
     "@capacitor/core": "^8.6.0",
     "@capgo/capacitor-updater": "8.54.0",
     "@supabase/supabase-js": "^2.118.0",
+    "@zxing/browser": "0.2.1",
+    "@zxing/library": "0.23.0",
     "lucide-react": "^0.454.0",
     "qrcode": "^1.5.4",
     "react": "^18.3.1",

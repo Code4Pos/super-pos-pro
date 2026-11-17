@@ -1,5 +1,5 @@
-import React from 'react';
-import { ShieldAlert, ShieldCheck } from 'lucide-react';
+import React, { useEffect } from 'react';
+import { ShieldAlert, ShieldCheck, Loader2 } from 'lucide-react';
 import { usePOS } from '../../context/POSContext';
 import { checkCreditSale } from '../../utils/credit';
 import { formatCurrency } from '../../utils/formatters';
@@ -8,10 +8,24 @@ import { formatCurrency } from '../../utils/formatters';
  * แสดงสถานะวงเงินเครดิตของลูกค้าที่เลือก และผลตรวจก่อนขายเชื่อยอดนี้
  */
 export default function CreditStatusBox({ customer, creditAmount }) {
-  const { getCustomerCredit } = usePOS();
-  if (!customer) return null;
+  const { getCustomerCredit, loadCreditData } = usePOS();
+  const credit = customer ? getCustomerCredit(customer) : null;
+  const needsLoad = Boolean(customer?.id) && credit?.creditLoaded === false;
 
-  const credit = getCustomerCredit(customer);
+  // หน้าขาย: โหลดยอดค้างของลูกค้าคนนี้เมื่อเลือกขายเชื่อครั้งแรก
+  useEffect(() => {
+    if (needsLoad) loadCreditData(customer.id).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [needsLoad, customer?.id]);
+
+  if (!customer) return null;
+  if (needsLoad) {
+    return (
+      <div className="p-2.5 rounded-xl border border-slate-200 bg-slate-50 text-xs text-slate-600 flex items-center gap-1.5">
+        <Loader2 className="w-4 h-4 animate-spin" /> กำลังโหลดยอดค้างชำระของลูกค้า...
+      </div>
+    );
+  }
   const check = checkCreditSale(customer, creditAmount, credit);
   const limit = Number(customer.credit_limit) || 0;
 

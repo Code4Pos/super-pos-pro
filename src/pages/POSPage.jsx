@@ -10,6 +10,7 @@ import {
   PackageSearch,
   FolderSearch,
   Check,
+  Camera,
 } from 'lucide-react';
 import { usePOS } from '../context/POSContext';
 import ProductCard from '../components/pos/ProductCard';
@@ -19,6 +20,7 @@ import ReceiptModal from '../components/pos/ReceiptModal';
 import NumpadModal from '../components/common/NumpadModal';
 import ConfirmModal from '../components/common/ConfirmModal';
 import BarcodeErrorModal from '../components/common/BarcodeErrorModal';
+import CameraScannerModal from '../components/pos/CameraScannerModal';
 import {
   playScanSuccessBeep,
   playBarcodeNotFoundAlarm,
@@ -52,6 +54,8 @@ export default function POSPage() {
   const [cardNumpadInitialQty, setCardNumpadInitialQty] = useState(1);
 
   const [productToRemove, setProductToRemove] = useState(null);
+  // สแกนบาร์โค้ดด้วยกล้องมือถือ
+  const [isCameraOpen, setIsCameraOpen] = useState(false);
 
   // สถานะ Popup Alert เมื่อสแกนไม่พบบาร์โค้ด (ถ้าไม่กดปิดจะไม่สามารถสแกนต่อได้)
   const [notFoundBarcode, setNotFoundBarcode] = useState(null);
@@ -252,8 +256,9 @@ export default function POSPage() {
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden bg-slate-50">
         <div className="p-2 sm:p-3 bg-white border-b border-slate-200 shrink-0">
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
-            {/* ช่องค้นหา / สแกนบาร์โค้ด */}
-            <div className="relative flex-1">
+            {/* ช่องค้นหา / สแกนบาร์โค้ด (+ ปุ่มสแกนด้วยกล้องบนมือถือ) */}
+            <div className="flex items-center gap-2 flex-1 min-w-0">
+            <div className="relative flex-1 min-w-0">
               <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
               <input
                 type="text"
@@ -279,6 +284,18 @@ export default function POSPage() {
                   <span className="hidden sm:inline">พร้อมสแกนตลอดเวลา</span>
                 </span>
               )}
+            </div>
+            {/* ปุ่มสแกนด้วยกล้อง (แสดงเฉพาะจอมือถือ) */}
+            <button
+              type="button"
+              onClick={() => setIsCameraOpen(true)}
+              disabled={Boolean(notFoundBarcode)}
+              className="sm:hidden flex items-center gap-1 px-3 h-9 rounded-xl bg-indigo-600 active:bg-indigo-700 disabled:bg-slate-300 text-white text-xs font-bold shrink-0"
+              title="สแกนบาร์โค้ดด้วยกล้อง"
+            >
+              <Camera className="w-4 h-4" />
+              สแกน
+            </button>
             </div>
 
             {/* หมวดหมู่สินค้าแบบ Dropdown ที่สามารถพิมพ์ค้นหาได้ */}
@@ -543,6 +560,13 @@ export default function POSPage() {
       <BarcodeErrorModal
         barcode={notFoundBarcode}
         onClose={() => setNotFoundBarcode(null)}
+      />
+
+      {/* สแกนบาร์โค้ดด้วยกล้องมือถือ (สแกนต่อเนื่องได้ ไม่พบสินค้าจะปิดกล้องและแจ้งเตือน) */}
+      <CameraScannerModal
+        isOpen={isCameraOpen}
+        onClose={() => setIsCameraOpen(false)}
+        onDetected={processScannedCode}
       />
 
       {/* หน้าต่างรับชำระเงิน (Checkout Modal) */}
