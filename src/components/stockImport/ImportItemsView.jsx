@@ -174,29 +174,38 @@ export default function ImportItemsView({
 
   return (
     <div className="flex-1 bg-white rounded-2xl border border-slate-200 flex flex-col overflow-hidden shadow-2xs">
-      {/* ส่วนหัว: ผู้ผลิตที่เลือก + เลือกสินค้าด้วย Searchable Dropdown + ปุ่มแสดง/สแกนบาร์โค้ด */}
-      <div className="p-4 border-b border-slate-200 space-y-3 shrink-0 bg-slate-50/50">
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-2">
-          <div className="flex items-center gap-2 min-w-0 text-xs">
-            <Building2 className="w-4 h-4 text-indigo-600 shrink-0" />
-            <span className="font-extrabold text-slate-900 truncate">
-              {supplier?.name || '-'}
+      {/* ส่วนหัว: ผู้ผลิตที่เลือก + เลือกสินค้าด้วย Searchable Dropdown + ปุ่มสแกนบาร์โค้ด (ไอคอน) */}
+      <div className="p-2.5 sm:p-3 border-b border-slate-200 space-y-2 shrink-0 bg-slate-50/50">
+        <div className="flex items-center gap-2 min-w-0 text-xs">
+          <Building2 className="w-4 h-4 text-indigo-600 shrink-0" />
+          <span className="font-extrabold text-slate-900 truncate">
+            {supplier?.name || '-'}
+          </span>
+          {supplier?.phone && (
+            <span className="inline-flex items-center gap-1 font-mono font-bold text-indigo-700 shrink-0">
+              <Phone className="w-3 h-3" />
+              {supplier.phone}
             </span>
-            {supplier?.phone && (
-              <span className="inline-flex items-center gap-1 font-mono font-bold text-indigo-700 shrink-0">
-                <Phone className="w-3 h-3" />
-                {supplier.phone}
-              </span>
-            )}
-            {importNumber && (
-              <span className="px-2 py-0.5 rounded-lg bg-amber-50 text-amber-700 font-mono font-extrabold shrink-0">
-                แก้ไข {importNumber}
-              </span>
-            )}
-          </div>
+          )}
+          {importNumber && (
+            <span className="px-2 py-0.5 rounded-lg bg-amber-50 text-amber-700 font-mono font-extrabold shrink-0">
+              แก้ไข {importNumber}
+            </span>
+          )}
+        </div>
 
-          <div className="flex items-center gap-2">
-            {/* ปุ่มสแกนบาร์โค้ดเพิ่มสินค้า */}
+        <div className="grid grid-cols-12 gap-2 items-center">
+          <div className="col-span-12 sm:col-span-6 flex items-center gap-2">
+            <div className="flex-1 min-w-0">
+              <SearchableDropdown
+                value={productPickerValue}
+                onChange={(val) => handleSelectProductDropdown(val)}
+                options={productOptions}
+                icon={Package}
+                placeholder="ค้นหาชื่อสินค้า, บาร์โค้ด หรือ SKU เพื่อเพิ่มลงตาราง..."
+              />
+            </div>
+            {/* ปุ่มสแกนบาร์โค้ดเพิ่มสินค้า (ไอคอนอย่างเดียว) */}
             <button
               type="button"
               onClick={() =>
@@ -207,43 +216,15 @@ export default function ImportItemsView({
                   productName: 'สแกนบาร์โค้ดเพื่อเพิ่มสินค้าเข้าตารางนำเข้า',
                 })
               }
-              className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold flex items-center gap-1.5 shadow-xs"
+              className="w-9 h-9 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white flex items-center justify-center shrink-0"
+              title="สแกนบาร์โค้ดเพิ่มสินค้า"
+              aria-label="สแกนบาร์โค้ดเพิ่มสินค้า"
             >
-              <Camera className="w-3.5 h-3.5" />
-              <span>สแกนบาร์โค้ดเพิ่มสินค้า</span>
+              <Camera className="w-4 h-4" />
             </button>
-
-            {/* ปุ่มแสดงบาร์โค้ดเพื่อเลือกเพิ่มสินค้า */}
-            <button
-              type="button"
-              onClick={() =>
-                setBarcodeModalConfig({
-                  isOpen: true,
-                  mode: 'display',
-                  currentBarcode: products[0]?.barcode || products[0]?.sku || '',
-                  productName: products[0]?.name || 'บาร์โค้ดสินค้า',
-                })
-              }
-              className="px-3 py-1.5 rounded-xl border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 text-xs font-bold flex items-center gap-1.5"
-            >
-              <Barcode className="w-3.5 h-3.5" />
-              <span>แสดงบาร์โค้ดเพิ่มสินค้า</span>
-            </button>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5 items-center">
-          <div className="sm:col-span-6">
-            <SearchableDropdown
-              value={productPickerValue}
-              onChange={(val) => handleSelectProductDropdown(val)}
-              options={productOptions}
-              icon={Package}
-              placeholder="พิมพ์ค้นหาชื่อสินค้า, รหัสบาร์โค้ด หรือรหัสสินค้า (SKU) เพื่อเพิ่มลงตาราง..."
-            />
           </div>
           {/* คลังที่รับสินค้าเข้า (สต็อกเพิ่มเมื่อใบนำเข้าเป็น "นำเข้าสำเร็จ") */}
-          <div className="sm:col-span-2">
+          <div className="col-span-5 sm:col-span-2">
             <select
               value={warehouseId}
               onChange={(e) => setWarehouseId(e.target.value)}
@@ -257,7 +238,7 @@ export default function ImportItemsView({
               ))}
             </select>
           </div>
-          <div className="sm:col-span-4">
+          <div className="col-span-7 sm:col-span-4">
             <input
               type="text"
               value={note}
@@ -269,149 +250,147 @@ export default function ImportItemsView({
         </div>
       </div>
 
-      {/* ตารางรายการสินค้านำเข้า 7 คอลัมน์ + ปุ่มลบด้านหน้า */}
+      {/* ตารางรายการสินค้านำเข้า: 1 รายการ = 1 บรรทัด เลื่อนซ้าย-ขวาได้ ชื่อสินค้าแสดงยาวไม่ตัดบรรทัด */}
       <div className="flex-1 overflow-auto">
-        <table className="w-full text-left border-collapse min-w-[860px]">
-          <thead className="sticky top-0 z-10 bg-slate-100 border-b border-slate-200 text-[11px] font-extrabold text-slate-600 uppercase">
+        <table className="w-max min-w-full text-left border-collapse whitespace-nowrap">
+          <thead className="sticky top-0 z-10 bg-slate-100 border-b border-slate-200 text-[11px] font-extrabold text-slate-600">
             <tr>
-              <th className="py-2.5 px-3 w-12 text-center">ลบ</th>
-              <th className="py-2.5 px-3">1. รหัสบาร์โค้ด / รหัสสินค้า</th>
-              <th className="py-2.5 px-3">2. ชื่อสินค้า</th>
-              <th className="py-2.5 px-3 text-right">3. ราคาขายสินค้า</th>
-              <th className="py-2.5 px-3 text-center w-32">4. จำนวน</th>
-              <th className="py-2.5 px-3 text-right w-36">5. ราคานำเข้า</th>
-              <th className="py-2.5 px-3 text-right w-36">6. ส่วนลดรวม</th>
-              <th className="py-2.5 px-4 text-right w-36">7. ยอดรวม</th>
+              <th className="py-2 px-2 w-10 text-center">ลบ</th>
+              <th className="py-2 px-2">ชื่อสินค้า</th>
+              <th className="py-2 px-2">บาร์โค้ด / SKU</th>
+              <th className="py-2 px-2 text-right">ราคาขาย</th>
+              <th className="py-2 px-2 text-center">จำนวน</th>
+              <th className="py-2 px-2 text-right">ราคานำเข้า</th>
+              <th className="py-2 px-2 text-right">ส่วนลดรวม</th>
+              <th className="py-2 px-3 text-right">ยอดรวม</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-200/70 text-xs">
             {enrichedImportRows.length === 0 ? (
               <tr>
-                <td colSpan={8} className="py-14 text-center text-slate-400">
+                <td colSpan={8} className="py-14 text-center text-slate-400 whitespace-normal">
                   <div className="flex flex-col items-center gap-2">
                     <Package className="w-9 h-9 text-slate-300" />
                     <span className="font-bold text-slate-600">
                       ยังไม่มีรายการสินค้าในตารางนำเข้า
                     </span>
                     <span className="text-[11px]">
-                      ค้นหาและเลือกสินค้าจากช่อง Dropdown ด้านบน หรือกดปุ่มบาร์โค้ดเพื่อเพิ่มสินค้า
+                      ค้นหาสินค้าจากช่องด้านบน หรือกดปุ่มกล้องเพื่อสแกนบาร์โค้ด
                     </span>
                   </div>
                 </td>
               </tr>
             ) : (
               enrichedImportRows.map((row) => (
-                <tr key={row.row_id} className="hover:bg-indigo-50/30 transition-colors">
+                <tr key={row.row_id} className="hover:bg-indigo-50/30">
                   {/* ปุ่มลบสินค้าไว้ด้านหน้า */}
-                  <td className="py-2.5 px-3 text-center">
+                  <td className="py-1.5 px-2 text-center">
                     <button
                       type="button"
                       onClick={() => handleRemoveImportRow(row.row_id)}
-                      className="p-1.5 rounded-lg bg-rose-50 hover:bg-rose-600 text-rose-600 hover:text-white border border-rose-200 transition-colors"
+                      className="p-1.5 rounded-lg bg-rose-50 hover:bg-rose-600 text-rose-600 hover:text-white border border-rose-200"
                       title="ลบรายการนี้ออกจากตาราง"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
                   </td>
 
-                  {/* 1. รหัสบาร์โค้ด (ถ้าไม่ได้ใส่บาร์โค้ดให้แสดงรหัสสินค้า SKU) */}
-                  <td className="py-2.5 px-3 font-mono font-bold text-slate-800 whitespace-nowrap">
+                  {/* ชื่อสินค้า + หน่วย (+ เลขล็อต/วันหมดอายุ เมื่อสินค้าหลักติดตาม Lot) ในบรรทัดเดียว */}
+                  <td className="py-1.5 px-2 font-bold text-slate-900">
                     <div className="flex items-center gap-1.5">
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setBarcodeModalConfig({
-                            isOpen: true,
-                            mode: 'display',
-                            currentBarcode: row.barcode_or_sku,
-                            productName: row.product_name,
-                          })
-                        }
-                        className="inline-flex items-center gap-1.5 px-2 py-1 rounded-lg bg-slate-100 hover:bg-indigo-50 text-slate-800 hover:text-indigo-700 border border-slate-200 transition-colors"
-                        title="คลิกเพื่อแสดงรูปบาร์โค้ด"
-                      >
-                        <Barcode className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
-                        <span>{row.barcode_or_sku}</span>
-                      </button>
-                      {!row.barcode?.trim() && (
-                        <span className="px-1.5 py-0.2 rounded text-[10px] font-sans font-bold bg-slate-100 text-slate-500">
-                          SKU
-                        </span>
+                      <span>{row.product_name}</span>
+                      <span className="px-1.5 py-0.5 rounded bg-slate-100 text-[10px] font-semibold text-slate-500">
+                        {row.unit}
+                      </span>
+                      {isLotTracked(row.product_id) && (
+                        <>
+                          <input
+                            type="text"
+                            data-allow-scanner="false"
+                            value={row.lot_number || ''}
+                            onChange={(e) => handleUpdateImportRow(row.row_id, 'lot_number', e.target.value)}
+                            placeholder="เลขล็อต"
+                            className="w-24 px-2 py-1 rounded-lg border border-violet-300 bg-violet-50/40 text-[11px] font-normal"
+                          />
+                          <input
+                            type="date"
+                            value={row.expiry_date || ''}
+                            onChange={(e) => handleUpdateImportRow(row.row_id, 'expiry_date', e.target.value)}
+                            title="วันหมดอายุ"
+                            className="px-2 py-1 rounded-lg border border-violet-300 bg-violet-50/40 text-[11px] font-normal"
+                          />
+                        </>
                       )}
                     </div>
                   </td>
 
-                  {/* 2. ชื่อสินค้า (+ เลขล็อต/วันหมดอายุ เมื่อสินค้าหลักติดตาม Lot) */}
-                  <td className="py-2.5 px-3 font-bold text-slate-900">
-                    <div>{row.product_name}</div>
-                    <div className="text-[10px] font-normal text-slate-400">หน่วย: {row.unit}</div>
-                    {isLotTracked(row.product_id) && (
-                      <div className="mt-1 flex items-center gap-1.5 font-normal">
-                        <input
-                          type="text"
-                          data-allow-scanner="false"
-                          value={row.lot_number || ''}
-                          onChange={(e) => handleUpdateImportRow(row.row_id, 'lot_number', e.target.value)}
-                          placeholder="เลขล็อต"
-                          className="w-24 px-2 py-1 rounded-lg border border-violet-300 bg-violet-50/40 text-[11px]"
-                        />
-                        <input
-                          type="date"
-                          value={row.expiry_date || ''}
-                          onChange={(e) => handleUpdateImportRow(row.row_id, 'expiry_date', e.target.value)}
-                          title="วันหมดอายุ"
-                          className="px-2 py-1 rounded-lg border border-violet-300 bg-violet-50/40 text-[11px]"
-                        />
-                      </div>
-                    )}
+                  {/* รหัสบาร์โค้ด (ถ้าไม่ได้ใส่บาร์โค้ดให้แสดงรหัสสินค้า SKU) กดเพื่อแสดงรูปบาร์โค้ด */}
+                  <td className="py-1.5 px-2 font-mono font-bold text-slate-700">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setBarcodeModalConfig({
+                          isOpen: true,
+                          mode: 'display',
+                          currentBarcode: row.barcode_or_sku,
+                          productName: row.product_name,
+                        })
+                      }
+                      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-lg hover:bg-indigo-50 hover:text-indigo-700"
+                      title="คลิกเพื่อแสดงรูปบาร์โค้ด"
+                    >
+                      <Barcode className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                      <span>{row.barcode_or_sku}</span>
+                      {!row.barcode?.trim() && (
+                        <span className="px-1 rounded text-[10px] font-sans font-bold bg-slate-100 text-slate-500">
+                          SKU
+                        </span>
+                      )}
+                    </button>
                   </td>
 
-                  {/* 3. ราคาขายสินค้า */}
-                  <td className="py-2.5 px-3 text-right font-bold text-indigo-700 whitespace-nowrap">
+                  {/* ราคาขายสินค้า */}
+                  <td className="py-1.5 px-2 text-right font-bold text-indigo-700">
                     {formatCurrency(row.retail_price)}
                   </td>
 
-                  {/* 4. จำนวน (ค่าเริ่มต้น 1) */}
-                  <td className="py-2.5 px-3 text-center">
+                  {/* จำนวน (ค่าเริ่มต้น 1) */}
+                  <td className="py-1.5 px-2 text-center">
                     <input
                       type="number"
                       min="1"
                       value={row.quantity}
                       onChange={(e) => handleUpdateImportRow(row.row_id, 'quantity', e.target.value)}
-                      className="w-24 px-2.5 py-1.5 rounded-xl border border-slate-300 bg-white text-center font-extrabold text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      className="w-20 px-2 py-1 rounded-lg border border-slate-300 bg-white text-center font-extrabold text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                     />
                   </td>
 
-                  {/* 5. ราคานำเข้า (ค่าเริ่มต้น ราคาต้นทุน) */}
-                  <td className="py-2.5 px-3 text-right">
+                  {/* ราคานำเข้า (ค่าเริ่มต้น ราคาต้นทุน) */}
+                  <td className="py-1.5 px-2 text-right">
                     <input
                       type="number"
                       step="0.01"
                       min="0"
                       value={row.import_price}
-                      onChange={(e) =>
-                        handleUpdateImportRow(row.row_id, 'import_price', e.target.value)
-                      }
-                      className="w-28 px-2.5 py-1.5 rounded-xl border border-slate-300 bg-white text-right font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      onChange={(e) => handleUpdateImportRow(row.row_id, 'import_price', e.target.value)}
+                      className="w-24 px-2 py-1 rounded-lg border border-slate-300 bg-white text-right font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                     />
                   </td>
 
-                  {/* 6. ส่วนลดรวม (ค่าเริ่มต้น 0) */}
-                  <td className="py-2.5 px-3 text-right">
+                  {/* ส่วนลดรวม (ค่าเริ่มต้น 0) */}
+                  <td className="py-1.5 px-2 text-right">
                     <input
                       type="number"
                       step="0.01"
                       min="0"
                       value={row.total_discount}
-                      onChange={(e) =>
-                        handleUpdateImportRow(row.row_id, 'total_discount', e.target.value)
-                      }
-                      className="w-28 px-2.5 py-1.5 rounded-xl border border-slate-300 bg-white text-right font-bold text-rose-600 focus:outline-none focus:ring-2 focus:ring-rose-500"
+                      onChange={(e) => handleUpdateImportRow(row.row_id, 'total_discount', e.target.value)}
+                      className="w-24 px-2 py-1 rounded-lg border border-slate-300 bg-white text-right font-bold text-rose-600 focus:outline-none focus:ring-2 focus:ring-rose-500"
                     />
                   </td>
 
-                  {/* 7. ยอดรวม */}
-                  <td className="py-2.5 px-4 text-right font-extrabold text-emerald-700 text-sm whitespace-nowrap">
+                  {/* ยอดรวม */}
+                  <td className="py-1.5 px-3 text-right font-extrabold text-emerald-700 text-sm">
                     {formatCurrency(row.line_total)}
                   </td>
                 </tr>
@@ -421,56 +400,50 @@ export default function ImportItemsView({
         </table>
       </div>
 
-      {/* แถบสรุปยอดและปุ่มยืนยัน: ขออนุมัติ / อนุมัติทันที */}
-      <div className="p-4 border-t border-slate-200 bg-slate-50 flex flex-col xl:flex-row xl:items-center justify-between gap-3 shrink-0">
-        <div className="flex items-center gap-4 flex-wrap text-xs">
-          <span className="text-slate-600">
-            จำนวนรายการ:{' '}
-            <strong className="text-slate-900">{formatNumber(importSummary.totalRows)} รายการ</strong>
+      {/* แถบสรุปยอดและปุ่มยืนยัน (ย่อขนาด): เปลี่ยนผู้ผลิต / ขออนุมัติ / อนุมัติทันที */}
+      <div className="px-2.5 py-2 sm:px-3 border-t border-slate-200 bg-slate-50 flex flex-col lg:flex-row lg:items-center justify-between gap-2 shrink-0">
+        <div className="flex items-center gap-x-3 gap-y-0.5 flex-wrap text-[11px] text-slate-600">
+          <span>
+            <strong className="text-slate-900">{formatNumber(importSummary.totalRows)}</strong> รายการ
           </span>
-          <span className="text-slate-600">
-            จำนวนรวม:{' '}
-            <strong className="text-indigo-700">{formatNumber(importSummary.totalQty)} หน่วย</strong>
+          <span>
+            รวม <strong className="text-indigo-700">{formatNumber(importSummary.totalQty)}</strong> หน่วย
           </span>
-          <span className="text-slate-600">
-            ส่วนลดรวม:{' '}
-            <strong className="text-rose-600">{formatCurrency(importSummary.totalDiscount)}</strong>
+          <span>
+            ส่วนลด <strong className="text-rose-600">{formatCurrency(importSummary.totalDiscount)}</strong>
           </span>
-          <span className="text-slate-600">
-            ยอดรวมสุทธิ:{' '}
-            <strong className="text-base text-emerald-700">
-              {formatCurrency(importSummary.grandTotal)}
-            </strong>
+          <span>
+            สุทธิ <strong className="text-sm text-emerald-700">{formatCurrency(importSummary.grandTotal)}</strong>
           </span>
         </div>
 
-        <div className="grid grid-cols-3 sm:flex sm:items-center gap-2">
+        <div className="grid grid-cols-3 sm:flex sm:items-center gap-1.5">
           <button
             type="button"
             onClick={onBack}
-            className="px-4 py-2.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-100 text-xs font-bold text-slate-700 flex items-center justify-center gap-1.5"
+            className="px-2.5 h-8 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 text-[11px] font-bold text-slate-700 flex items-center justify-center gap-1"
           >
-            <ArrowLeft className="w-4 h-4" />
-            <span>เปลี่ยนผู้ผลิต</span>
+            <ArrowLeft className="w-3.5 h-3.5" />
+            <span>ผู้ผลิต</span>
           </button>
           <button
             type="button"
             disabled={!canSubmit}
             onClick={() => onSubmit('pending', enrichedImportRows)}
-            className="px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-600 disabled:bg-slate-300 text-slate-950 disabled:text-white text-xs font-bold flex items-center justify-center gap-1.5"
+            className="px-2.5 h-8 rounded-lg bg-amber-500 hover:bg-amber-600 disabled:bg-slate-300 text-slate-950 disabled:text-white text-[11px] font-bold flex items-center justify-center gap-1"
             title="บันทึกใบนำเข้าเป็นสถานะรออนุมัติ (ยังไม่เพิ่มสต็อก)"
           >
-            <Send className="w-4 h-4" />
-            <span>{importNumber ? 'บันทึก (รออนุมัติ)' : 'ขออนุมัติ'}</span>
+            <Send className="w-3.5 h-3.5" />
+            <span>{importNumber ? 'บันทึก' : 'ขออนุมัติ'}</span>
           </button>
           <button
             type="button"
             disabled={!canSubmit}
             onClick={() => setIsApproveConfirmOpen(true)}
-            className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 text-white text-xs font-bold flex items-center justify-center gap-1.5"
+            className="px-2.5 h-8 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 text-white text-[11px] font-bold flex items-center justify-center gap-1"
             title="เพิ่มสต็อกทันทีและเปลี่ยนสถานะเป็นนำเข้าสำเร็จ"
           >
-            <CheckCircle2 className="w-4 h-4" />
+            <CheckCircle2 className="w-3.5 h-3.5" />
             <span>{submitting ? 'กำลังบันทึก...' : 'อนุมัติทันที'}</span>
           </button>
         </div>

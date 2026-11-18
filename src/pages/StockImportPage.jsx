@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { Truck, FileText, Building2, Package, ChevronRight } from 'lucide-react';
+import { FileText, Building2, Package, ChevronRight } from 'lucide-react';
 import { usePOS } from '../context/POSContext';
 import ImportListView from '../components/stockImport/ImportListView';
 import SupplierStepView from '../components/stockImport/SupplierStepView';
@@ -100,50 +100,34 @@ export default function StockImportPage() {
   };
 
   return (
-    <div className="flex-1 flex flex-col h-full overflow-hidden bg-slate-50 p-3 sm:p-5 gap-3.5">
-      {/* แถบหัวข้อเพจ + ขั้นตอน 3 Page */}
-      <div className="bg-white rounded-2xl border border-slate-200 p-4 flex flex-col lg:flex-row lg:items-center justify-between gap-3 shrink-0 shadow-2xs">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-2xl bg-indigo-600 text-white flex items-center justify-center shrink-0">
-            <Truck className="w-5 h-5" />
-          </div>
-          <div>
-            <h1 className="text-sm sm:text-base font-extrabold text-slate-900">
-              ระบบนำเข้าสินค้าเข้าคลัง (Stock Import)
-            </h1>
-            <p className="text-xs text-slate-500">
-              สร้างใบนำเข้า › เลือกผู้ผลิต › นำเข้าสินค้า › รออนุมัติ › ระหว่างขนส่ง › นำเข้าสำเร็จ
-            </p>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-1 overflow-x-auto">
-          {STEPS.map((s, idx) => {
-            const Icon = s.icon;
-            const isActive = idx === stepIndex;
-            const isDone = idx < stepIndex;
-            return (
-              <React.Fragment key={s.id}>
-                {idx > 0 && <ChevronRight className="w-4 h-4 text-slate-300 shrink-0" />}
-                <div
-                  className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 whitespace-nowrap border ${
-                    isActive
-                      ? 'bg-indigo-600 text-white border-indigo-600'
-                      : isDone
-                      ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
-                      : 'bg-white text-slate-400 border-slate-200'
-                  }`}
-                >
-                  <span className="w-4 h-4 rounded-full bg-black/10 flex items-center justify-center text-[10px]">
-                    {idx + 1}
-                  </span>
-                  <Icon className="w-3.5 h-3.5" />
-                  <span>{s.label}</span>
-                </div>
-              </React.Fragment>
-            );
-          })}
-        </div>
+    <div className="flex-1 flex flex-col h-full overflow-hidden bg-slate-50 p-2 sm:p-4 pb-[4.5rem] lg:pb-4 gap-2">
+      {/* แถบขั้นตอนแบบย่อ (มือถือแสดงชื่อเฉพาะขั้นตอนปัจจุบัน) */}
+      <div className="flex items-center gap-1 overflow-x-auto shrink-0">
+        {STEPS.map((s, idx) => {
+          const Icon = s.icon;
+          const isActive = idx === stepIndex;
+          const isDone = idx < stepIndex;
+          return (
+            <React.Fragment key={s.id}>
+              {idx > 0 && <ChevronRight className="w-3.5 h-3.5 text-slate-300 shrink-0" />}
+              <div
+                className={`px-2 py-1 rounded-lg text-[11px] font-bold flex items-center gap-1 whitespace-nowrap border ${
+                  isActive
+                    ? 'bg-indigo-600 text-white border-indigo-600'
+                    : isDone
+                    ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
+                    : 'bg-white text-slate-400 border-slate-200'
+                }`}
+              >
+                <span className="w-4 h-4 rounded-full bg-black/10 flex items-center justify-center text-[10px]">
+                  {idx + 1}
+                </span>
+                <Icon className="w-3.5 h-3.5" />
+                <span className={isActive ? '' : 'hidden sm:inline'}>{s.label}</span>
+              </div>
+            </React.Fragment>
+          );
+        })}
       </div>
 
       {step === 'list' && (
