@@ -22,7 +22,7 @@ export function createSplitLine(method, amount = '') {
  * แบ่งจ่ายหลายช่องทาง (Split Payment) เช่น เงินสดส่วนหนึ่ง + สแกน QR ส่วนที่เหลือ
  * เงินทอนคิดจากเงินสดเท่านั้น
  */
-export default function SplitPaymentPanel({ lines, setLines, grandTotal, selectedCustomer }) {
+export default function SplitPaymentPanel({ lines, setLines, grandTotal, selectedCustomer, allowedMethods = null }) {
   const summary = summarizeSplitPayments(lines, grandTotal);
   const promptpayAmount = lines
     .filter((l) => l.method === 'promptpay')
@@ -97,7 +97,9 @@ export default function SplitPaymentPanel({ lines, setLines, grandTotal, selecte
 
         {/* ปุ่มเพิ่มช่องทาง */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
-          {Object.keys(METHOD_ICONS).map((method) => (
+          {Object.keys(METHOD_ICONS)
+            .filter((method) => !allowedMethods || allowedMethods.includes(method))
+            .map((method) => (
             <button
               key={method}
               type="button"

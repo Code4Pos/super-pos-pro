@@ -3,7 +3,15 @@
  * หมายเหตุ: เป็นการจำกัดสิทธิ์ในตัวแอป (ซ่อนเมนู/ปุ่ม) ไม่ใช่ความปลอดภัยระดับฐานข้อมูล
  */
 
-const SETTINGS_TABS = ['settings-shop', 'settings-tax', 'settings-payment', 'settings-printer', 'settings-users'];
+const SETTINGS_TABS = [
+  'settings-shop',
+  'settings-receipt',
+  'settings-sales',
+  'settings-tax',
+  'settings-payment',
+  'settings-printer',
+  'settings-users',
+];
 
 export const ADMIN_TABS = [
   'inventory',
@@ -41,7 +49,7 @@ export const ROLES = {
       'suppliers', 'settings-printer', 'settings-payment',
     ],
     permissions: [
-      'void_order', 'adjust_stock', 'approve_stock', 'approve_import', 'open_drawer',
+      'void_order', 'adjust_stock', 'approve_stock', 'approve_import', 'open_drawer', 'approve_discount',
       'issue_tax_invoice', 'receive_payment', 'billing_note', 'credit_sale', 'transfer_stock', 'manage_warehouses', 'sales_order',
     ],
   },
@@ -77,6 +85,7 @@ export const PERMISSION_LABELS = {
   approve_stock: 'อนุมัติลด/กำหนดยอดสต็อก',
   approve_import: 'อนุมัติ/รับสินค้าในใบนำเข้า',
   open_drawer: 'เปิดลิ้นชักฉุกเฉิน',
+  approve_discount: 'อนุมัติส่วนลดท้ายบิลเกินเพดาน',
   issue_tax_invoice: 'ออกใบกำกับภาษีเต็มรูป',
   receive_payment: 'รับชำระหนี้',
   billing_note: 'ออกใบวางบิล',

@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { posService, normalizeAndSyncProducts } from '../services/posService';
 import { printerService, SHARED_SHOP_SETTING_KEYS } from '../services/printerService';
-import { calculateEffectiveUnitPrice } from '../utils/formatters';
+import { calculateEffectiveUnitPrice, calculateRoundingDiscount, calculateLoyaltyPoints } from '../utils/formatters';
 import { summarizeSplitPayments } from '../utils/payments';
 import { calculateCustomerCredit, checkCreditSale } from '../utils/credit';
 import { hasPermission, canAccessTab } from '../utils/rbac';
@@ -14,7 +14,7 @@ import {
 
 const SESSION_STORAGE_KEY = 'siampos_session_v1';
 
-export const APP_VERSION = 'version beta 0.3.12';
+export const APP_VERSION = 'version beta 0.3.13';
 const HELD_BILLS_STORAGE_KEY = 'siampos_held_bills_v1';
 
 const POSContext = createContext(null);
@@ -227,6 +227,9 @@ export function POSProvider({ children, scope = 'all' }) {
     [pricingMode, showToast]
   );
 
+  const stockPolicyRef = useRef(printerSettings.stockPolicy || 'block');
+  stockPolicyRef.current = printerSettings.stockPolicy || 'block';
+
   /**
    * เพิ่มสินค้าลงตะกร้า (version beta 0.1.3):
    * สินค้าที่เพิ่มใหม่ (หรือเพิ่งกดเพิ่มจำนวน) จะถูกดันขึ้นมาอยู่ด้านบนสุดของตะกร้าเสมอ (Index 0)
@@ -235,9 +238,15 @@ export function POSProvider({ children, scope = 'all' }) {
     (product, addQty = 1) => {
       if (!product) return;
       const currentStock = Number(product.stock) || 0;
+      // ค่าตั้ง stockPolicy: 'block' ห้ามขายเกินสต็อก | 'warn' ขายได้แต่เตือน | 'allow' ขายได้ไม่เตือน
+      const policy = stockPolicyRef.current;
+      const blockOverStock = policy === 'block';
       if (currentStock <= 0) {
-        showToast(`สินค้า "${product.name}" หมดสต็อก!`, 'error');
-        return;
+        if (blockOverStock) {
+          showToast(`สินค้า "${product.name}" หมดสต็อก!`, 'error');
+          return;
+        }
+        if (policy === 'warn') showToast(`สินค้า "${product.name}" หมดสต็อก (ขายเกินสต็อก)`, 'warning');
       }
 
       setCart((prev) => {
@@ -246,9 +255,14 @@ export function POSProvider({ children, scope = 'all' }) {
           const existing = prev[existingIndex];
           const nextQty = existing.quantity + addQty;
           const finalQty =
-            nextQty > currentStock ? currentStock : nextQty;
-          if (nextQty > currentStock) {
-            showToast(`มีสต็อกคงเหลือเพียง ${currentStock} ${product.unit}`, 'warning');
+            blockOverStock && nextQty > currentStock ? currentStock : nextQty;
+          if (nextQty > currentStock && currentStock > 0 && policy !== 'allow') {
+            showToast(
+              blockOverStock
+                ? `มีสต็อกคงเหลือเพียง ${currentStock} ${product.unit}`
+                : `ขายเกินสต็อก (คงเหลือ ${currentStock} ${product.unit})`,
+              'warning'
+            );
           }
           const updatedItem = { ...existing, quantity: finalQty };
           // ดันรายการที่เพิ่งเพิ่มขึ้นมาอยู่ด้านบนสุดของตะกร้า
@@ -257,7 +271,7 @@ export function POSProvider({ children, scope = 'all' }) {
             ...prev.filter((_, idx) => idx !== existingIndex),
           ];
         } else {
-          const safeQty = Math.min(addQty, currentStock);
+          const safeQty = blockOverStock ? Math.min(addQty, currentStock) : addQty;
           // เพิ่มสินค้าใหม่อยู่ด้านบนสุดของตะกร้า
           return [
             { product, quantity: safeQty, customPrice: null },
@@ -283,8 +297,14 @@ export function POSProvider({ children, scope = 'all' }) {
           if (item.product.id !== productId) return item;
           const maxStock = Number(item.product.stock) || 0;
           if (parsedQty > maxStock) {
-            showToast(`สต็อกคงเหลือสูงสุด ${maxStock} ${item.product.unit}`, 'warning');
-            return { ...item, quantity: maxStock };
+            const policy = stockPolicyRef.current;
+            if (policy === 'block') {
+              showToast(`สต็อกคงเหลือสูงสุด ${maxStock} ${item.product.unit}`, 'warning');
+              return { ...item, quantity: maxStock };
+            }
+            if (policy === 'warn') {
+              showToast(`ขายเกินสต็อก (คงเหลือ ${maxStock} ${item.product.unit})`, 'warning');
+            }
           }
           return { ...item, quantity: parsedQty };
         })
@@ -398,7 +418,13 @@ export function POSProvider({ children, scope = 'all' }) {
       };
     });
 
-    const safeDiscount = Math.min(subtotal, Math.max(0, Number(billDiscount) || 0));
+    const manualDiscount = Math.min(subtotal, Math.max(0, Number(billDiscount) || 0));
+    // ปัดเศษลงตามค่าตั้ง roundingStep ส่วนที่ปัดทิ้งนับเป็นส่วนลดท้ายบิล (VAT แยกนอกไม่ปัด เพราะภาษีต้องเป็น 7% ของฐาน)
+    const roundingDiscount =
+      vatMode === 'vat_out'
+        ? 0
+        : calculateRoundingDiscount(Math.max(0, subtotal - manualDiscount), printerSettings.roundingStep);
+    const safeDiscount = Math.round((manualDiscount + roundingDiscount) * 100) / 100;
     const afterDiscount = Math.max(0, subtotal - safeDiscount);
 
     let taxAmount = 0;
@@ -425,7 +451,9 @@ export function POSProvider({ children, scope = 'all' }) {
       retailTotalBeforeTier,
       subtotal,
       wholesaleSavings,
-      billDiscount: safeDiscount,
+      billDiscount: manualDiscount,
+      roundingDiscount,
+      totalDiscount: safeDiscount,
       vatMode,
       netBeforeVat,
       taxAmount,
@@ -441,6 +469,7 @@ export function POSProvider({ children, scope = 'all' }) {
     wholesaleRules,
     specialRules,
     selectedCustomer,
+    printerSettings.roundingStep,
   ]);
 
   // ฟังก์ชันพักบิลอัตโนมัติทันทีที่กดปุ่ม "พักบิล"
@@ -679,7 +708,9 @@ export function POSProvider({ children, scope = 'all' }) {
         pricing_mode: pricingMode,
         subtotal: cartSummary.subtotal,
         wholesale_savings: cartSummary.wholesaleSavings,
-        bill_discount: cartSummary.billDiscount,
+        // ส่วนลดรวม = ส่วนลดที่พนักงานให้ + ส่วนที่ปัดเศษ (rounding_discount เก็บแยกไว้แสดงบนใบเสร็จ)
+        bill_discount: cartSummary.totalDiscount,
+        rounding_discount: cartSummary.roundingDiscount,
         vat_mode: vatMode,
         net_before_vat: cartSummary.netBeforeVat,
         tax_amount: cartSummary.taxAmount,
@@ -719,7 +750,7 @@ export function POSProvider({ children, scope = 'all' }) {
               ...c,
               total_spent: newSpent,
               order_count: (Number(c.order_count) || 0) + 1,
-              points: Math.floor(newSpent / 100),
+              points: calculateLoyaltyPoints(newSpent, printerSettings.bahtPerPoint),
             };
           })
         );

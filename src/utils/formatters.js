@@ -188,3 +188,26 @@ export function calculateEffectiveUnitPrice(
     qtyToUnlockWholesale: isDiscounted ? 0 : Math.max(0, minDiff),
   };
 }
+
+/**
+ * ยอดที่ปัดทิ้งเมื่อปัดเศษยอดสุทธิลงตามขั้นที่ตั้งไว้ (ค่าตั้ง roundingStep: 0 = ไม่ปัด, 0.25, 0.5, 1)
+ * เช่น ยอด 107.80 ปัดทีละ 0.25 → ปัดทิ้ง 0.05 (เหลือ 107.75)
+ */
+export function calculateRoundingDiscount(total, step) {
+  const amount = Number(total) || 0;
+  const s = Number(step) || 0;
+  if (!(s > 0) || amount <= 0) return 0;
+  // คิดเป็นสตางค์ กันเลขทศนิยมคลาดเคลื่อน
+  const satang = Math.round(amount * 100);
+  const stepSatang = Math.round(s * 100);
+  return (satang % stepSatang) / 100;
+}
+
+/**
+ * แต้มสะสมจากยอดซื้อสะสมของลูกค้า (ค่าตั้ง bahtPerPoint: ทุกกี่บาทได้ 1 แต้ม, 0 = ไม่สะสม)
+ */
+export function calculateLoyaltyPoints(totalSpent, bahtPerPoint = 100) {
+  const rate = Number(bahtPerPoint) || 0;
+  if (!(rate > 0)) return 0;
+  return Math.floor((Number(totalSpent) || 0) / rate);
+}

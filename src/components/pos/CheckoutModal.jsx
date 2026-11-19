@@ -36,10 +36,18 @@ const PAYMENT_TABS = [
  * - ชำระแบบเครดิตบังคับเลือกลูกค้าก่อนเสมอ
  */
 export default function CheckoutModal({ isOpen, onClose, onOrderSuccess }) {
-  const { cartSummary, selectedCustomer, checkoutOrder, getCustomerCredit, can } = usePOS();
+  const { cartSummary, selectedCustomer, checkoutOrder, getCustomerCredit, can, printerSettings } = usePOS();
   // บทบาทที่ไม่มีสิทธิ์ขายเชื่อ (เช่น แคชเชียร์) จะไม่เห็นแท็บเครดิต
   const canCreditSale = can('credit_sale');
-  const paymentTabs = PAYMENT_TABS.filter((t) => t.id !== 'credit' || canCreditSale);
+  // ช่องทางชำระเงินที่ร้านเปิดใช้ (ค่าตั้ง enabledPaymentMethods) — เงินสดเปิดเสมอ
+  const enabledMethods = printerSettings?.enabledPaymentMethods || PAYMENT_TABS.map((t) => t.id);
+  const paymentTabs = PAYMENT_TABS.filter(
+    (t) => (t.id === 'cash' || enabledMethods.includes(t.id)) && (t.id !== 'credit' || canCreditSale)
+  );
+  // ช่องทางที่เลือกได้ในโหมดแบ่งจ่าย
+  const splitMethods = paymentTabs.map((t) => t.id).filter((id) => id !== 'split');
+  // ปุ่มลัดธนบัตร (ค่าตั้ง cashShortcuts)
+  const cashShortcuts = (printerSettings?.cashShortcuts?.length ? printerSettings.cashShortcuts : [100, 500, 1000]).slice(0, 4);
   const { grandTotal, totalItemsCount, wholesaleSavings, vatMode, taxAmount } =
     cartSummary;
 
@@ -56,8 +64,14 @@ export default function CheckoutModal({ isOpen, onClose, onOrderSuccess }) {
       setCashStr('0');
       setIsFresh(true);
       setNote('');
-      setSplitLines([createSplitLine('cash'), createSplitLine('promptpay')]);
+      // แบ่งจ่ายเริ่มต้น: เงินสด + ช่องทางที่เปิดใช้ถัดไป
+      const secondMethod = splitMethods.find((m) => m !== 'cash' && m !== 'credit');
+      setSplitLines(
+        secondMethod ? [createSplitLine('cash'), createSplitLine(secondMethod)] : [createSplitLine('cash')]
+      );
     }
+    // ตั้งค่าเริ่มต้นเฉพาะตอนเปิดหน้าต่าง
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
 
   const handleDigit = useCallback(
@@ -308,12 +322,13 @@ export default function CheckoutModal({ isOpen, onClose, onOrderSuccess }) {
 
               {/* ฝั่งขวา: ปุ่มลัดธนบัตร (100, 500, 1000, พอดี) + แป้นตัวเลข Numpad ขนาดใหญ่ */}
               <div className="sm:col-span-7 flex flex-col justify-between gap-1.5 sm:gap-2">
-                {/* ปุ่มลัดธนบัตร */}
-                <div className="grid grid-cols-4 gap-1.5 sm:gap-2">
+                {/* ปุ่มลัดธนบัตร (จำนวนปุ่มตามค่าตั้ง + ปุ่ม "พอดี") */}
+                <div
+                  className="grid gap-1.5 sm:gap-2"
+                  style={{ gridTemplateColumns: `repeat(${cashShortcuts.length + 1}, minmax(0, 1fr))` }}
+                >
                   {[
-                    { label: '฿100', val: 100 },
-                    { label: '฿500', val: 500 },
-                    { label: '฿1,000', val: 1000 },
+                    ...cashShortcuts.map((val) => ({ label: `฿${val.toLocaleString('th-TH')}`, val })),
                     { label: 'พอดี', val: grandTotal, isExact: true },
                   ].map((btn) => (
                     <button
@@ -440,6 +455,7 @@ export default function CheckoutModal({ isOpen, onClose, onOrderSuccess }) {
                   setLines={setSplitLines}
                   grandTotal={grandTotal}
                   selectedCustomer={selectedCustomer}
+                  allowedMethods={splitMethods}
                 />
               )}
 

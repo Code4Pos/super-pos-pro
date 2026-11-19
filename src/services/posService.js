@@ -7,6 +7,8 @@ import { normalizeWarehouses, applyBalanceDelta, TRANSIT_WAREHOUSE_ID, SALES_WAR
 import { generateDeviceCode, generateUuid, isUuid, nextOrderNumber, sanitizeDeviceCode } from '../utils/device';
 import { printerService } from './printerService';
 import { getOrderPayments } from '../utils/payments';
+import { normalizeShopConfig } from '../utils/shopConfig';
+import { calculateLoyaltyPoints } from '../utils/formatters';
 import {
   INITIAL_CATEGORIES,
   INITIAL_UNITS,
@@ -290,6 +292,8 @@ function shopSettingsToRow(settings = {}, nowIso = new Date().toISOString()) {
     shop_tax_id: String(settings.shopTaxId ?? '').replace(/\D/g, '').slice(0, 13),
     shop_branch: String(settings.shopBranch || '00000').padStart(5, '0').slice(-5),
     vat_mode: ['no_vat', 'vat_in', 'vat_out'].includes(settings.vatMode) ? settings.vatMode : 'no_vat',
+    // ค่าตั้งร้านแบบรวมศูนย์ (ใบเสร็จ / กติกาการขาย) เก็บเป็น JSON — เพิ่มค่าใหม่ได้โดยไม่ต้องแก้ตาราง
+    config: normalizeShopConfig(settings),
     updated_at: settings.updated_at || nowIso,
   };
 }
@@ -306,8 +310,48 @@ function rowToShopSettings(row) {
     shopTaxId: row.shop_tax_id ?? '',
     shopBranch: row.shop_branch ?? '00000',
     vatMode: ['no_vat', 'vat_in', 'vat_out'].includes(row.vat_mode) ? row.vat_mode : 'no_vat',
+    // ฐานข้อมูลที่ยังไม่ได้รัน Migration beta 0.3.13 จะไม่มีคอลัมน์ config = ใช้ค่าเดิมในเครื่อง
+    ...(row.config && typeof row.config === 'object'
+      ? normalizeShopConfig({ ...printerService.getLocalShopSettings(), ...row.config })
+      : {}),
     updated_at: row.updated_at || null,
   };
+}
+
+// ฐานข้อมูลยังไม่มีคอลัมน์ config (ยังไม่ได้รัน Migration)
+function isMissingConfigColumn(error) {
+  const msg = String(error?.message || '');
+  return error?.code === 'PGRST204' || (/config/i.test(msg) && /column/i.test(msg));
+}
+
+/**
+ * บันทึกแถว shop_settings ถ้าฐานข้อมูลยังไม่มีคอลัมน์ config จะบันทึกเฉพาะคอลัมน์เดิม
+ */
+async function upsertShopSettingsRow(row) {
+  if (!isOnline()) {
+    enqueueOffline({ kind: 'upsert', table: 'shop_settings', rows: [row] });
+    return { ok: false, queued: true };
+  }
+  try {
+    let { error } = await supabase.from('shop_settings').upsert([row]);
+    if (error && isMissingConfigColumn(error)) {
+      const { config, ...legacyRow } = row;
+      ({ error } = await supabase.from('shop_settings').upsert([legacyRow]));
+      if (!error) return { ok: true, legacy: true };
+    }
+    if (!error) return { ok: true };
+    if (isNetworkError(error)) {
+      enqueueOffline({ kind: 'upsert', table: 'shop_settings', rows: [row] });
+      return { ok: false, queued: true };
+    }
+    return { ok: false, error };
+  } catch (err) {
+    if (isNetworkError(err)) {
+      enqueueOffline({ kind: 'upsert', table: 'shop_settings', rows: [row] });
+      return { ok: false, queued: true };
+    }
+    return { ok: false, error: err };
+  }
 }
 
 /**
@@ -2487,7 +2531,13 @@ export const posService = {
         }
       } else {
         try {
-          const { error } = await supabase.from(item.table).upsert(item.rows);
+          let { error } = await supabase.from(item.table).upsert(item.rows);
+          // shop_settings บนฐานข้อมูลที่ยังไม่มีคอลัมน์ config: ส่งเฉพาะคอลัมน์เดิม
+          if (error && item.table === 'shop_settings' && isMissingConfigColumn(error)) {
+            ({ error } = await supabase
+              .from(item.table)
+              .upsert(item.rows.map(({ config, ...legacyRow }) => legacyRow)));
+          }
           result = {
             ok: !error,
             networkError: error ? isNetworkError(error) : false,
@@ -3304,8 +3354,11 @@ export const posService = {
       }
     }
 
-    // บันทึกใน LocalStorage
-    const localOrder = { ...fullOrder };
+    // บันทึกใน LocalStorage (rounding_discount เก็บเฉพาะในเครื่องไว้แสดงบนใบเสร็จ ฐานข้อมูลเก็บรวมใน bill_discount)
+    const localOrder = {
+      ...fullOrder,
+      rounding_discount: Math.max(0, Number(orderPayload.rounding_discount) || 0),
+    };
     setLocal(STORAGE_KEYS.ORDERS, [localOrder, ...orders]);
     setLocal(STORAGE_KEYS.PRODUCTS, syncedProducts);
     // บิลส่งขึ้นฐานข้อมูลพร้อม Ledger/ล็อตแล้ว (หรือเข้าคิว) จึงบันทึกเฉพาะในเครื่อง
@@ -3320,7 +3373,7 @@ export const posService = {
           ...c,
           total_spent: newSpent,
           order_count: (Number(c.order_count) || 0) + 1,
-          points: Math.floor(newSpent / 100),
+          points: calculateLoyaltyPoints(newSpent, printerService.getSettings().bahtPerPoint),
         };
       });
       setLocal(STORAGE_KEYS.CUSTOMERS, updatedCustomers);
@@ -3975,7 +4028,12 @@ export const posService = {
   async saveShopSettings(settings, isSupabaseActive = false) {
     const row = shopSettingsToRow(settings);
     if (isSupabaseActive && supabase) {
-      await upsertOrQueue('shop_settings', [row]);
+      const result = await upsertShopSettingsRow(row);
+      if (result.legacy) {
+        console.warn('shop_settings ยังไม่มีคอลัมน์ config: ค่าตั้งใบเสร็จ/กติกาการขายยังไม่ซิงค์ข้ามเครื่อง (รัน Migration beta 0.3.13)');
+      } else if (result.error) {
+        console.warn('Supabase shop_settings error:', result.error.message);
+      }
     }
     return row;
   },
@@ -4035,9 +4093,9 @@ export const posService = {
     // 1. ตั้งค่าร้านค้าที่ใช้ร่วมกันทุกเครื่อง
     try {
       const shopRow = shopSettingsToRow(printerService.getLocalShopSettings(), nowIso);
-      const { error } = await supabase.from('shop_settings').upsert([shopRow]);
-      if (error) errors.push(`shop_settings: ${error.message}`);
-      else counts.shopSettings = 1;
+      const result = await upsertShopSettingsRow(shopRow);
+      if (result.ok) counts.shopSettings = 1;
+      else errors.push(`shop_settings: ${result.error?.message || 'เชื่อมต่อไม่ได้'}`);
     } catch (err) {
       errors.push(`shop_settings: ${err.message}`);
     }

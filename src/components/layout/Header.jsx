@@ -201,6 +201,8 @@ export default function Header({
               {!isPosPage && activeTab === 'dashboard' && 'แดชบอร์ด'}
               {!isPosPage && activeTab === 'sales-tax' && 'รายงานภาษีขาย'}
               {!isPosPage && activeTab === 'settings-shop' && 'ตั้งค่า › ข้อมูลร้าน'}
+              {!isPosPage && activeTab === 'settings-receipt' && 'ตั้งค่า › ใบเสร็จ'}
+              {!isPosPage && activeTab === 'settings-sales' && 'ตั้งค่า › กติกาการขาย'}
               {!isPosPage && activeTab === 'settings-tax' && 'ตั้งค่า › ภาษี (VAT)'}
               {!isPosPage && activeTab === 'settings-payment' && 'ตั้งค่า › การชำระเงิน'}
               {!isPosPage && activeTab === 'settings-printer' && 'ตั้งค่า › เครื่องพิมพ์'}

@@ -1,6 +1,8 @@
 import { formatCurrency, formatDateTime } from '../utils/formatters';
 import { PAYMENT_METHOD_LABELS, getOrderPayments } from '../utils/payments';
 import { calculateOrderVat, bahtText } from '../utils/tax';
+import { SHOP_CONFIG_KEYS, SHOP_CONFIG_DEFAULTS, normalizeShopConfig } from '../utils/shopConfig';
+import { loadImage } from '../utils/imageTools';
 import { isNativePrinterAvailable, nativePrintHtml, bluetoothWrite, bluetoothStatus, bytesToBase64 } from './nativePrinter';
 
 function formatBranch(branch) {
@@ -22,6 +24,8 @@ export const SHARED_SHOP_SETTING_KEYS = [
   'shopTaxId',
   'shopBranch',
   'vatMode',
+  // ค่าตั้งร้านแบบรวมศูนย์ (ใบเสร็จ / กติกาการขาย) — ดู src/utils/shopConfig.js
+  ...SHOP_CONFIG_KEYS,
 ];
 
 const DEFAULT_SHOP_SETTINGS = {
@@ -34,6 +38,7 @@ const DEFAULT_SHOP_SETTINGS = {
   shopTaxId: '', // เลขประจำตัวผู้เสียภาษี 13 หลักของร้าน
   shopBranch: '00000', // รหัสสาขา (00000 = สำนักงานใหญ่)
   vatMode: 'no_vat', // 'no_vat' | 'vat_in' | 'vat_out'
+  ...SHOP_CONFIG_DEFAULTS,
 };
 
 // ค่าตั้งเฉพาะเครื่องนี้ (ชนิดเครื่องพิมพ์ ขนาดกระดาษ ลิ้นชักเก็บเงิน — เก็บใน localStorage ของแต่ละเครื่อง ไม่ซิงค์ข้ามเครื่อง)
@@ -202,13 +207,18 @@ function renderSlipToCanvas(order, settings, mode = 'receipt') {
   const canvasWidth = is58mm ? 384 : 576;
   const padding = is58mm ? 12 : 20;
   const contentWidth = canvasWidth - padding * 2;
-  const baseFontSize = is58mm ? 18 : 22;
-  const smallFontSize = is58mm ? 15 : 18;
-  const titleFontSize = is58mm ? 22 : 28;
-  const lineHeight = is58mm ? 26 : 32;
+  const scale = mode === 'order' ? 1 : receiptFontScale(settings);
+  const baseFontSize = Math.round((is58mm ? 18 : 22) * scale);
+  const smallFontSize = Math.round((is58mm ? 15 : 18) * scale);
+  const titleFontSize = Math.round((is58mm ? 22 : 28) * scale);
+  const lineHeight = Math.round((is58mm ? 26 : 32) * scale);
 
   const items = order.items || [];
-  const estimatedHeight = 480 + items.length * (lineHeight * 2.4);
+  // โลโก้ร้าน (โหลดไว้ก่อนแล้วใน printThermalReceipt)
+  const logo = mode === 'order' ? null : settings._logoImage || null;
+  const logoWidth = logo ? Math.min(logo.width, contentWidth) : 0;
+  const logoHeight = logo ? Math.round((logo.height * logoWidth) / logo.width) : 0;
+  const estimatedHeight = 560 + logoHeight + items.length * (lineHeight * 2.4);
 
   const tempCanvas = document.createElement('canvas');
   tempCanvas.width = canvasWidth;
@@ -306,8 +316,17 @@ function renderSlipToCanvas(order, settings, mode = 'receipt') {
     drawLeftRight('ผู้จัดสินค้า: ............................', 'ผู้ตรวจ: ......................', `${smallFontSize}px Prompt, sans-serif`);
   } else {
     // ================= ใบเสร็จรับเงินความร้อน (ไม่มีแท็กราคาปลีก/ส่ง) =================
+    if (logo) {
+      ctx.drawImage(logo, (canvasWidth - logoWidth) / 2, y, logoWidth, logoHeight);
+      y += logoHeight + 8;
+    }
     drawCentered(settings.shopName, `bold ${titleFontSize}px Prompt, sans-serif`);
-    drawCentered(`โทร. ${settings.shopPhone}`, `${smallFontSize}px Prompt, sans-serif`);
+    if (settings.receiptHeaderText) {
+      drawCentered(settings.receiptHeaderText, `${smallFontSize}px Prompt, sans-serif`);
+    }
+    if (settings.receiptShowPhone !== false && settings.shopPhone) {
+      drawCentered(`โทร. ${settings.shopPhone}`, `${smallFontSize}px Prompt, sans-serif`);
+    }
     // ร้านจดทะเบียน VAT: ใบเสร็จนี้เป็นใบกำกับภาษีอย่างย่อ ต้องแสดงเลขผู้เสียภาษีของร้าน
     if (settings.vatRegistered) {
       drawCentered(
@@ -320,7 +339,12 @@ function renderSlipToCanvas(order, settings, mode = 'receipt') {
 
     drawLeftRight('เลขที่:', order.order_number, `bold ${smallFontSize}px Prompt, sans-serif`);
     drawLeftRight('วันที่:', formatDateTime(order.created_at), `${smallFontSize}px Prompt, sans-serif`);
-    drawLeftRight('ลูกค้า:', order.customer_name || 'ลูกค้าทั่วไป', `${smallFontSize}px Prompt, sans-serif`);
+    if (settings.receiptShowCustomer !== false) {
+      drawLeftRight('ลูกค้า:', order.customer_name || 'ลูกค้าทั่วไป', `${smallFontSize}px Prompt, sans-serif`);
+    }
+    if (settings.receiptShowCashier && order.created_by_name) {
+      drawLeftRight('พนักงาน:', order.created_by_name, `${smallFontSize}px Prompt, sans-serif`);
+    }
     const paymentLines = getPaymentLines(order);
     if (paymentLines.length === 1) {
       drawLeftRight('ชำระโดย:', paymentLines[0].label, `${smallFontSize}px Prompt, sans-serif`);
@@ -336,20 +360,26 @@ function renderSlipToCanvas(order, settings, mode = 'receipt') {
         formatCurrency(item.subtotal),
         `bold ${smallFontSize}px Prompt, sans-serif`
       );
-      ctx.font = `${smallFontSize - 2}px Prompt, sans-serif`;
-      ctx.fillText(
-        `  ${item.quantity} ${item.unit} x ${formatCurrency(item.unit_price)}`,
-        padding,
-        y
-      );
-      y += lineHeight - 2;
+      if (settings.receiptShowUnitPrice !== false) {
+        ctx.font = `${smallFontSize - 2}px Prompt, sans-serif`;
+        ctx.fillText(
+          `  ${item.quantity} ${item.unit} x ${formatCurrency(item.unit_price)}`,
+          padding,
+          y
+        );
+        y += lineHeight - 2;
+      }
     });
 
     drawDashedDivider();
     drawLeftRight('รวมเป็นเงิน', formatCurrency(order.subtotal), `${smallFontSize}px Prompt, sans-serif`);
 
-    if (Number(order.bill_discount) > 0) {
-      drawLeftRight('ส่วนลดท้ายบิล', `-${formatCurrency(order.bill_discount)}`, `${smallFontSize}px Prompt, sans-serif`);
+    const discount = splitBillDiscount(order);
+    if (discount.manual > 0) {
+      drawLeftRight('ส่วนลดท้ายบิล', `-${formatCurrency(discount.manual)}`, `${smallFontSize}px Prompt, sans-serif`);
+    }
+    if (discount.rounding > 0) {
+      drawLeftRight('ปัดเศษ', `-${formatCurrency(discount.rounding)}`, `${smallFontSize}px Prompt, sans-serif`);
     }
 
     if (order.vat_mode === 'vat_in' && Number(order.tax_amount) > 0) {
@@ -384,6 +414,10 @@ function renderSlipToCanvas(order, settings, mode = 'receipt') {
     }
     drawLeftRight('รับเงินมา', formatCurrency(order.cash_received), `${smallFontSize}px Prompt, sans-serif`);
     drawLeftRight('เงินทอน', formatCurrency(order.change_amount), `bold ${baseFontSize}px Prompt, sans-serif`);
+    if (settings.receiptShowSavings && Number(order.wholesale_savings) > 0) {
+      y += 4;
+      drawCentered(`ประหยัดจากราคาส่ง ${formatCurrency(order.wholesale_savings)}`, `bold ${smallFontSize}px Prompt, sans-serif`);
+    }
 
     if (order.note) {
       y += 4;
@@ -405,6 +439,17 @@ function renderSlipToCanvas(order, settings, mode = 'receipt') {
   const finalCtx = finalCanvas.getContext('2d');
   finalCtx.drawImage(tempCanvas, 0, 0);
   return finalCanvas;
+}
+
+// ทำสำเนาเนื้อหาใบเสร็จหลายใบในเอกสารเดียว (คั่นด้วยการขึ้นหน้าใหม่)
+function repeatReceiptBody(html, copies) {
+  const match = html.match(/<body>([\s\S]*)<\/body>/);
+  if (!match) return html;
+  const body = match[1];
+  const repeated = Array.from({ length: copies }, (_, i) =>
+    i === 0 ? body : `<div style="page-break-before:always;"></div>${body}`
+  ).join('');
+  return html.replace(match[0], `<body>${repeated}</body>`);
 }
 
 /**
@@ -455,23 +500,41 @@ function printHtmlViaHiddenIframe(htmlDocumentString) {
 /**
  * สร้าง HTML สำหรับใบเสร็จความร้อน (58mm / 80mm)
  */
+// ตัวคูณขนาดตัวอักษรใบเสร็จตามค่าตั้ง receiptFontSize
+function receiptFontScale(settings) {
+  if (settings.receiptFontSize === 'small') return 0.9;
+  if (settings.receiptFontSize === 'large') return 1.15;
+  return 1;
+}
+
+// แยกส่วนลดท้ายบิลที่พนักงานให้ กับส่วนที่ปัดเศษอัตโนมัติ (บิลเก่าไม่มี rounding_discount)
+function splitBillDiscount(order) {
+  const total = Number(order.bill_discount) || 0;
+  const rounding = Math.min(total, Math.max(0, Number(order.rounding_discount) || 0));
+  return { manual: Math.round((total - rounding) * 100) / 100, rounding };
+}
+
 function buildThermalReceiptHtml(order, settings, paperSize) {
   const is58 = paperSize === '58mm';
   const widthCss = is58 ? '54mm' : '74mm';
-  const fontSize = is58 ? '11px' : '12.5px';
+  const scale = receiptFontScale(settings);
+  const px = (n) => `${(n * scale).toFixed(1)}px`;
+  const fontSize = px(is58 ? 11 : 12.5);
   const items = order.items || [];
+  const showUnitPrice = settings.receiptShowUnitPrice !== false;
+  const discount = splitBillDiscount(order);
 
   const itemsHtml = items
     .map(
       (item) => `
       <div style="margin-bottom:6px;">
         <div style="display:flex;justify-content:space-between;font-weight:700;">
-          <span style="padding-right:6px;">${item.product_name}</span>
+          <span style="padding-right:6px;">${escapeHtml(item.product_name)}</span>
           <span>${formatCurrency(item.subtotal)}</span>
         </div>
-        <div style="font-size:10.5px;color:#333;">
-          ${item.quantity} ${item.unit} × ${formatCurrency(item.unit_price)}
-        </div>
+        ${showUnitPrice ? `<div style="font-size:${px(10.5)};color:#333;">
+          ${item.quantity} ${escapeHtml(item.unit)} × ${formatCurrency(item.unit_price)}
+        </div>` : ''}
       </div>`
     )
     .join('');
@@ -514,19 +577,22 @@ function buildThermalReceiptHtml(order, settings, paperSize) {
     .center { text-align: center; }
     .divider { border-top: 1px dashed #000; margin: 6px 0; }
     .row { display: flex; justify-content: space-between; margin: 3px 0; }
-    .total { font-size: ${is58 ? '14px' : '16px'}; font-weight: 700; border-top: 1.5px solid #000; padding-top: 5px; margin-top: 5px; }
+    .total { font-size: ${px(is58 ? 14 : 16)}; font-weight: 700; border-top: 1.5px solid #000; padding-top: 5px; margin-top: 5px; }
   </style>
 </head>
 <body>
   <div class="center">
-    <div style="font-size:${is58 ? '14px' : '16px'};font-weight:700;">${settings.shopName}</div>
-    <div style="font-size:10.5px;">โทร. ${settings.shopPhone}</div>
+    ${settings.receiptLogo ? `<img src="${settings.receiptLogo}" alt="" style="display:block;margin:0 auto 4px;max-width:80%;max-height:26mm;" />` : ''}
+    <div style="font-size:${px(is58 ? 14 : 16)};font-weight:700;">${escapeHtml(settings.shopName)}</div>
+    ${settings.receiptHeaderText ? `<div style="font-size:${px(10.5)};">${escapeHtml(settings.receiptHeaderText)}</div>` : ''}
+    ${settings.receiptShowPhone !== false && settings.shopPhone ? `<div style="font-size:${px(10.5)};">โทร. ${escapeHtml(settings.shopPhone)}</div>` : ''}
     ${settings.vatRegistered ? `<div style="font-size:10px;">เลขประจำตัวผู้เสียภาษี ${escapeHtml(settings.shopTaxId)} (${formatBranch(settings.shopBranch)})</div><div style="font-size:11px;font-weight:700;">ใบเสร็จรับเงิน/ใบกำกับภาษีอย่างย่อ</div>` : ''}
   </div>
   <div class="divider"></div>
   <div class="row"><span>เลขที่:</span><strong>${order.order_number}</strong></div>
   <div class="row"><span>วันที่:</span><span>${formatDateTime(order.created_at)}</span></div>
-  <div class="row"><span>ลูกค้า:</span><strong>${order.customer_name || 'ลูกค้าทั่วไป'}</strong></div>
+  ${settings.receiptShowCustomer !== false ? `<div class="row"><span>ลูกค้า:</span><strong>${escapeHtml(order.customer_name || 'ลูกค้าทั่วไป')}</strong></div>` : ''}
+  ${settings.receiptShowCashier && order.created_by_name ? `<div class="row"><span>พนักงาน:</span><span>${escapeHtml(order.created_by_name)}</span></div>` : ''}
   ${getPaymentLines(order).length === 1 ? `<div class="row"><span>ชำระโดย:</span><span>${getPaymentLines(order)[0].label}</span></div>` : ''}
   <div class="divider"></div>
   <div class="row" style="font-weight:700;font-size:10.5px;"><span>รายการสินค้า</span><span>รวม</span></div>
@@ -534,16 +600,18 @@ function buildThermalReceiptHtml(order, settings, paperSize) {
   ${itemsHtml}
   <div class="divider"></div>
   <div class="row"><span>รวมเป็นเงิน</span><span>${formatCurrency(order.subtotal)}</span></div>
-  ${Number(order.bill_discount) > 0 ? `<div class="row"><span>ส่วนลดท้ายบิล</span><span>-${formatCurrency(order.bill_discount)}</span></div>` : ''}
+  ${discount.manual > 0 ? `<div class="row"><span>ส่วนลดท้ายบิล</span><span>-${formatCurrency(discount.manual)}</span></div>` : ''}
+  ${discount.rounding > 0 ? `<div class="row"><span>ปัดเศษ</span><span>-${formatCurrency(discount.rounding)}</span></div>` : ''}
   ${vatHtml}
   <div class="row total"><span>ยอดสุทธิ</span><span>${formatCurrency(order.grand_total)}</span></div>
   ${settings.vatRegistered && !(Number(order.tax_amount) > 0) ? `<div class="row" style="font-size:10px;"><span>ราคารวม VAT 7% แล้ว</span><span>${formatCurrency(calculateOrderVat(order).vat)}</span></div>` : ''}
   ${getPaymentLines(order).length > 1 ? getPaymentLines(order).map((line) => `<div class="row"><span>ชำระ ${line.label}</span><span>${formatCurrency(line.amount)}</span></div>`).join('') : ''}
   <div class="row"><span>รับเงินมา</span><span>${formatCurrency(order.cash_received)}</span></div>
   <div class="row" style="font-weight:700;"><span>เงินทอน</span><span>${formatCurrency(order.change_amount)}</span></div>
+  ${settings.receiptShowSavings && Number(order.wholesale_savings) > 0 ? `<div class="center" style="margin-top:6px;font-weight:700;">ประหยัดจากราคาส่ง ${formatCurrency(order.wholesale_savings)}</div>` : ''}
   ${order.note ? `<div style="margin-top:6px;font-size:10.5px;border:1px solid #000;padding:4px;">หมายเหตุ: ${order.note}</div>` : ''}
   <div class="divider"></div>
-  <div class="center" style="font-size:10px;">${settings.footerText}</div>
+  <div class="center" style="font-size:${px(10)};">${escapeHtml(settings.footerText)}</div>
 </body>
 </html>`;
 }
@@ -1398,7 +1466,8 @@ export const printerService = {
     try {
       const rawShop = localStorage.getItem(SHOP_SETTINGS_KEY);
       if (rawShop) {
-        return { ...DEFAULT_SHOP_SETTINGS, ...JSON.parse(rawShop) };
+        const saved = { ...DEFAULT_SHOP_SETTINGS, ...JSON.parse(rawShop) };
+        return { ...saved, ...normalizeShopConfig(saved) };
       }
       const rawPrinter = localStorage.getItem(PRINTER_SETTINGS_KEY);
       if (rawPrinter) {
@@ -1420,14 +1489,15 @@ export const printerService = {
       const shopSaved = this.getLocalShopSettings();
       const merged = { ...DEFAULT_PRINTER_SETTINGS, ...deviceSaved, ...shopSaved };
       delete merged.updated_at;
-      return merged;
+      return { ...merged, ...normalizeShopConfig(merged) };
     } catch {
       return DEFAULT_PRINTER_SETTINGS;
     }
   },
 
   saveSettings(newSettings) {
-    const merged = { ...this.getSettings(), ...newSettings };
+    const draft = { ...this.getSettings(), ...newSettings };
+    const merged = { ...draft, ...normalizeShopConfig(draft) };
     delete merged.updated_at;
     try {
       localStorage.setItem(PRINTER_SETTINGS_KEY, JSON.stringify(merged));
@@ -1835,29 +1905,35 @@ export const printerService = {
     const settings = this.getSettings();
     const paperSize = customPaperSize || settings.paperSize || '80mm';
     const mergedSettings = { ...settings, paperSize };
+    // จำนวนใบต่อบิลตามค่าตั้ง receiptCopies
+    const copies = Math.min(3, Math.max(1, Math.round(Number(settings.receiptCopies) || 1)));
 
     if (settings.connectionType !== 'system') {
       try {
+        mergedSettings._logoImage = await loadImage(settings.receiptLogo);
         const canvas = renderSlipToCanvas(order, mergedSettings, 'receipt');
-        const ok = await this.sendCanvasToHardwarePrinter(canvas, mergedSettings);
+        let ok = true;
+        for (let i = 0; i < copies && ok; i += 1) {
+          ok = await this.sendCanvasToHardwarePrinter(canvas, mergedSettings);
+        }
         if (ok) return true;
       } catch (e) {
         console.warn('Hardware thermal print failed, using dedicated iframe fallback:', e);
       }
     }
 
-    // พิมพ์ผ่าน Dedicated Hidden Iframe (ไม่พึ่งพาตัวอย่างใบเสร็จบนหน้าจอ)
+    // พิมพ์ผ่าน Dedicated Hidden Iframe (ไม่พึ่งพาตัวอย่างใบเสร็จบนหน้าจอ) หลายใบ = ต่อหน้าด้วย page-break
     const html = buildThermalReceiptHtml(order, mergedSettings, paperSize);
-    printHtmlViaHiddenIframe(html);
+    printHtmlViaHiddenIframe(copies > 1 ? repeatReceiptBody(html, copies) : html);
     return true;
   },
 
   /**
    * HTML ใบเสร็จความร้อน สำหรับแสดงตัวอย่างบนหน้าจอ (หน้าต่างประวัติบิลในหน้าขาย)
    */
-  getThermalReceiptHtml(order, customPaperSize = null) {
+  getThermalReceiptHtml(order, customPaperSize = null, overrideSettings = null) {
     if (!order) return '';
-    const settings = this.getSettings();
+    const settings = overrideSettings ? { ...this.getSettings(), ...overrideSettings } : this.getSettings();
     const paperSize = customPaperSize || settings.paperSize || '80mm';
     return buildThermalReceiptHtml(order, { ...settings, paperSize }, paperSize);
   },

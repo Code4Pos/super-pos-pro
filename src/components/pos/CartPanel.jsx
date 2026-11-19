@@ -18,6 +18,7 @@ import CustomerSelector from './CustomerSelector';
 import HoldBillModal from './HoldBillModal';
 import NumpadModal from '../common/NumpadModal';
 import ConfirmModal from '../common/ConfirmModal';
+import ApproverPinModal from './ApproverPinModal';
 import { formatCurrency } from '../../utils/formatters';
 
 export default function CartPanel({ onOpenCheckout, onCloseMobileDrawer }) {
@@ -35,6 +36,9 @@ export default function CartPanel({ onOpenCheckout, onCloseMobileDrawer }) {
     clearCart,
     heldBills,
     holdCurrentBill,
+    printerSettings,
+    authEnabled,
+    can,
   } = usePOS();
 
   const {
@@ -44,7 +48,11 @@ export default function CartPanel({ onOpenCheckout, onCloseMobileDrawer }) {
     netBeforeVat,
     taxAmount,
     grandTotal,
+    roundingDiscount = 0,
   } = cartSummary;
+
+  // ส่วนลดที่เกินเพดาน (ค่าตั้ง maxCashierDiscountPercent) รอผู้จัดการอนุมัติด้วย PIN
+  const [pendingDiscount, setPendingDiscount] = useState(null);
 
   const [isHoldModalOpen, setIsHoldModalOpen] = useState(false);
 
@@ -90,7 +98,8 @@ export default function CartPanel({ onOpenCheckout, onCloseMobileDrawer }) {
       initialValue: item.quantity,
       allowDecimal: false,
       min: 0,
-      max: Number(item.current_stock) || 9999,
+      // ห้ามขายเกินสต็อก = เพดานเท่าสต็อก ไม่งั้นใส่ได้ตามต้องการ (ค่าตั้ง stockPolicy)
+      max: (printerSettings?.stockPolicy || 'block') === 'block' ? Number(item.current_stock) || 9999 : 999999,
       unitLabel: `สูงสุด ${item.current_stock} ${item.unit}`,
       presets: [
         { label: `1 ${item.unit}`, value: 1 },
@@ -155,6 +164,14 @@ export default function CartPanel({ onOpenCheckout, onCloseMobileDrawer }) {
         { label: 'ลด ฿50', value: 50 },
       ],
       onConfirm: (val) => {
+        const limitPercent = Number(printerSettings?.maxCashierDiscountPercent ?? 100);
+        const limitAmount = ((Number(cartSummary.subtotal) || 0) * limitPercent) / 100;
+        const needsApproval =
+          limitPercent < 100 && Number(val) > limitAmount + 0.001 && authEnabled && !can('approve_discount');
+        if (needsApproval) {
+          setPendingDiscount(Number(val));
+          return;
+        }
         setBillDiscount(val);
       },
     });
@@ -476,6 +493,14 @@ export default function CartPanel({ onOpenCheckout, onCloseMobileDrawer }) {
           )}
         </div>
 
+        {/* ปัดเศษอัตโนมัติ (ค่าตั้ง roundingStep) */}
+        {roundingDiscount > 0 && (
+          <div className="flex items-center justify-between text-[11px] px-1 text-slate-500">
+            <span>ปัดเศษ</span>
+            <span className="font-bold text-rose-600">-{formatCurrency(roundingDiscount)}</span>
+          </div>
+        )}
+
         {/* แสดงรายละเอียดเมื่อเลือก VAT in product หรือประหยัดราคาส่ง */}
         {(vatMode === 'vat_in' && taxAmount > 0) || wholesaleSavings > 0 ? (
           <div className="flex items-center justify-between text-[11px] px-1 text-slate-500">
@@ -536,6 +561,24 @@ export default function CartPanel({ onOpenCheckout, onCloseMobileDrawer }) {
         presets={numpadConfig.presets}
         onConfirm={numpadConfig.onConfirm}
         onClose={() => setNumpadConfig((prev) => ({ ...prev, isOpen: false }))}
+      />
+
+      {/* อนุมัติส่วนลดท้ายบิลที่เกินเพดานที่ร้านกำหนด */}
+      <ApproverPinModal
+        isOpen={pendingDiscount !== null}
+        title="อนุมัติส่วนลดท้ายบิล"
+        description={
+          pendingDiscount !== null
+            ? `ส่วนลด ${formatCurrency(pendingDiscount)} เกินเพดาน ${Number(printerSettings?.maxCashierDiscountPercent ?? 100)}% ของยอดรวม ต้องใช้ PIN ผู้จัดการหรือผู้ดูแลระบบ`
+            : ''
+        }
+        permission="approve_discount"
+        confirmLabel="อนุมัติส่วนลด"
+        onApproved={() => {
+          setBillDiscount(pendingDiscount);
+          setPendingDiscount(null);
+        }}
+        onClose={() => setPendingDiscount(null)}
       />
 
       {/* Modal ยืนยันการลบสินค้า / ล้างบิล */}

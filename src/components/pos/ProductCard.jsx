@@ -15,6 +15,7 @@ function ProductCardComponent({
   onAddToCart,
   onEditQtyNumpad,
   onRequestRemoveFromCart,
+  allowOverStock = false, // ร้านตั้งให้ขายเกินสต็อกได้ (ค่าตั้ง stockPolicy ไม่ใช่ 'block')
 }) {
   const [imgError, setImgError] = useState(false);
 
@@ -22,6 +23,7 @@ function ProductCardComponent({
   const minStock = Number(product.min_stock) || 10;
   const isOutOfStock = stock <= 0;
   const isLowStock = !isOutOfStock && stock <= minStock;
+  const canAdd = !isOutOfStock || allowOverStock;
 
   const retailPrice = Number(product.retail_price) || 0;
   const wholesalePrice = Number(product.wholesale_price) || retailPrice;
@@ -40,9 +42,9 @@ function ProductCardComponent({
     >
       {/* ส่วนรูปภาพและป้ายสถานะด้านบน */}
       <div
-        onClick={() => !isOutOfStock && onAddToCart(product, 1)}
+        onClick={() => canAdd && onAddToCart(product, 1)}
         className={`relative h-24 sm:h-28 bg-slate-100 overflow-hidden ${
-          isOutOfStock ? 'cursor-not-allowed' : 'cursor-pointer'
+          !canAdd ? 'cursor-not-allowed' : 'cursor-pointer'
         }`}
       >
         {product.image_url && !imgError ? (
@@ -138,7 +140,7 @@ function ProductCardComponent({
         >
           <button
             type="button"
-            disabled={isOutOfStock}
+            disabled={!canAdd}
             onClick={() => onAddToCart(product, 1)}
             className="p-1.5 sm:p-2 rounded-xl border border-slate-200 bg-slate-50/80 hover:bg-indigo-600 hover:border-indigo-600 active:bg-indigo-700 group/retail disabled:opacity-50 disabled:pointer-events-none text-left transition-colors"
             title={`คลิกเพื่อเพิ่ม ${product.name} (+1 ${product.unit})`}
@@ -155,9 +157,9 @@ function ProductCardComponent({
           {hasWholesaleDiscount && (
             <button
               type="button"
-              disabled={isOutOfStock}
+              disabled={!canAdd}
               onClick={() =>
-                onAddToCart(product, Math.min(stock, minWholesaleQty))
+                onAddToCart(product, allowOverStock ? minWholesaleQty : Math.min(stock, minWholesaleQty))
               }
               className="p-1.5 sm:p-2 rounded-xl border border-emerald-200/90 bg-emerald-50/70 hover:bg-emerald-600 hover:border-emerald-600 active:bg-emerald-700 group/wholesale disabled:opacity-50 disabled:pointer-events-none text-left transition-colors"
               title={`คลิกเพื่อเพิ่มเรตราคาส่ง (+${minWholesaleQty} ${product.unit})`}
@@ -181,7 +183,8 @@ const ProductCard = memo(ProductCardComponent, (prev, next) => {
   return (
     prev.product === next.product &&
     prev.qtyInCart === next.qtyInCart &&
-    prev.isWholesaleActiveInCart === next.isWholesaleActiveInCart
+    prev.isWholesaleActiveInCart === next.isWholesaleActiveInCart &&
+    prev.allowOverStock === next.allowOverStock
   );
 });
 

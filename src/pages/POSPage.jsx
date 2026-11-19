@@ -37,6 +37,7 @@ export default function POSPage() {
     updateCartQty,
     removeFromCart,
     showToast,
+    printerSettings,
   } = usePOS();
 
   const [selectedCategory, setSelectedCategory] = useState('all');
@@ -424,6 +425,7 @@ export default function POSPage() {
                     onAddToCart={addToCart}
                     onEditQtyNumpad={handleEditQtyFromCard}
                     onRequestRemoveFromCart={handleRemoveFromCard}
+                    allowOverStock={(printerSettings?.stockPolicy || 'block') !== 'block'}
                   />
                 );
               })}
@@ -504,7 +506,11 @@ export default function POSPage() {
         initialValue={cardNumpadInitialQty}
         allowDecimal={false}
         min={0}
-        max={Number(cardNumpadProduct?.stock) || 9999}
+        max={
+          (printerSettings?.stockPolicy || 'block') === 'block'
+            ? Number(cardNumpadProduct?.stock) || 9999
+            : 999999
+        }
         unitLabel={
           cardNumpadProduct
             ? `คงเหลือสูงสุด ${cardNumpadProduct.stock} ${cardNumpadProduct.unit}`
