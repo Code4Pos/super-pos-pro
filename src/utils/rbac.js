@@ -33,7 +33,8 @@ export const ADMIN_TABS = [
   ...SETTINGS_TABS,
 ];
 
-export const ROLES = {
+// บทบาทเริ่มต้นของระบบ (ร้านปรับสิทธิ์ทับได้ หรือเพิ่มบทบาทใหม่ได้ที่ ตั้งค่า › ผู้ใช้งาน & สิทธิ์)
+export const DEFAULT_ROLES = {
   admin: {
     label: 'ผู้ดูแลระบบ',
     description: 'จัดการผู้ใช้ สิทธิ์ และการตั้งค่าทั้งหมด',
@@ -94,6 +95,81 @@ export const PERMISSION_LABELS = {
   manage_warehouses: 'จัดการรายชื่อคลัง',
   sales_order: 'สร้าง/เปิดบิลใบสั่งขายส่ง (จองสินค้า)',
 };
+
+// เมนูทั้งหมดที่กำหนดสิทธิ์ได้ (หน้าขาย + หลังร้าน)
+export const ALL_TABS = ['pos', ...ADMIN_TABS];
+
+/**
+ * ค่าตั้งสิทธิ์ของร้าน (เก็บใน shop config คีย์ rolePermissions ซิงค์ทุกเครื่อง)
+ * รูปแบบ: { [roleId]: { tabs: string[], permissions: string[], label?, description?, custom?: true } }
+ * - บทบาทเริ่มต้น (ยกเว้น admin): ปรับ tabs / permissions ทับค่าเริ่มต้น
+ * - บทบาทที่ร้านสร้างเอง: custom = true และมี label
+ * - admin ปรับไม่ได้ (ทำได้ทุกอย่างเสมอ กันล็อกตัวเองออกจากระบบ)
+ */
+export function normalizeRoleConfig(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const validTabs = new Set(ALL_TABS);
+  const validPerms = new Set(Object.keys(PERMISSION_LABELS));
+  const result = {};
+  Object.entries(raw).forEach(([id, def]) => {
+    if (id === 'admin' || !def || typeof def !== 'object') return;
+    const roleId = String(id).replace(/[^a-z0-9_-]/gi, '').slice(0, 40);
+    if (!roleId) return;
+    const isCustom = !DEFAULT_ROLES[roleId];
+    if (isCustom && !String(def.label || '').trim()) return;
+    const entry = {
+      tabs: (Array.isArray(def.tabs) ? def.tabs : []).filter((t) => validTabs.has(t)),
+      permissions: (Array.isArray(def.permissions) ? def.permissions : []).filter((p) => validPerms.has(p)),
+    };
+    if (isCustom) {
+      entry.custom = true;
+      entry.label = String(def.label).trim().slice(0, 40);
+      entry.description = String(def.description || '').trim().slice(0, 120);
+    }
+    result[roleId] = entry;
+  });
+  return result;
+}
+
+/**
+ * รวมบทบาทเริ่มต้นกับค่าตั้งของร้าน เป็นบทบาทที่ใช้งานจริง
+ */
+export function buildEffectiveRoles(config = {}) {
+  const normalized = normalizeRoleConfig(config);
+  const roles = {};
+  Object.entries(DEFAULT_ROLES).forEach(([id, def]) => {
+    const override = id === 'admin' ? null : normalized[id];
+    roles[id] = override
+      ? { ...def, tabs: override.tabs, permissions: override.permissions, customized: true }
+      : def;
+  });
+  Object.entries(normalized).forEach(([id, def]) => {
+    if (!def.custom) return;
+    roles[id] = {
+      label: def.label,
+      description: def.description || 'บทบาทที่ร้านกำหนดเอง',
+      tabs: def.tabs,
+      permissions: def.permissions,
+      custom: true,
+    };
+  });
+  return roles;
+}
+
+// บทบาทที่ใช้งานอยู่ (live binding: ไฟล์ที่ import ROLES จะเห็นค่าล่าสุดหลัง applyRoleConfig)
+export let ROLES = DEFAULT_ROLES;
+
+/**
+ * ใช้ค่าตั้งสิทธิ์ของร้าน (เรียกจาก POSContext ทุกครั้งที่ค่าตั้ง rolePermissions เปลี่ยน)
+ */
+export function applyRoleConfig(config) {
+  ROLES = buildEffectiveRoles(config);
+  return ROLES;
+}
+
+export function getRoleLabel(roleId) {
+  return ROLES[roleId]?.label || roleId || '-';
+}
 
 export function canAccessTab(user, tab) {
   if (!user) return true; // ยังไม่ได้ตั้งผู้ใช้ = เปิดใช้งานทุกเมนู (โหมดเดิม)

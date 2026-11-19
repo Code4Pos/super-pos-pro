@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
-import { Users, UserPlus, Edit3, ShieldCheck, AlertTriangle } from 'lucide-react';
+import { Users, UserPlus, Edit3, AlertTriangle } from 'lucide-react';
 import SettingsCard, { FieldLabel, inputClass } from './SettingsCard';
 import { usePOS } from '../../context/POSContext';
-import { ROLES, PERMISSION_LABELS } from '../../utils/rbac';
+import RolePermissionsEditor from './RolePermissionsEditor';
 
 const EMPTY_FORM = { id: null, name: '', role: 'cashier', pin: '', is_active: true };
 
@@ -11,7 +11,7 @@ const EMPTY_FORM = { id: null, name: '', role: 'cashier', pin: '', is_active: tr
  * ผู้ใช้คนแรกต้องเป็นผู้ดูแลระบบ และระบบจะเริ่มบังคับล็อกอินด้วย PIN ทันที
  */
 export default function UsersSettings() {
-  const { users, saveUser, authEnabled, currentUser } = usePOS();
+  const { users, saveUser, authEnabled, currentUser, roles } = usePOS();
   const [form, setForm] = useState(null);
   const [saving, setSaving] = useState(false);
 
@@ -76,7 +76,7 @@ export default function UsersSettings() {
                       <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 text-[10px]">ปิดใช้งาน</span>
                     )}
                   </div>
-                  <div className="text-slate-500">{ROLES[u.role]?.label || u.role}</div>
+                  <div className="text-slate-500">{roles[u.role]?.label || u.role}</div>
                 </div>
                 <button
                   type="button"
@@ -136,7 +136,7 @@ export default function UsersSettings() {
           <div>
             <FieldLabel>บทบาท</FieldLabel>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              {Object.entries(ROLES).map(([id, role]) => (
+              {Object.entries(roles).map(([id, role]) => (
                 <button
                   key={id}
                   type="button"
@@ -166,33 +166,8 @@ export default function UsersSettings() {
         </SettingsCard>
       )}
 
-      {/* ตารางสิทธิ์ตามบทบาท */}
-      <SettingsCard icon={ShieldCheck} title="สิทธิ์ตามบทบาท" description="อ้างอิงจากสเปก (Permission Matrix)">
-        <div className="overflow-x-auto">
-          <table className="w-full text-[11px] border-collapse min-w-[640px]">
-            <thead>
-              <tr className="bg-slate-100 text-slate-600">
-                <th className="py-2 px-2 text-left">สิทธิ์</th>
-                {Object.values(ROLES).map((r) => (
-                  <th key={r.label} className="py-2 px-2 text-center">{r.label}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {Object.entries(PERMISSION_LABELS).map(([perm, label]) => (
-                <tr key={perm}>
-                  <td className="py-1.5 px-2 font-semibold text-slate-700">{label}</td>
-                  {Object.values(ROLES).map((r) => (
-                    <td key={r.label} className="py-1.5 px-2 text-center">
-                      {r.permissions === '*' || r.permissions.includes(perm) ? '✅' : '—'}
-                    </td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </SettingsCard>
+      {/* แก้สิทธิ์ตามบทบาท / สร้างบทบาทใหม่ */}
+      <RolePermissionsEditor />
     </div>
   );
 }

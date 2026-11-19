@@ -6,7 +6,9 @@
  * - เพิ่มค่าตั้งใหม่: เพิ่มรายการใน SHOP_CONFIG_FIELDS ที่เดียว ไม่ต้องแก้ฐานข้อมูล
  *   หน้าตั้งค่าจะสร้างช่องกรอกให้อัตโนมัติจาก type (ดู components/settings/ShopConfigFields.jsx)
  * - type: 'boolean' | 'number' | 'select' | 'text' | 'image' | 'numberList' | 'multiSelect'
+ *   | 'json' (ค่าซับซ้อนที่มีหน้าตั้งค่าของตัวเอง ใช้ field.normalize ปรับรูปแบบ)
  */
+import { normalizeRoleConfig } from './rbac';
 
 export const PAYMENT_METHOD_OPTIONS = [
   { value: 'cash', label: 'เงินสด' },
@@ -148,12 +150,25 @@ export const SHOP_CONFIG_FIELDS = [
     label: 'ช่องทางชำระเงินที่เปิดใช้',
     hint: 'เงินสดเปิดเสมอ',
   },
+
+  // ===================== สิทธิ์ผู้ใช้ (roles) — แก้ที่หน้า ตั้งค่า › ผู้ใช้งาน & สิทธิ์ =====================
+  {
+    key: 'rolePermissions',
+    group: 'roles',
+    type: 'json',
+    default: {},
+    normalize: normalizeRoleConfig,
+    label: 'สิทธิ์ตามบทบาท (ปรับทับค่าเริ่มต้น / บทบาทที่ร้านสร้างเอง)',
+  },
 ];
 
 export const SHOP_CONFIG_KEYS = SHOP_CONFIG_FIELDS.map((f) => f.key);
 
+const cloneDefault = (value) =>
+  Array.isArray(value) ? [...value] : value && typeof value === 'object' ? { ...value } : value;
+
 export const SHOP_CONFIG_DEFAULTS = Object.fromEntries(
-  SHOP_CONFIG_FIELDS.map((f) => [f.key, Array.isArray(f.default) ? [...f.default] : f.default])
+  SHOP_CONFIG_FIELDS.map((f) => [f.key, cloneDefault(f.default)])
 );
 
 export function getShopConfigFields(group) {
@@ -174,7 +189,7 @@ const clampNumber = (value, field) => {
  */
 export function normalizeShopConfigValue(field, value) {
   if (value === undefined || value === null) {
-    return Array.isArray(field.default) ? [...field.default] : field.default;
+    return cloneDefault(field.default);
   }
   switch (field.type) {
     case 'boolean':
@@ -204,6 +219,8 @@ export function normalizeShopConfigValue(field, value) {
       });
       return field.options.map((o) => o.value).filter((v) => picked.includes(v));
     }
+    case 'json':
+      return field.normalize ? field.normalize(value) : value;
     default:
       return value;
   }

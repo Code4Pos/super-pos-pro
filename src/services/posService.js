@@ -3045,11 +3045,18 @@ export const posService = {
     }
 
     if (isSupabaseActive && supabase) {
+      let remoteError = null;
       try {
-        await supabase.from('app_users').upsert([record]);
+        const { error } = await supabase.from('app_users').upsert([record]);
+        remoteError = error;
       } catch (err) {
         console.warn('Supabase app_users fallback:', err.message);
       }
+      // บทบาทที่ร้านสร้างเองติด CHECK constraint ของฐานข้อมูลเดิม
+      if (remoteError?.code === '23514') {
+        throw new Error('ฐานข้อมูลยังไม่รองรับบทบาทที่ร้านสร้างเอง กรุณารัน Migration beta 0.3.14 ใน supabase/schema.sql');
+      }
+      if (remoteError) console.warn('Supabase app_users error:', remoteError.message);
     }
     setLocal(STORAGE_KEYS.USERS, nextUsers);
     return { savedUser: record, updatedUsers: nextUsers };

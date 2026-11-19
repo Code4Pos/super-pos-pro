@@ -4,7 +4,7 @@ import { printerService, SHARED_SHOP_SETTING_KEYS } from '../services/printerSer
 import { calculateEffectiveUnitPrice, calculateRoundingDiscount, calculateLoyaltyPoints } from '../utils/formatters';
 import { summarizeSplitPayments } from '../utils/payments';
 import { calculateCustomerCredit, checkCreditSale } from '../utils/credit';
-import { hasPermission, canAccessTab } from '../utils/rbac';
+import { hasPermission, canAccessTab, applyRoleConfig } from '../utils/rbac';
 import { validateTransfer } from '../utils/warehouses';
 import {
   calculateReservedByProduct,
@@ -14,7 +14,7 @@ import {
 
 const SESSION_STORAGE_KEY = 'siampos_session_v1';
 
-export const APP_VERSION = 'version beta 0.3.13';
+export const APP_VERSION = 'version beta 0.3.14';
 const HELD_BILLS_STORAGE_KEY = 'siampos_held_bills_v1';
 
 const POSContext = createContext(null);
@@ -112,6 +112,12 @@ export function POSProvider({ children, scope = 'all' }) {
     printerService.checkPrinterStatus();
     return unsub;
   }, []);
+
+  // สิทธิ์ตามบทบาทที่ร้านปรับเอง (ค่าตั้ง rolePermissions) — ใช้ก่อนคำนวณ can/canTab ทุกครั้งที่เปลี่ยน
+  const roles = useMemo(
+    () => applyRoleConfig(printerSettings.rolePermissions),
+    [printerSettings.rolePermissions]
+  );
 
   const updatePrinterSettings = useCallback(
     (newSettings) => {
@@ -1842,11 +1848,22 @@ export function POSProvider({ children, scope = 'all' }) {
       if (!posService.verifyUserPin(user, pin)) return null;
       return hasPermission(user, permission) ? user : null;
     },
-    [users]
+    // roles: คำนวณใหม่เมื่อสิทธิ์ของร้านเปลี่ยน
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [users, roles]
   );
 
-  const can = useCallback((permission) => hasPermission(currentUser, permission), [currentUser]);
-  const canTab = useCallback((tab) => canAccessTab(currentUser, tab), [currentUser]);
+  // roles อยู่ใน deps เพื่อให้เมนู/ปุ่มอัปเดตทันทีเมื่อแก้สิทธิ์
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const can = useCallback((permission) => hasPermission(currentUser, permission), [currentUser, roles]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const canTab = useCallback((tab) => canAccessTab(currentUser, tab), [currentUser, roles]);
+
+  // บันทึกสิทธิ์ตามบทบาท (ซิงค์ทุกเครื่องผ่าน shop_settings.config)
+  const saveRoleConfig = useCallback(
+    (config) => updatePrinterSettings({ rolePermissions: config }),
+    [updatePrinterSettings]
+  );
 
   const value = {
     appVersion: APP_VERSION,
@@ -1862,6 +1879,8 @@ export function POSProvider({ children, scope = 'all' }) {
     saveUser,
     can,
     canTab,
+    roles,
+    saveRoleConfig,
     verifyApprover,
     dbMode,
     loading,

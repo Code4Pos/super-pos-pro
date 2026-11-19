@@ -811,3 +811,12 @@ NOTIFY pgrst, 'reload schema';
 -- =====================================================================
 ALTER TABLE shop_settings ADD COLUMN IF NOT EXISTS config JSONB NOT NULL DEFAULT '{}'::jsonb;
 NOTIFY pgrst, 'reload schema';
+
+
+-- =====================================================================
+-- Migration beta 0.3.14: บทบาทที่ร้านสร้างเอง (สิทธิ์ผู้ใช้แบบกำหนดเอง)
+-- ยกเลิกการจำกัดค่า role ใน app_users ให้ใช้รหัสบทบาทที่ร้านสร้างเองได้ (เช่น custom-xxxx)
+-- สิทธิ์ของแต่ละบทบาทเก็บใน shop_settings.config คีย์ rolePermissions (ต้องรัน Migration beta 0.3.13 ก่อน)
+-- =====================================================================
+ALTER TABLE app_users DROP CONSTRAINT IF EXISTS app_users_role_check;
+NOTIFY pgrst, 'reload schema';
