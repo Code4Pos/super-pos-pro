@@ -34,6 +34,7 @@ import {
   Printer,
   ReceiptText,
   SlidersHorizontal,
+  Hash,
 } from 'lucide-react';
 import { usePOS } from '../../context/POSContext';
 
@@ -219,6 +220,7 @@ export const SIDEBAR_MENU_GROUPS = [
       { id: 'settings-shop', label: 'ข้อมูลร้าน', description: 'ชื่อ ที่อยู่ เบอร์โทรร้าน', icon: Store },
       { id: 'settings-receipt', label: 'ใบเสร็จ', description: 'โลโก้ ข้อมูลที่แสดง ขนาดตัวอักษร', icon: ReceiptText },
       { id: 'settings-sales', label: 'กติกาการขาย', description: 'ปุ่มลัด ปัดเศษ สต็อก ส่วนลด แต้ม', icon: SlidersHorizontal },
+      { id: 'settings-docs', label: 'เลขที่เอกสาร', description: 'คำนำหน้าและรูปแบบเลขที่', icon: Hash },
       { id: 'settings-tax', label: 'ภาษี (VAT)', description: 'รูปแบบคิด VAT และเลขผู้เสียภาษี', icon: Percent },
       { id: 'settings-payment', label: 'การชำระเงิน', description: 'พร้อมเพย์ และลิ้นชักเก็บเงิน', icon: Wallet },
       { id: 'settings-printer', label: 'เครื่องพิมพ์', description: 'กระดาษ การเชื่อมต่อ พิมพ์อัตโนมัติ', icon: Printer },

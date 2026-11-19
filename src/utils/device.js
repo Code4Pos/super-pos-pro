@@ -4,7 +4,10 @@
  * - id ของบิลสร้างในเครื่อง (UUID) ใช้เป็นกุญแจซิงค์ ส่งซ้ำได้โดยไม่เกิดบิลซ้ำ
  */
 
+import { resolveDocumentTemplate, DOCUMENT_TYPE_MAP } from './docNumbers';
+
 const DEVICE_CODE_MAX_LENGTH = 10;
+const DEFAULT_ORDER_TEMPLATE = DOCUMENT_TYPE_MAP.order.defaultTemplate;
 
 // รหัสเครื่องใช้ได้เฉพาะ A-Z 0-9 และขีด (ไม่เกิน 10 ตัว)
 export function sanitizeDeviceCode(code) {
@@ -29,25 +32,31 @@ export function localDateCode(date = new Date()) {
 }
 
 /**
- * คำนวณเลขที่บิลถัดไปของเครื่องนี้
- * ใช้ค่าที่มากกว่าระหว่างเลขรันที่จำไว้ กับเลขสูงสุดของบิลวันนี้ที่มีในเครื่อง (กันเลขซ้ำเมื่อค่าที่จำไว้หาย)
+ * คำนวณเลขที่บิลถัดไปของเครื่องนี้ ตามรูปแบบเลขที่ (ค่าตั้ง ตั้งค่า › เลขที่เอกสาร ต้องมี {DEVICE})
+ * ใช้ค่าที่มากกว่าระหว่างเลขรันที่จำไว้ กับเลขสูงสุดของบิลในรอบเดียวกันที่มีในเครื่อง (กันเลขซ้ำเมื่อค่าที่จำไว้หาย)
  * คืนค่า { orderNumber, device } โดย device คือค่าที่ต้องบันทึกกลับ
  */
-export function nextOrderNumber(device, existingOrders = [], date = new Date()) {
+export function nextOrderNumber(device, existingOrders = [], date = new Date(), template = DEFAULT_ORDER_TEMPLATE) {
   const code = sanitizeDeviceCode(device?.code) || generateDeviceCode();
-  const dateCode = localDateCode(date);
-  const prefix = `${code}-${dateCode}-`;
+  const { prefix, suffix, digits } = resolveDocumentTemplate(template, { date, deviceCode: code });
+  // รอบของเลขรัน = ส่วนหน้า|ส่วนหลังเลขรัน (เปลี่ยนวัน/เดือน/รูปแบบ = เริ่มนับใหม่)
+  const periodKey = `${prefix}|${suffix}`;
   const maxExisting = existingOrders.reduce((max, o) => {
     const num = String(o?.order_number || '');
-    if (!num.startsWith(prefix)) return max;
-    const seq = parseInt(num.slice(prefix.length), 10);
-    return Number.isFinite(seq) && seq > max ? seq : max;
+    if (!num.startsWith(prefix) || !num.endsWith(suffix)) return max;
+    const middle = num.slice(prefix.length, num.length - suffix.length);
+    if (!/^\d+$/.test(middle)) return max;
+    return Math.max(max, Number(middle));
   }, 0);
-  const remembered = device?.lastDate === dateCode ? Number(device.lastSeq) || 0 : 0;
+  // เครื่องที่อัปเดตจากเวอร์ชันก่อน 0.3.15 จำเลขรันด้วย lastDate (รูปแบบเริ่มต้น)
+  const legacyKey =
+    device?.lastDate && !device?.lastKey ? `${code}-${device.lastDate}-|` : null;
+  const remembered =
+    device?.lastKey === periodKey || legacyKey === periodKey ? Number(device.lastSeq) || 0 : 0;
   const seq = Math.max(remembered, maxExisting) + 1;
   return {
-    orderNumber: `${prefix}${String(seq).padStart(4, '0')}`,
-    device: { ...device, code, lastDate: dateCode, lastSeq: seq },
+    orderNumber: `${prefix}${String(seq).padStart(digits, '0')}${suffix}`,
+    device: { ...device, code, lastKey: periodKey, lastDate: localDateCode(date), lastSeq: seq },
   };
 }
 

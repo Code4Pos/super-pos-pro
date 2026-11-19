@@ -9,6 +9,7 @@
  *   | 'json' (ค่าซับซ้อนที่มีหน้าตั้งค่าของตัวเอง ใช้ field.normalize ปรับรูปแบบ)
  */
 import { normalizeRoleConfig } from './rbac';
+import { normalizeDocumentNumbering } from './docNumbers';
 
 export const PAYMENT_METHOD_OPTIONS = [
   { value: 'cash', label: 'เงินสด' },
@@ -159,6 +160,16 @@ export const SHOP_CONFIG_FIELDS = [
     default: {},
     normalize: normalizeRoleConfig,
     label: 'สิทธิ์ตามบทบาท (ปรับทับค่าเริ่มต้น / บทบาทที่ร้านสร้างเอง)',
+  },
+
+  // ===================== เลขที่เอกสาร (documents) — แก้ที่หน้า ตั้งค่า › เลขที่เอกสาร =====================
+  {
+    key: 'documentNumbering',
+    group: 'documents',
+    type: 'json',
+    default: {},
+    normalize: normalizeDocumentNumbering,
+    label: 'รูปแบบเลขที่เอกสาร (เก็บเฉพาะชนิดที่ต่างจากค่าเริ่มต้น)',
   },
 ];
 

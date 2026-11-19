@@ -2,7 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { MonitorSmartphone, LogOut, Save, UploadCloud, CheckCircle2, AlertTriangle, Server, RotateCcw } from 'lucide-react';
 import { usePOS } from '../../context/POSContext';
 import { posService } from '../../services/posService';
-import { sanitizeDeviceCode, localDateCode } from '../../utils/device';
+import { sanitizeDeviceCode } from '../../utils/device';
+import { getDocumentTemplate, previewDocumentNumber } from '../../utils/docNumbers';
 import { signOutShop, getShopAccountEmail } from '../auth/ShopAuthGate';
 import { getServerConfig, saveServerConfig, resetServerConfig } from '../../lib/supabase';
 import { AppUpdatePanel } from '../common/AppUpdate';
@@ -17,7 +18,7 @@ const DEFAULT_MODE_OPTIONS = [
  * ค่าตั้งเฉพาะเครื่องนี้ (ไม่ซิงค์ไปเครื่องอื่น): รหัสเครื่องที่ใช้ขึ้นต้นเลขที่บิล, โหมดเริ่มต้นของเครื่อง, เซิร์ฟเวอร์ฐานข้อมูล, เครื่องมืออัปโหลดข้อมูลจากเครื่องหลัก และบัญชีร้านที่ล็อกอินอยู่
  */
 export default function DeviceSettings() {
-  const { showToast, dbMode, isOffline, uploadLocalData } = usePOS();
+  const { showToast, dbMode, isOffline, uploadLocalData, printerSettings } = usePOS();
   const [device, setDevice] = useState(() => posService.getDeviceSettings());
   const [code, setCode] = useState(device.code);
   const [email, setEmail] = useState('');
@@ -148,7 +149,12 @@ export default function DeviceSettings() {
             </button>
           </div>
           <p className="text-[11px] text-slate-500">
-            ตัวอย่างเลขที่บิล: <span className="font-mono font-bold text-slate-700">{clean || '???'}-{localDateCode()}-0001</span>
+            ตัวอย่างเลขที่บิล:{' '}
+            <span className="font-mono font-bold text-slate-700">
+              {previewDocumentNumber(getDocumentTemplate(printerSettings.documentNumbering, 'order'), {
+                deviceCode: clean || '???',
+              })}
+            </span>
             {' '}ตั้งรหัสไม่ซ้ำกันในแต่ละเครื่อง (เช่น POS1, POS2) เพื่อให้เลขที่บิลไม่ชนกันแม้ขายตอนออฟไลน์
           </p>
         </div>

@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { posService, normalizeAndSyncProducts } from '../services/posService';
+import { posService, normalizeAndSyncProducts, nextLocalDocNumber } from '../services/posService';
 import { printerService, SHARED_SHOP_SETTING_KEYS } from '../services/printerService';
 import { calculateEffectiveUnitPrice, calculateRoundingDiscount, calculateLoyaltyPoints } from '../utils/formatters';
 import { summarizeSplitPayments } from '../utils/payments';
@@ -14,7 +14,7 @@ import {
 
 const SESSION_STORAGE_KEY = 'siampos_session_v1';
 
-export const APP_VERSION = 'version beta 0.3.14';
+export const APP_VERSION = 'version beta 0.3.15';
 const HELD_BILLS_STORAGE_KEY = 'siampos_held_bills_v1';
 
 const POSContext = createContext(null);
@@ -1258,7 +1258,8 @@ export function POSProvider({ children, scope = 'all' }) {
       const record = {
         id: `trf-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
         // ใช้วันที่ตามเวลาเครื่อง (ไม่ใช่ UTC) เพื่อไม่ให้เลขที่ช่วงเช้ามืดเป็นวันก่อนหน้า
-        transfer_number: `TRF-${new Date().toLocaleDateString('sv-SE').slice(2).replace(/-/g, '')}-${Math.floor(100 + Math.random() * 900)}`,
+        // เลขที่ตามรูปแบบของร้าน (ตั้งค่า › เลขที่เอกสาร)
+        transfer_number: nextLocalDocNumber('stockTransfer', stockTransfers.map((t) => t.transfer_number)),
         from_warehouse_id: fromId,
         to_warehouse_id: toId,
         items: items
@@ -1281,7 +1282,7 @@ export function POSProvider({ children, scope = 'all' }) {
         return null;
       }
     },
-    [products, inventoryBalances, warehouses, currentUser, dbMode, applyTransferResult, showToast]
+    [products, inventoryBalances, warehouses, currentUser, dbMode, applyTransferResult, showToast, stockTransfers]
   );
 
   const changeStockTransferStatus = useCallback(
@@ -1323,7 +1324,7 @@ export function POSProvider({ children, scope = 'all' }) {
       }
       const record = {
         id: `so-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-        so_number: `SO-${new Date().toLocaleDateString('sv-SE').slice(2).replace(/-/g, '')}-${Math.floor(100 + Math.random() * 900)}`,
+        so_number: nextLocalDocNumber('salesOrder', salesOrders.map((o) => o.so_number)),
         customer_id: customer.id,
         customer_name: customer.shop_name && customer.shop_name !== '-' ? `${customer.name} (${customer.shop_name})` : customer.name,
         items: buildSalesOrderItems(items, products),
@@ -1338,7 +1339,7 @@ export function POSProvider({ children, scope = 'all' }) {
       showToast(`สร้างใบสั่งขาย ${record.so_number} และจองสินค้าแล้ว`, 'success');
       return result.saved;
     },
-    [products, reservedByProduct, currentUser, dbMode, showToast]
+    [products, reservedByProduct, currentUser, dbMode, showToast, salesOrders]
   );
 
   const cancelSalesOrder = useCallback(
@@ -1444,7 +1445,7 @@ export function POSProvider({ children, scope = 'all' }) {
       }
       const record = {
         id: `cc-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-        count_number: `CC-${nowIso.slice(2, 10).replace(/-/g, '')}-${Math.floor(100 + Math.random() * 900)}`,
+        count_number: nextLocalDocNumber('stockCount', stockCounts.map((c) => c.count_number)),
         scope_label: scopeLabel,
         status: 'counting',
         items,
@@ -1455,7 +1456,7 @@ export function POSProvider({ children, scope = 'all' }) {
       showToast(`สร้างใบตรวจนับ ${saved.count_number} (${items.length} รายการ)`, 'success');
       return saved;
     },
-    [products, currentUser, persistStockCount, showToast]
+    [products, currentUser, persistStockCount, showToast, stockCounts]
   );
 
   const saveStockCountProgress = useCallback(

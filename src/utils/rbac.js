@@ -7,6 +7,7 @@ const SETTINGS_TABS = [
   'settings-shop',
   'settings-receipt',
   'settings-sales',
+  'settings-docs',
   'settings-tax',
   'settings-payment',
   'settings-printer',

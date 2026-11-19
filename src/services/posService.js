@@ -1,6 +1,7 @@
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { B2B_CUSTOMER_DEFAULTS, normalizeB2BFields } from '../utils/credit';
-import { calculateOrderVat, getNextTaxInvoiceNumber, getTaxInvoicePrefix } from '../utils/tax';
+import { calculateOrderVat } from '../utils/tax';
+import { getDocumentTemplate, nextDocumentNumber, resolveDocumentTemplate } from '../utils/docNumbers';
 import { hashPin, generateSalt } from '../utils/rbac';
 import { consumeLots, addToLots, restoreToLots, summarizeLotsByProduct } from '../utils/lots';
 import { normalizeWarehouses, applyBalanceDelta, TRANSIT_WAREHOUSE_ID, SALES_WAREHOUSE_ID } from '../utils/warehouses';
@@ -473,6 +474,23 @@ async function loadRemoteWithLocal(table, storageKey, limit = 1000, orderField =
  * บันทึกเอกสารลง Supabase (ถ้าใช้งานอยู่) แล้วเก็บสำเนาในเครื่องเสมอ
  * คืนค่าเอกสารที่บันทึก และรายการทั้งหมดในเครื่อง
  */
+/**
+ * รูปแบบเลขที่ของเอกสารแต่ละชนิดตามค่าตั้งร้าน (ตั้งค่า › เลขที่เอกสาร)
+ */
+function getDocTemplate(docType) {
+  return getDocumentTemplate(printerService.getSettings().documentNumbering, docType);
+}
+
+/**
+ * เลขที่ถัดไปจากเลขที่ที่มีในเครื่อง (เอกสารที่ไม่มีการตรวจเลขซ้ำกับฐานข้อมูล)
+ */
+function nextLocalDocNumber(docType, existingNumbers = [], date = new Date()) {
+  return nextDocumentNumber(getDocTemplate(docType), existingNumbers, {
+    date,
+    deviceCode: getLocal(STORAGE_KEYS.DEVICE, {})?.code || '',
+  });
+}
+
 async function insertRemoteWithLocal(table, storageKey, record, localIdPrefix, isSupabaseActive) {
   let saved = { ...record, id: `${localIdPrefix}-${Date.now()}` };
   if (
@@ -494,37 +512,43 @@ async function insertRemoteWithLocal(table, storageKey, record, localIdPrefix, i
 }
 
 /**
- * บันทึกเอกสารภาษีพร้อมออกเลขที่เรียงต่อเนื่องรายเดือน (ห้ามซ้ำ)
- * โหมด Supabase อ่านเลขล่าสุดจากฐานข้อมูลก่อน และลองเลขถัดไปเมื่อชน unique กับเครื่องอื่น
+ * บันทึกเอกสารพร้อมออกเลขที่เรียงต่อเนื่องตามรูปแบบเลขที่ของร้าน (ห้ามซ้ำ)
+ * โหมด Supabase อ่านเลขล่าสุดของรอบเดียวกันจากฐานข้อมูลก่อน และลองเลขถัดไปเมื่อชน unique กับเครื่องอื่น
+ * - remoteAllowed = false: บันทึกเฉพาะในเครื่อง (เช่น ลูกค้าที่ยังไม่ได้อยู่บนฐานข้อมูล)
  */
 async function insertWithRunningNumber({
   table,
   storageKey,
   numberField,
-  code,
+  docType,
+  localIdPrefix = docType,
   baseRecord,
   existingNumbers = [],
   isSupabaseActive,
+  remoteAllowed = true,
   now = new Date(),
 }) {
+  const template = getDocTemplate(docType);
+  const templateOptions = { date: now, deviceCode: getLocal(STORAGE_KEYS.DEVICE, {})?.code || '' };
+  const { prefix } = resolveDocumentTemplate(template, templateOptions);
   const usedNumbers = [...existingNumbers];
-  const remoteEnabled = isSupabaseActive && supabase;
+  const remoteEnabled = Boolean(isSupabaseActive && supabase && remoteAllowed);
   if (remoteEnabled) {
     try {
       const { data } = await supabase
         .from(table)
         .select(numberField)
-        .like(numberField, `${getTaxInvoicePrefix(now, code)}%`);
+        .like(numberField, `${prefix}%`);
       (data || []).forEach((r) => usedNumbers.push(r[numberField]));
     } catch {
       // ยังไม่มีตาราง ใช้เลขจากในเครื่อง
     }
   }
 
-  const localId = () => `${code.toLowerCase()}-${Date.now()}`;
+  const localId = () => `${localIdPrefix}-${Date.now()}`;
   let saved = null;
   for (let attempt = 0; attempt < 5 && !saved; attempt += 1) {
-    const record = { ...baseRecord, [numberField]: getNextTaxInvoiceNumber(usedNumbers, now, code) };
+    const record = { ...baseRecord, [numberField]: nextDocumentNumber(template, usedNumbers, templateOptions) };
     if (!remoteEnabled) {
       saved = { ...record, id: localId() };
       break;
@@ -1036,10 +1060,10 @@ function sanitizeSupplierRow(s = {}, nowIso = new Date().toISOString()) {
   };
 }
 
-function generateImportNumber(nowIso) {
-  const datePart = nowIso.slice(2, 10).replace(/-/g, '');
-  const randPart = Math.floor(100 + Math.random() * 900);
-  return `IMP-${datePart}-${randPart}`;
+// เลขที่ใบนำเข้าถัดไปตามรูปแบบของร้าน (นับจากใบนำเข้าในเครื่อง + ที่ออกไปแล้วในรอบนี้)
+function generateImportNumber(nowIso, extraNumbers = []) {
+  const existing = getLocal(STORAGE_KEYS.STOCK_IMPORTS, []).map((imp) => imp.import_number);
+  return nextLocalDocNumber('stockImport', [...existing, ...extraNumbers], new Date(nowIso || Date.now()));
 }
 
 function calculateImportTotals(items = []) {
@@ -1188,6 +1212,8 @@ async function applyImportItemsToStock(
   await addToWarehouseBalances(addStockByProductId, warehouseId, isSupabaseActive, nowIso);
   return syncedProducts;
 }
+
+export { nextLocalDocNumber };
 
 export const posService = {
   /**
@@ -2984,10 +3010,7 @@ export const posService = {
    */
   async recordCustomerPayment(paymentData, isSupabaseActive) {
     const nowIso = new Date().toISOString();
-    const datePart = nowIso.slice(2, 10).replace(/-/g, '');
-    const randomPart = Math.floor(100 + Math.random() * 900);
     const record = {
-      receipt_number: `RCV-${datePart}-${randomPart}`,
       customer_id: paymentData.customer_id,
       customer_name: paymentData.customer_name || '',
       amount: Math.round((Number(paymentData.amount) || 0) * 100) / 100,
@@ -2996,13 +3019,18 @@ export const posService = {
       created_at: nowIso,
     };
 
-    const { saved, updated } = await insertRemoteWithLocal(
-      'customer_payments',
-      STORAGE_KEYS.CUSTOMER_PAYMENTS,
-      record,
-      'rcv',
-      isSupabaseActive
-    );
+    const { saved, updated } = await insertWithRunningNumber({
+      table: 'customer_payments',
+      storageKey: STORAGE_KEYS.CUSTOMER_PAYMENTS,
+      numberField: 'receipt_number',
+      docType: 'paymentReceipt',
+      localIdPrefix: 'rcv',
+      baseRecord: record,
+      existingNumbers: getLocal(STORAGE_KEYS.CUSTOMER_PAYMENTS, []).map((p) => p.receipt_number),
+      isSupabaseActive,
+      // ลูกค้าที่ยังไม่ได้อยู่บนฐานข้อมูล (id ในเครื่อง cus-...) บันทึกเฉพาะในเครื่อง
+      remoteAllowed: Boolean(record.customer_id) && !String(record.customer_id).startsWith('cus-'),
+    });
     return { savedPayment: saved, updatedPayments: updated };
   },
 
@@ -3117,7 +3145,8 @@ export const posService = {
       table: 'tax_invoices',
       storageKey: STORAGE_KEYS.TAX_INVOICES,
       numberField: 'invoice_number',
-      code: 'TX',
+      docType: 'taxInvoice',
+      localIdPrefix: 'tx',
       baseRecord,
       existingNumbers: existingInvoices.map((t) => t.invoice_number),
       isSupabaseActive,
@@ -3164,7 +3193,8 @@ export const posService = {
       table: 'tax_notes',
       storageKey: STORAGE_KEYS.TAX_NOTES,
       numberField: 'note_number',
-      code: isCredit ? 'CN' : 'DN',
+      docType: isCredit ? 'creditNote' : 'debitNote',
+      localIdPrefix: isCredit ? 'cn' : 'dn',
       baseRecord,
       existingNumbers: existingNotes.map((n) => n.note_number),
       isSupabaseActive,
@@ -3230,8 +3260,6 @@ export const posService = {
    */
   async createBillingNote(noteData, isSupabaseActive) {
     const nowIso = new Date().toISOString();
-    const datePart = nowIso.slice(2, 10).replace(/-/g, '');
-    const randomPart = Math.floor(100 + Math.random() * 900);
     const bills = (noteData.bills || []).map((b) => ({
       order_id: b.order_id,
       order_number: b.order_number,
@@ -3241,7 +3269,6 @@ export const posService = {
     }));
     const customer = noteData.customer || {};
     const record = {
-      billing_number: `BN-${datePart}-${randomPart}`,
       customer_id: customer.id,
       customer_name: customer.name || '',
       customer_tax_id: customer.tax_id || '',
@@ -3255,13 +3282,17 @@ export const posService = {
       created_at: nowIso,
     };
 
-    const { saved, updated } = await insertRemoteWithLocal(
-      'billing_notes',
-      STORAGE_KEYS.BILLING_NOTES,
-      record,
-      'bn',
-      isSupabaseActive
-    );
+    const { saved, updated } = await insertWithRunningNumber({
+      table: 'billing_notes',
+      storageKey: STORAGE_KEYS.BILLING_NOTES,
+      numberField: 'billing_number',
+      docType: 'billingNote',
+      localIdPrefix: 'bn',
+      baseRecord: record,
+      existingNumbers: getLocal(STORAGE_KEYS.BILLING_NOTES, []).map((n) => n.billing_number),
+      isSupabaseActive,
+      remoteAllowed: Boolean(record.customer_id) && !String(record.customer_id).startsWith('cus-'),
+    });
     return { savedNote: saved, updatedNotes: updated };
   },
 
@@ -3272,7 +3303,12 @@ export const posService = {
     const nowIso = new Date().toISOString();
     const orders = getLocal(STORAGE_KEYS.ORDERS, INITIAL_ORDERS);
     // เลขที่บิลแบบ <รหัสเครื่อง>-YYMMDD-<เลขรัน> และ id ฝั่งแอป (ใช้ id เดียวกันทั้งในเครื่องและฐานข้อมูล)
-    const { orderNumber, device } = nextOrderNumber(getLocal(STORAGE_KEYS.DEVICE, {}), orders);
+    const { orderNumber, device } = nextOrderNumber(
+      getLocal(STORAGE_KEYS.DEVICE, {}),
+      orders,
+      new Date(),
+      getDocTemplate('order')
+    );
     setLocal(STORAGE_KEYS.DEVICE, device);
     const orderId = generateUuid();
 
