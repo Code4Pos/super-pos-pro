@@ -1,6 +1,7 @@
 import React, { useState, memo } from 'react';
 import { Package, Trash2, Edit3, Plus } from 'lucide-react';
 import { formatCurrency } from '../../utils/formatters';
+import { getMinStock } from '../../utils/stockAlerts';
 
 /**
  * ProductCard (Minimal & Mobile-Friendly):
@@ -16,11 +17,12 @@ function ProductCardComponent({
   onEditQtyNumpad,
   onRequestRemoveFromCart,
   allowOverStock = false, // ร้านตั้งให้ขายเกินสต็อกได้ (ค่าตั้ง stockPolicy ไม่ใช่ 'block')
+  defaultMinStock = 10, // จุดเตือนสต็อกต่ำเริ่มต้นของร้าน
 }) {
   const [imgError, setImgError] = useState(false);
 
   const stock = Number(product.stock) || 0;
-  const minStock = Number(product.min_stock) || 10;
+  const minStock = getMinStock(product, defaultMinStock);
   const isOutOfStock = stock <= 0;
   const isLowStock = !isOutOfStock && stock <= minStock;
   const canAdd = !isOutOfStock || allowOverStock;
@@ -184,7 +186,8 @@ const ProductCard = memo(ProductCardComponent, (prev, next) => {
     prev.product === next.product &&
     prev.qtyInCart === next.qtyInCart &&
     prev.isWholesaleActiveInCart === next.isWholesaleActiveInCart &&
-    prev.allowOverStock === next.allowOverStock
+    prev.allowOverStock === next.allowOverStock &&
+    prev.defaultMinStock === next.defaultMinStock
   );
 });
 

@@ -35,8 +35,10 @@ import {
   ReceiptText,
   SlidersHorizontal,
   Hash,
+  BellRing,
 } from 'lucide-react';
 import { usePOS } from '../../context/POSContext';
+import { countLowStock } from '../../utils/stockAlerts';
 
 /**
  * รายการหน้าสำหรับ Mobile Bottom Navigation (เฉพาะหลังร้าน — ไม่มีเมนูขายหน้าร้าน)
@@ -221,6 +223,7 @@ export const SIDEBAR_MENU_GROUPS = [
       { id: 'settings-receipt', label: 'ใบเสร็จ', description: 'โลโก้ ข้อมูลที่แสดง ขนาดตัวอักษร', icon: ReceiptText },
       { id: 'settings-sales', label: 'กติกาการขาย', description: 'ปุ่มลัด ปัดเศษ สต็อก ส่วนลด แต้ม', icon: SlidersHorizontal },
       { id: 'settings-docs', label: 'เลขที่เอกสาร', description: 'คำนำหน้าและรูปแบบเลขที่', icon: Hash },
+      { id: 'settings-defaults', label: 'การแจ้งเตือน & ค่าเริ่มต้น', description: 'สต็อกต่ำ หมดอายุ เครดิต เมนูที่ใช้', icon: BellRing },
       { id: 'settings-tax', label: 'ภาษี (VAT)', description: 'รูปแบบคิด VAT และเลขผู้เสียภาษี', icon: Percent },
       { id: 'settings-payment', label: 'การชำระเงิน', description: 'พร้อมเพย์ และลิ้นชักเก็บเงิน', icon: Wallet },
       { id: 'settings-printer', label: 'เครื่องพิมพ์', description: 'กระดาษ การเชื่อมต่อ พิมพ์อัตโนมัติ', icon: Printer },
@@ -235,7 +238,7 @@ export default function Sidebar({
   isOpen = false,
   onToggleSidebar,
 }) {
-  const { products, dbMode, resetDemo, appVersion, canTab, currentUser, authEnabled } = usePOS();
+  const { products, dbMode, resetDemo, appVersion, canTab, currentUser, authEnabled, printerSettings } = usePOS();
 
   // แสดงเฉพาะเมนูที่บทบาทของผู้ใช้มีสิทธิ์เข้า (กลุ่มที่ไม่เหลือเมนูย่อยจะถูกซ่อน)
   const visibleGroups = SIDEBAR_MENU_GROUPS.map((group) =>
@@ -256,9 +259,9 @@ export default function Sidebar({
   const [collapsedPopoverGroupId, setCollapsedPopoverGroupId] = useState(null);
   const sidebarRef = useRef(null);
 
-  const lowStockCount = products.filter(
-    (p) => Number(p.stock) <= Number(p.min_stock || 10)
-  ).length;
+  // นับสินค้าใกล้หมดตามจุดเตือนของร้าน (ปิดป้ายได้ที่ ตั้งค่า › การแจ้งเตือน & ค่าเริ่มต้น)
+  const lowStockCount =
+    printerSettings?.showLowStockBadge === false ? 0 : countLowStock(products, printerSettings?.defaultMinStock);
 
   // เปิดกลุ่มเมนูอัตโนมัติเมื่อ activeTab อยู่ในกลุ่มนั้น
   useEffect(() => {

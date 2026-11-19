@@ -8,6 +8,7 @@ const SETTINGS_TABS = [
   'settings-receipt',
   'settings-sales',
   'settings-docs',
+  'settings-defaults',
   'settings-tax',
   'settings-payment',
   'settings-printer',
@@ -172,7 +173,38 @@ export function getRoleLabel(roleId) {
   return ROLES[roleId]?.label || roleId || '-';
 }
 
+/**
+ * โมดูลที่ร้านปิดได้ถ้าไม่ได้ใช้ (ค่าตั้ง disabledModules) — ซ่อนเมนูและปิดสิทธิ์ที่เกี่ยวข้องกับทุกคนรวมถึงผู้ดูแลระบบ
+ */
+export const OPTIONAL_MODULES = [
+  { id: 'warehouses', label: 'คลังหลายแห่ง & โอนย้าย', tabs: ['warehouses'], permissions: ['transfer_stock', 'manage_warehouses'] },
+  { id: 'lots', label: 'Lot / วันหมดอายุ', tabs: ['lots'], permissions: [] },
+  { id: 'salesOrders', label: 'ใบสั่งขายส่ง / จองสินค้า', tabs: ['sales-orders'], permissions: ['sales_order'] },
+  { id: 'stockCount', label: 'ตรวจนับสต็อก', tabs: ['stock-count'], permissions: [] },
+  { id: 'reorder', label: 'แนะนำสั่งซื้อ (PO)', tabs: ['reorder'], permissions: [] },
+  { id: 'taxInvoice', label: 'ใบกำกับภาษีเต็มรูป & รายงานภาษีขาย', tabs: ['sales-tax'], permissions: ['issue_tax_invoice'] },
+];
+
+let DISABLED_TABS = new Set();
+let DISABLED_PERMISSIONS = new Set();
+
+/**
+ * ใช้ค่าตั้งโมดูลที่ปิดไว้ (เรียกจาก POSContext)
+ */
+export function applyDisabledModules(moduleIds = []) {
+  const off = OPTIONAL_MODULES.filter((m) => (moduleIds || []).includes(m.id));
+  DISABLED_TABS = new Set(off.flatMap((m) => m.tabs));
+  DISABLED_PERMISSIONS = new Set(off.flatMap((m) => m.permissions));
+  return off.map((m) => m.id);
+}
+
+export function isModuleEnabled(moduleId) {
+  const mod = OPTIONAL_MODULES.find((m) => m.id === moduleId);
+  return !mod || !mod.tabs.some((t) => DISABLED_TABS.has(t));
+}
+
 export function canAccessTab(user, tab) {
+  if (DISABLED_TABS.has(tab)) return false; // โมดูลที่ร้านปิดไว้
   if (!user) return true; // ยังไม่ได้ตั้งผู้ใช้ = เปิดใช้งานทุกเมนู (โหมดเดิม)
   const role = ROLES[user.role];
   if (!role) return false;
@@ -180,6 +212,7 @@ export function canAccessTab(user, tab) {
 }
 
 export function hasPermission(user, permission) {
+  if (DISABLED_PERMISSIONS.has(permission)) return false;
   if (!user) return true;
   const role = ROLES[user.role];
   if (!role) return false;

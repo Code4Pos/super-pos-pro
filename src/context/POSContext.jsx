@@ -4,7 +4,7 @@ import { printerService, SHARED_SHOP_SETTING_KEYS } from '../services/printerSer
 import { calculateEffectiveUnitPrice, calculateRoundingDiscount, calculateLoyaltyPoints } from '../utils/formatters';
 import { summarizeSplitPayments } from '../utils/payments';
 import { calculateCustomerCredit, checkCreditSale } from '../utils/credit';
-import { hasPermission, canAccessTab, applyRoleConfig } from '../utils/rbac';
+import { hasPermission, canAccessTab, applyRoleConfig, applyDisabledModules } from '../utils/rbac';
 import { validateTransfer } from '../utils/warehouses';
 import {
   calculateReservedByProduct,
@@ -14,7 +14,7 @@ import {
 
 const SESSION_STORAGE_KEY = 'siampos_session_v1';
 
-export const APP_VERSION = 'version beta 0.3.15';
+export const APP_VERSION = 'version beta 0.3.16';
 const HELD_BILLS_STORAGE_KEY = 'siampos_held_bills_v1';
 
 const POSContext = createContext(null);
@@ -114,10 +114,11 @@ export function POSProvider({ children, scope = 'all' }) {
   }, []);
 
   // สิทธิ์ตามบทบาทที่ร้านปรับเอง (ค่าตั้ง rolePermissions) — ใช้ก่อนคำนวณ can/canTab ทุกครั้งที่เปลี่ยน
-  const roles = useMemo(
-    () => applyRoleConfig(printerSettings.rolePermissions),
-    [printerSettings.rolePermissions]
-  );
+  // รวมถึงโมดูลที่ร้านปิดไว้ (ค่าตั้ง disabledModules) ซึ่งซ่อนเมนูและปิดสิทธิ์ที่เกี่ยวข้อง
+  const roles = useMemo(() => {
+    applyDisabledModules(printerSettings.disabledModules);
+    return applyRoleConfig(printerSettings.rolePermissions);
+  }, [printerSettings.rolePermissions, printerSettings.disabledModules]);
 
   const updatePrinterSettings = useCallback(
     (newSettings) => {

@@ -52,11 +52,12 @@ export function calculateReorderSuggestions(products = [], orders = [], options 
       const dailyDemand = demand.get(p.id) || 0;
       const leadTimeDays = Math.max(
         0,
-        Number(p.lead_time_days ?? REORDER_DEFAULTS.leadTimeDays) || 0
+        Number(p.lead_time_days ?? options.leadTimeDays ?? REORDER_DEFAULTS.leadTimeDays) || 0
       );
+      // ไม่ได้ตั้งสต็อกสำรองและสต็อกขั้นต่ำ = ใช้จุดเตือนสต็อกต่ำเริ่มต้นของร้าน
       const safetyStock = Math.max(
         0,
-        Number(p.safety_stock ?? p.min_stock ?? 0) || 0
+        Number(p.safety_stock ?? p.min_stock ?? options.defaultMinStock ?? 0) || 0
       );
       const stock = Number(p.stock) || 0;
       const reorderPoint = Math.ceil(dailyDemand * leadTimeDays + safetyStock);

@@ -25,6 +25,7 @@ import {
   Check,
 } from 'lucide-react';
 import { usePOS } from '../context/POSContext';
+import { getMinStock } from '../utils/stockAlerts';
 import ProductModal from '../components/inventory/ProductModal';
 import StockModal from '../components/inventory/StockModal';
 import CategoryUnitModal from '../components/inventory/CategoryUnitModal';
@@ -223,7 +224,9 @@ function TablePaginationBar({
 }
 
 export default function InventoryPage() {
-  const { products, trashedProducts, categories, deleteProduct } = usePOS();
+  const { products, trashedProducts, categories, deleteProduct, printerSettings } = usePOS();
+  // จุดเตือนสต็อกต่ำเริ่มต้นของร้าน (สินค้าที่ไม่ได้ตั้งสต็อกขั้นต่ำ)
+  const defaultMinStock = printerSettings?.defaultMinStock;
 
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('all');
@@ -300,7 +303,7 @@ export default function InventoryPage() {
 
     products.forEach((p) => {
       const s = Number(p.stock) || 0;
-      const minS = Number(p.min_stock) || 10;
+      const minS = getMinStock(p, defaultMinStock);
       totalUnits += s;
       totalCostValue += s * (Number(p.cost_price) || 0);
       if (s <= minS) lowStockCount += 1;
@@ -338,7 +341,7 @@ export default function InventoryPage() {
         return false;
       }
       const stock = Number(p.stock) || 0;
-      const minStock = Number(p.min_stock) || 10;
+      const minStock = getMinStock(p, defaultMinStock);
       if (stockFilter === 'low' && (stock > minStock || stock <= 0)) return false;
       if (stockFilter === 'out' && stock > 0) return false;
 
@@ -734,7 +737,7 @@ export default function InventoryPage() {
         ) : (
           paginatedProducts.map((product) => {
             const stock = Number(product.stock) || 0;
-            const minStock = Number(product.min_stock) || 10;
+            const minStock = getMinStock(product, defaultMinStock);
             const isLow = stock <= minStock && stock > 0;
             const isOut = stock <= 0;
             const catName =
@@ -988,7 +991,7 @@ export default function InventoryPage() {
               ) : (
                 paginatedProducts.map((product) => {
                   const stock = Number(product.stock) || 0;
-                  const minStock = Number(product.min_stock) || 10;
+                  const minStock = getMinStock(product, defaultMinStock);
                   const isLow = stock <= minStock && stock > 0;
                   const isOut = stock <= 0;
                   const isChecked = checkedProductIds.includes(product.id);

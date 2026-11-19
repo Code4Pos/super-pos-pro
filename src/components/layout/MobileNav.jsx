@@ -2,9 +2,10 @@ import React, { useState } from 'react';
 import { LayoutGrid, X, Store } from 'lucide-react';
 import { NAV_ITEMS, SIDEBAR_MENU_GROUPS } from './Sidebar';
 import { usePOS } from '../../context/POSContext';
+import { countLowStock } from '../../utils/stockAlerts';
 
 export default function MobileNav({ activeTab, setActiveTab }) {
-  const { products, canTab } = usePOS();
+  const { products, canTab, printerSettings } = usePOS();
   const [isMoreOpen, setIsMoreOpen] = useState(false);
 
   // แสดงเฉพาะเมนูหลักที่บทบาทของผู้ใช้มีสิทธิ์เข้า
@@ -19,9 +20,9 @@ export default function MobileNav({ activeTab, setActiveTab }) {
     group.isDropdown ? group.children.length > 0 : canTab(group.id)
   );
 
-  const lowStockCount = products.filter(
-    (p) => Number(p.stock) <= Number(p.min_stock || 10)
-  ).length;
+  // นับสินค้าใกล้หมดตามจุดเตือนของร้าน (ปิดป้ายได้ที่ ตั้งค่า › การแจ้งเตือน & ค่าเริ่มต้น)
+  const lowStockCount =
+    printerSettings?.showLowStockBadge === false ? 0 : countLowStock(products, printerSettings?.defaultMinStock);
 
   const isCurrentInQuickNav = items.some((i) => i.id === activeTab);
 

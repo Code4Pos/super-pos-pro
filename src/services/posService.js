@@ -1858,7 +1858,11 @@ export const posService = {
       wholesale_min_qty: Math.max(1, Number(productData.wholesale_min_qty) || 6),
       is_wholesale_enabled: isWholesaleEnabled,
       stock: Number(productData.stock) || 0,
-      min_stock: Number(productData.min_stock) || 10,
+      // ไม่ได้ระบุ = จุดเตือนเริ่มต้นของร้าน, ระบุ 0 = ไม่เตือนสต็อกต่ำ
+      min_stock:
+        productData.min_stock === '' || productData.min_stock === null || productData.min_stock === undefined
+          ? Number(printerService.getSettings().defaultMinStock) || 0
+          : Math.max(0, Number(productData.min_stock) || 0),
       pack_size: (productData.pack_size || '').trim(),
       image_url: (productData.image_url || '').trim(),
       selling_units: sanitizedSellingUnits,

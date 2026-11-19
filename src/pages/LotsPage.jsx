@@ -12,7 +12,7 @@ import { formatCurrency, formatDateTime, formatNumber } from '../utils/formatter
 
 const EXPIRY_META = {
   expired: { label: 'หมดอายุแล้ว', className: 'bg-rose-50 text-rose-700 border-rose-200' },
-  near: { label: `ใกล้หมดอายุ (≤${NEAR_EXPIRY_DAYS} วัน)`, className: 'bg-amber-50 text-amber-700 border-amber-200' },
+  near: { label: 'ใกล้หมดอายุ', className: 'bg-amber-50 text-amber-700 border-amber-200' },
   ok: { label: 'ปกติ', className: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
   none: { label: 'ไม่ระบุวันหมดอายุ', className: 'bg-slate-100 text-slate-500 border-slate-200' },
 };
@@ -28,7 +28,10 @@ function formatExpiry(dateStr) {
  * - ตั้งค่าสินค้าที่ติดตาม Lot และกลยุทธ์ตัดสต็อก FEFO/FIFO
  */
 export default function LotsPage() {
-  const { products, productLots = [], updateLotSettings, reconcileProductLots, updateLotDetails, can } = usePOS();
+  const { products, productLots = [], updateLotSettings, reconcileProductLots, updateLotDetails, can, printerSettings } =
+    usePOS();
+  // จำนวนวันที่ถือว่าใกล้หมดอายุ (ค่าตั้งร้าน nearExpiryDays)
+  const nearDays = Number(printerSettings?.nearExpiryDays) || NEAR_EXPIRY_DAYS;
   const [viewMode, setViewMode] = useState('lots'); // 'lots' | 'settings'
   const [statusFilter, setStatusFilter] = useState('all');
   const [search, setSearch] = useState('');
@@ -44,8 +47,8 @@ export default function LotsPage() {
     () =>
       productLots
         .filter((l) => productById.get(l.product_id)?.track_lots)
-        .map((l) => ({ ...l, status: getExpiryStatus(l), days: daysUntilExpiry(l) })),
-    [productLots, productById]
+        .map((l) => ({ ...l, status: getExpiryStatus(l, new Date(), nearDays), days: daysUntilExpiry(l) })),
+    [productLots, productById, nearDays]
   );
 
   const activeLots = lotsWithStatus.filter((l) => l.remaining_qty > 0);
@@ -147,7 +150,7 @@ export default function LotsPage() {
                     : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-100'
                 }`}
               >
-                {key === 'all' ? 'ทั้งหมด' : EXPIRY_META[key].label}
+                {key === 'all' ? 'ทั้งหมด' : key === 'near' ? `ใกล้หมดอายุ (≤${nearDays} วัน)` : EXPIRY_META[key].label}
               </button>
             ))}
             <label className="ml-auto flex items-center gap-1.5 text-xs font-bold text-slate-600 cursor-pointer">

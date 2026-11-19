@@ -10,11 +10,13 @@ import {
   CreditCard,
 } from 'lucide-react';
 import { usePOS } from '../context/POSContext';
+import { getMinStock, isLowStock } from '../utils/stockAlerts';
 import { formatCurrency, formatNumber } from '../utils/formatters';
 import { getOrderPayments } from '../utils/payments';
 
 export default function DashboardPage({ onNavigate }) {
-  const { orders, products } = usePOS();
+  const { orders, products, printerSettings } = usePOS();
+  const defaultMinStock = printerSettings?.defaultMinStock;
 
   const analytics = useMemo(() => {
     const validOrders = orders.filter((o) => o.status === 'completed');
@@ -74,9 +76,7 @@ export default function DashboardPage({ onNavigate }) {
       .sort((a, b) => b.revenue - a.revenue)
       .slice(0, 5);
 
-    const lowStockProducts = products.filter(
-      (p) => Number(p.stock) <= Number(p.min_stock || 10)
-    );
+    const lowStockProducts = products.filter((p) => isLowStock(p, defaultMinStock));
 
     return {
       orderCount: validOrders.length,
@@ -304,7 +304,7 @@ export default function DashboardPage({ onNavigate }) {
                     {p.name}
                   </div>
                   <div className="text-[11px] text-slate-500">
-                    รหัส {p.sku} • จุดเตือนขั้นต่ำ {p.min_stock} {p.unit}
+                    รหัส {p.sku} • จุดเตือนขั้นต่ำ {getMinStock(p, defaultMinStock)} {p.unit}
                   </div>
                 </div>
                 <span className="px-2.5 py-1 rounded-lg bg-amber-200/80 text-amber-950 font-extrabold text-xs shrink-0">

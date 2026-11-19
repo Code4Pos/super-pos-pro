@@ -8,7 +8,8 @@
  * - type: 'boolean' | 'number' | 'select' | 'text' | 'image' | 'numberList' | 'multiSelect'
  *   | 'json' (ค่าซับซ้อนที่มีหน้าตั้งค่าของตัวเอง ใช้ field.normalize ปรับรูปแบบ)
  */
-import { normalizeRoleConfig } from './rbac';
+import { normalizeRoleConfig, OPTIONAL_MODULES } from './rbac';
+import { CREDIT_TERM_OPTIONS } from './credit';
 import { normalizeDocumentNumbering } from './docNumbers';
 
 export const PAYMENT_METHOD_OPTIONS = [
@@ -150,6 +151,91 @@ export const SHOP_CONFIG_FIELDS = [
     options: PAYMENT_METHOD_OPTIONS,
     label: 'ช่องทางชำระเงินที่เปิดใช้',
     hint: 'เงินสดเปิดเสมอ',
+  },
+
+  // ===================== การแจ้งเตือน & ค่าเริ่มต้น (defaults) =====================
+  {
+    key: 'defaultMinStock',
+    group: 'defaults',
+    type: 'number',
+    default: 10,
+    min: 0,
+    max: 100000,
+    step: 1,
+    suffix: 'หน่วย',
+    label: 'จุดเตือนสต็อกต่ำเริ่มต้น',
+    hint: 'ใช้กับสินค้าที่ไม่ได้กำหนด "สต็อกขั้นต่ำ" และเป็นค่าเริ่มต้นของสินค้าใหม่',
+  },
+  {
+    key: 'nearExpiryDays',
+    group: 'defaults',
+    type: 'number',
+    default: 30,
+    min: 1,
+    max: 365,
+    step: 1,
+    suffix: 'วัน',
+    label: 'เตือนล็อตใกล้หมดอายุล่วงหน้า',
+  },
+  {
+    key: 'defaultLeadTimeDays',
+    group: 'defaults',
+    type: 'number',
+    default: 7,
+    min: 0,
+    max: 365,
+    step: 1,
+    suffix: 'วัน',
+    label: 'ระยะเวลารอสินค้าจากผู้ผลิตเริ่มต้น (แนะนำสั่งซื้อ)',
+    hint: 'ใช้กับสินค้าที่ไม่ได้กำหนด Lead time เอง',
+  },
+  {
+    key: 'reorderDemandDays',
+    group: 'defaults',
+    type: 'number',
+    default: 30,
+    min: 7,
+    max: 365,
+    step: 1,
+    suffix: 'วัน',
+    label: 'คิดยอดขายเฉลี่ยย้อนหลัง (แนะนำสั่งซื้อ)',
+  },
+  {
+    key: 'defaultCreditTermDays',
+    group: 'defaults',
+    type: 'select',
+    default: 0,
+    numeric: true,
+    label: 'เครดิตเทอมเริ่มต้นของลูกค้าใหม่',
+    options: CREDIT_TERM_OPTIONS.map((d) => ({ value: d, label: d === 0 ? 'ไม่มีเครดิตเทอม (0 วัน)' : `${d} วัน` })),
+  },
+  {
+    key: 'defaultCreditLimit',
+    group: 'defaults',
+    type: 'number',
+    default: 0,
+    min: 0,
+    max: 100000000,
+    step: 1,
+    suffix: 'บาท',
+    label: 'วงเงินเครดิตเริ่มต้นของลูกค้าใหม่',
+    hint: '0 = ไม่จำกัดวงเงิน',
+  },
+  {
+    key: 'showLowStockBadge',
+    group: 'defaults',
+    type: 'boolean',
+    default: true,
+    label: 'แสดงป้ายเตือนสินค้าใกล้หมดบนแถบเมนูและ Header',
+  },
+  {
+    key: 'disabledModules',
+    group: 'defaults',
+    type: 'multiSelect',
+    default: [],
+    options: OPTIONAL_MODULES.map((m) => ({ value: m.id, label: m.label })),
+    label: 'ปิดเมนูที่ร้านไม่ได้ใช้',
+    hint: 'เมนูที่ติ๊กจะถูกซ่อนจากทุกคน (รวมผู้ดูแลระบบ) ข้อมูลเดิมยังอยู่ เปิดกลับได้ทุกเมื่อ',
   },
 
   // ===================== สิทธิ์ผู้ใช้ (roles) — แก้ที่หน้า ตั้งค่า › ผู้ใช้งาน & สิทธิ์ =====================

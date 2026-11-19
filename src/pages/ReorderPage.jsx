@@ -17,8 +17,17 @@ const STATUS_META = {
  * ใบสั่งซื้อจะถูกสร้างเป็นใบนำเข้าสถานะ "รออนุมัติ" (ยังไม่เพิ่มสต็อก) แล้วรับของผ่านหน้านำเข้าสินค้า
  */
 export default function ReorderPage() {
-  const { products, orders, suppliers = [], createStockImport, updateReorderSettings, showToast } =
+  const { products, orders, suppliers = [], createStockImport, updateReorderSettings, showToast, printerSettings } =
     usePOS();
+  // ค่าเริ่มต้นจากค่าตั้งร้าน (ตั้งค่า › การแจ้งเตือน & ค่าเริ่มต้น)
+  const reorderOptions = useMemo(
+    () => ({
+      demandDays: Number(printerSettings?.reorderDemandDays) || REORDER_DEFAULTS.demandDays,
+      leadTimeDays: printerSettings?.defaultLeadTimeDays ?? REORDER_DEFAULTS.leadTimeDays,
+      defaultMinStock: printerSettings?.defaultMinStock,
+    }),
+    [printerSettings?.reorderDemandDays, printerSettings?.defaultLeadTimeDays, printerSettings?.defaultMinStock]
+  );
   const [statusFilter, setStatusFilter] = useState('reorder');
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState({}); // { [productId]: qty }
@@ -26,8 +35,8 @@ export default function ReorderPage() {
   const [creating, setCreating] = useState(false);
 
   const suggestions = useMemo(
-    () => calculateReorderSuggestions(products, orders),
-    [products, orders]
+    () => calculateReorderSuggestions(products, orders, reorderOptions),
+    [products, orders, reorderOptions]
   );
 
   const counts = useMemo(() => {
@@ -148,7 +157,7 @@ export default function ReorderPage() {
                 แนะนำสั่งซื้อ & ใบสั่งซื้อ (PO)
               </h1>
               <p className="text-xs text-slate-500">
-                จุดสั่งซื้อ = ยอดขายเฉลี่ย/วัน ({REORDER_DEFAULTS.demandDays} วันล่าสุด) × ระยะรอสินค้า + สต็อกสำรอง
+                จุดสั่งซื้อ = ยอดขายเฉลี่ย/วัน ({reorderOptions.demandDays} วันล่าสุด) × ระยะรอสินค้า + สต็อกสำรอง
               </p>
             </div>
           </div>
@@ -246,7 +255,7 @@ export default function ReorderPage() {
                           type="number"
                           min="0"
                           defaultValue={p.lead_time_days ?? ''}
-                          placeholder={String(REORDER_DEFAULTS.leadTimeDays)}
+                          placeholder={String(reorderOptions.leadTimeDays)}
                           onBlur={(e) => handleSettingBlur(p, 'lead_time_days', e.target.value)}
                           className="w-16 px-2 py-1 rounded-lg border border-slate-300 text-center text-xs"
                         />

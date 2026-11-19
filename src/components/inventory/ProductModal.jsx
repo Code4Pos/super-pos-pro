@@ -92,6 +92,7 @@ export default function ProductModal({ isOpen, onClose, editingProduct }) {
     saveProduct,
     addUnit,
     showToast,
+    printerSettings,
   } = usePOS();
 
   const [form, setForm] = useState(DEFAULT_FORM);
@@ -245,6 +246,7 @@ export default function ProductModal({ isOpen, onClose, editingProduct }) {
 
       setForm({
         ...DEFAULT_FORM,
+        min_stock: printerSettings?.defaultMinStock ?? DEFAULT_FORM.min_stock,
         sku: `SKU-${randomNum}`,
         barcode: '',
         stock: 0,

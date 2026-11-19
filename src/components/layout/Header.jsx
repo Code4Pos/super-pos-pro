@@ -21,6 +21,7 @@ import { usePOS } from '../../context/POSContext';
 import { AppUpdateHeaderButton } from '../common/AppUpdate';
 import PosQuickMenu from '../pos/PosQuickMenu';
 import { formatCurrency } from '../../utils/formatters';
+import { countLowStock } from '../../utils/stockAlerts';
 import { ROLES, canAccessAnyAdminTab } from '../../utils/rbac';
 
 const ACTIVE_TAB_STORAGE_KEY = 'siampos_active_tab_v1';
@@ -49,6 +50,7 @@ export default function Header({
     logout,
     canTab,
     showToast,
+    printerSettings,
   } = usePOS();
 
   const isPosPage = mode === 'pos';
@@ -119,9 +121,9 @@ export default function Header({
     0
   );
 
-  const lowStockCount = products.filter(
-    (p) => Number(p.stock) <= Number(p.min_stock || 10)
-  ).length;
+  // นับสินค้าใกล้หมดตามจุดเตือนของร้าน (ปิดป้ายได้ที่ ตั้งค่า › การแจ้งเตือน & ค่าเริ่มต้น)
+  const lowStockCount =
+    printerSettings?.showLowStockBadge === false ? 0 : countLowStock(products, printerSettings?.defaultMinStock);
 
   return (
     <header className="h-13 sm:h-14 bg-white border-b border-slate-200 px-2.5 sm:px-4 flex items-center justify-between gap-2 shrink-0 z-20 select-none">
@@ -204,6 +206,7 @@ export default function Header({
               {!isPosPage && activeTab === 'settings-receipt' && 'ตั้งค่า › ใบเสร็จ'}
               {!isPosPage && activeTab === 'settings-sales' && 'ตั้งค่า › กติกาการขาย'}
               {!isPosPage && activeTab === 'settings-docs' && 'ตั้งค่า › เลขที่เอกสาร'}
+              {!isPosPage && activeTab === 'settings-defaults' && 'ตั้งค่า › การแจ้งเตือน & ค่าเริ่มต้น'}
               {!isPosPage && activeTab === 'settings-tax' && 'ตั้งค่า › ภาษี (VAT)'}
               {!isPosPage && activeTab === 'settings-payment' && 'ตั้งค่า › การชำระเงิน'}
               {!isPosPage && activeTab === 'settings-printer' && 'ตั้งค่า › เครื่องพิมพ์'}

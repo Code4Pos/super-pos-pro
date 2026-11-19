@@ -426,6 +426,7 @@ export default function POSPage() {
                     onEditQtyNumpad={handleEditQtyFromCard}
                     onRequestRemoveFromCart={handleRemoveFromCard}
                     allowOverStock={(printerSettings?.stockPolicy || 'block') !== 'block'}
+                    defaultMinStock={printerSettings?.defaultMinStock ?? 10}
                   />
                 );
               })}

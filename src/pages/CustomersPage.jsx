@@ -38,7 +38,7 @@ const DEFAULT_CUSTOMER_FORM = {
 };
 
 export default function CustomersPage({ onNavigateToPOS }) {
-  const { customers, saveCustomer, selectCustomer, getCustomerCredit, showToast, can } = usePOS();
+  const { customers, saveCustomer, selectCustomer, getCustomerCredit, showToast, can, printerSettings } = usePOS();
 
   const [searchQuery, setSearchQuery] = useState('');
   const [typeFilter, setTypeFilter] = useState('all'); // 'all' | 'wholesale' | 'retail' | 'outstanding'
@@ -79,6 +79,9 @@ export default function CustomersPage({ onNavigateToPOS }) {
     setForm({
       ...DEFAULT_CUSTOMER_FORM,
       code: `CUS-${rand}`,
+      // เครดิตเริ่มต้นของลูกค้าใหม่ตามค่าตั้งร้าน
+      credit_term_days: Number(printerSettings?.defaultCreditTermDays) || 0,
+      credit_limit: Number(printerSettings?.defaultCreditLimit) || 0,
     });
     setIsModalOpen(true);
   };
