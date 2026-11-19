@@ -207,6 +207,7 @@ export default function Header({
               {!isPosPage && activeTab === 'settings-sales' && 'ตั้งค่า › กติกาการขาย'}
               {!isPosPage && activeTab === 'settings-docs' && 'ตั้งค่า › เลขที่เอกสาร'}
               {!isPosPage && activeTab === 'settings-defaults' && 'ตั้งค่า › การแจ้งเตือน & ค่าเริ่มต้น'}
+              {!isPosPage && activeTab === 'settings-backup' && 'ตั้งค่า › สำรอง & ย้ายค่าตั้ง'}
               {!isPosPage && activeTab === 'settings-tax' && 'ตั้งค่า › ภาษี (VAT)'}
               {!isPosPage && activeTab === 'settings-payment' && 'ตั้งค่า › การชำระเงิน'}
               {!isPosPage && activeTab === 'settings-printer' && 'ตั้งค่า › เครื่องพิมพ์'}

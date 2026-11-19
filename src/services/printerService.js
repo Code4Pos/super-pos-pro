@@ -28,7 +28,7 @@ export const SHARED_SHOP_SETTING_KEYS = [
   ...SHOP_CONFIG_KEYS,
 ];
 
-const DEFAULT_SHOP_SETTINGS = {
+export const DEFAULT_SHOP_SETTINGS = {
   shopName: 'สยามค้าปลีก-ส่ง (SiamPOS Pro)',
   shopAddress: 'ศูนย์รวมสินค้าอุปโภคบริโภค ราคาปลีก-ส่ง มาตรฐานครบวงจร',
   shopPhone: '02-123-4567',
@@ -42,7 +42,7 @@ const DEFAULT_SHOP_SETTINGS = {
 };
 
 // ค่าตั้งเฉพาะเครื่องนี้ (ชนิดเครื่องพิมพ์ ขนาดกระดาษ ลิ้นชักเก็บเงิน — เก็บใน localStorage ของแต่ละเครื่อง ไม่ซิงค์ข้ามเครื่อง)
-const DEFAULT_DEVICE_PRINTER_SETTINGS = {
+export const DEFAULT_DEVICE_PRINTER_SETTINGS = {
   paperSize: '80mm', // '58mm' | '80mm'
   connectionType: 'system', // 'system' | 'webusb' | 'webserial' | 'rawbt' | 'bluetooth' (เฉพาะแอป Android)
   bluetoothAddress: '', // MAC ของเครื่องพิมพ์ Bluetooth ที่เลือก (จับคู่ในตั้งค่าเครื่องก่อน)

@@ -4,6 +4,7 @@ import ReceiptSettings from '../components/settings/ReceiptSettings';
 import SalesRulesSettings from '../components/settings/SalesRulesSettings';
 import DocumentNumberingSettings from '../components/settings/DocumentNumberingSettings';
 import AlertsDefaultsSettings from '../components/settings/AlertsDefaultsSettings';
+import SettingsBackup from '../components/settings/SettingsBackup';
 import TaxSettings from '../components/settings/TaxSettings';
 import PaymentSettings from '../components/settings/PaymentSettings';
 import PrinterSettings from '../components/settings/PrinterSettings';
@@ -16,6 +17,7 @@ const SECTIONS = {
   'settings-sales': SalesRulesSettings,
   'settings-docs': DocumentNumberingSettings,
   'settings-defaults': AlertsDefaultsSettings,
+  'settings-backup': SettingsBackup,
   'settings-tax': TaxSettings,
   'settings-payment': PaymentSettings,
   'settings-printer': PrinterSettings,
