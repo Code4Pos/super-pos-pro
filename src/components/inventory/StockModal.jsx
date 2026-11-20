@@ -159,6 +159,8 @@ export default function StockModal({ product, onClose }) {
     try {
       const hasCostUpdate = mode === 'add' || mode === 'set';
       const movementMeta = {
+        // โหมดปรับ: 'set' = กำหนดยอดใหม่จากการนับจริง (ฐานข้อมูลคิดจากยอดล่าสุดบนฐานข้อมูล)
+        adjust_mode: mode,
         reason: finalReason,
         approved_by: approverName,
         reference_doc: authEnabled && currentUser ? `ปรับสต็อกโดย ${currentUser.name}` : 'ปรับสต็อกด้วยมือ',

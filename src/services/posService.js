@@ -867,6 +867,114 @@ async function upsertOrQueue(table, rows) {
 }
 
 /**
+ * ส่งยอดเปลี่ยนแปลงสต็อกด้วย RPC siampos_adjust_stock (Migration beta 0.3.24, ส่งซ้ำได้ด้วย p_ref)
+ * ฐานข้อมูลยังไม่ได้รัน Migration = วิธีเดิม (อ่านยอดล่าสุดแล้วบวก/ลบ)
+ */
+async function callStockRpc(payload) {
+  const result = await callRpc('siampos_adjust_stock', payload);
+  if (!result.missing) return result;
+  try {
+    const balances = {};
+    for (const c of payload.p_changes) {
+      const { data, error } = await supabase.from('products').select('stock').eq('id', c.product_id).maybeSingle();
+      if (error) return { ok: false, networkError: isNetworkError(error), message: error.message };
+      if (!data) continue;
+      const patch = { stock: (Number(data.stock) || 0) + (Number(c.delta) || 0), updated_at: new Date().toISOString() };
+      if (c.cost_price !== undefined) patch.cost_price = c.cost_price;
+      const { error: updateError } = await supabase.from('products').update(patch).eq('id', c.product_id);
+      if (updateError) return { ok: false, networkError: isNetworkError(updateError), message: updateError.message };
+      balances[c.product_id] = patch.stock;
+    }
+    return { ok: true, data: { status: 'applied', balances } };
+  } catch (err) {
+    return { ok: false, networkError: isNetworkError(err), message: err?.message };
+  }
+}
+
+/**
+ * ปรับสต็อกบนฐานข้อมูลแบบยอดเปลี่ยนแปลง (ไม่ทับยอดที่เครื่องอื่นขายไประหว่างนั้น)
+ * changes = [{ product_id, delta, cost_price? }] / ออฟไลน์หรือเน็ตหลุด = เข้าคิว
+ * คืนยอดล่าสุดจากฐานข้อมูล { [productId]: stock } (ว่างเมื่อเข้าคิว)
+ */
+async function pushStockDeltas(changes = [], ref = generateUuid()) {
+  const valid = changes
+    .filter((c) => c && isRemoteProductId(c.product_id) && isUuid(c.product_id))
+    .map((c) => ({
+      product_id: c.product_id,
+      delta: Math.round((Number(c.delta) || 0) * 10000) / 10000,
+      ...(c.cost_price !== undefined && c.cost_price !== null ? { cost_price: Number(c.cost_price) || 0 } : {}),
+    }))
+    .filter((c) => c.delta !== 0 || c.cost_price !== undefined);
+  if (valid.length === 0 || !supabase) return {};
+  const payload = { p_ref: ref, p_changes: valid };
+  const result = isOnline() ? await callStockRpc(payload) : { ok: false, networkError: true };
+  if (result.networkError) {
+    enqueueOffline({ kind: 'stock_rpc', payload });
+    return {};
+  }
+  if (!result.ok) {
+    recordFailedSync({ kind: 'stock_rpc', payload }, result.message);
+    return {};
+  }
+  return result.data?.balances || {};
+}
+
+/**
+ * บันทึกแถวขึ้นฐานข้อมูล: แถวเดิม = update ตาม id / แถวใหม่ (id สร้างในแอป) = upsert
+ * ลองค่าเต็มก่อน ถ้าฐานข้อมูลไม่มีบางคอลัมน์ ลองค่าพื้นฐาน / ออฟไลน์หรือเน็ตหลุด = เข้าคิว (ส่งค่าพื้นฐาน)
+ * คืนแถวจากฐานข้อมูล หรือ null (เข้าคิว/ผิดพลาด ข้อมูลยังเก็บในเครื่อง)
+ */
+async function saveRowOrQueue(table, { id, isNew, payload, basePayload = payload }) {
+  const queue = () => {
+    if (isNew) enqueueOffline({ kind: 'upsert', table, rows: [{ ...basePayload, id }] });
+    else enqueueOffline({ kind: 'update', table, rowId: id, patch: basePayload });
+    return null;
+  };
+  if (!supabase) return null;
+  if (!isOnline()) return queue();
+  const attempt = (body) =>
+    isNew
+      ? supabase.from(table).upsert([{ ...body, id }]).select().single()
+      : supabase.from(table).update(body).eq('id', id).select().single();
+  try {
+    let { data, error } = await attempt(payload);
+    if (error && isNetworkError(error)) return queue();
+    if (error && basePayload !== payload) ({ data, error } = await attempt(basePayload));
+    if (error) {
+      if (isNetworkError(error)) return queue();
+      console.warn(`Supabase ${table} save error:`, error.message);
+      return null;
+    }
+    return data;
+  } catch (err) {
+    if (isNetworkError(err)) return queue();
+    console.warn(`Supabase ${table} save error:`, err?.message);
+    return null;
+  }
+}
+
+/**
+ * แก้บางคอลัมน์ของแถวเดิม ถ้าออฟไลน์หรือเน็ตหลุดให้เข้าคิว
+ */
+async function updateOrQueue(table, rowId, patch) {
+  if (!supabase) return false;
+  if (!isOnline()) {
+    enqueueOffline({ kind: 'update', table, rowId, patch });
+    return false;
+  }
+  try {
+    const { error } = await supabase.from(table).update(patch).eq('id', rowId);
+    if (!error) return true;
+    if (isNetworkError(error)) enqueueOffline({ kind: 'update', table, rowId, patch });
+    else console.warn(`Supabase update ${table} error:`, error.message);
+  } catch (err) {
+    if (isNetworkError(err)) enqueueOffline({ kind: 'update', table, rowId, patch });
+    else console.warn(`Supabase update ${table} error:`, err?.message);
+  }
+  return false;
+}
+
+/**
  * ลบข้อมูลตาม id บน Supabase ถ้าเชื่อมต่อไม่ได้ให้เก็บเข้าคิว
  */
 async function deleteOrQueue(table, rowId) {
@@ -1244,22 +1352,17 @@ async function applyImportItemsToStock(
     );
   }
 
+  // ฐานข้อมูล: รับสินค้าเข้าเป็นยอดเปลี่ยนแปลง + ต้นทุนเฉลี่ยใหม่ (ใช้เลขที่ใบนำเข้ากันรับซ้ำ) ออฟไลน์ = เข้าคิว
+  let remoteBalances = {};
   if (isSupabaseActive && supabase) {
-    for (const [pid, addQty] of addStockByProductId.entries()) {
-      const prod = prodMap.get(pid);
-      if (prod && !String(pid).startsWith('prod-')) {
-        try {
-          const nextStock = (Number(prod.stock) || 0) + addQty;
-          const updateObj = { stock: nextStock, updated_at: nowIso };
-          if (newCostByProductId.has(pid)) {
-            updateObj.cost_price = newCostByProductId.get(pid);
-          }
-          await supabase.from('products').update(updateObj).eq('id', pid);
-        } catch {
-          // fallback local
-        }
-      }
-    }
+    remoteBalances = await pushStockDeltas(
+      [...addStockByProductId.entries()].map(([pid, addQty]) => ({
+        product_id: pid,
+        delta: addQty,
+        ...(newCostByProductId.has(pid) ? { cost_price: newCostByProductId.get(pid) } : {}),
+      })),
+      referenceDoc ? `import:${referenceDoc}` : generateUuid()
+    );
   }
 
   const updatedProducts = baseProducts.map((prod) => {
@@ -1274,7 +1377,7 @@ async function applyImportItemsToStock(
     };
   });
 
-  const syncedProducts = normalizeAndSyncProducts(updatedProducts);
+  const syncedProducts = applyRemoteBalances(normalizeAndSyncProducts(updatedProducts), remoteBalances);
   setLocal(STORAGE_KEYS.PRODUCTS, syncedProducts);
   await recordStockMovements(
     baseProducts,
@@ -2232,44 +2335,33 @@ export const posService = {
     };
 
     let savedSupaRow = null;
+    // สินค้าใหม่ในโหมดฐานข้อมูล: สร้าง id (UUID) ในแอป เพื่อสร้างตอนออฟไลน์แล้วซิงค์ทีหลังได้ (ส่งซ้ำไม่เกิดซ้ำ)
+    const isRemoteExisting = Boolean(productData.id) && !String(productData.id).startsWith('prod-');
+    const newRemoteId = !productData.id && isSupabaseActive && supabase ? generateUuid() : null;
+    let remoteBalances = {};
 
-    if (isSupabaseActive && supabase) {
-      try {
-        if (productData.id && !String(productData.id).startsWith('prod-')) {
-          let { data, error } = await supabase
-            .from('products')
-            .update(supaPayload)
-            .eq('id', productData.id)
-            .select()
-            .single();
-          if (error) {
-            const retry = await supabase
-              .from('products')
-              .update(baseSupabasePayload)
-              .eq('id', productData.id)
-              .select()
-              .single();
-            if (!retry.error) data = retry.data;
-          }
-          if (data) savedSupaRow = data;
-        } else {
-          let { data, error } = await supabase
-            .from('products')
-            .insert([supaPayload])
-            .select()
-            .single();
-          if (error) {
-            const retry = await supabase
-              .from('products')
-              .insert([baseSupabasePayload])
-              .select()
-              .single();
-            if (!retry.error) data = retry.data;
-          }
-          if (data) savedSupaRow = data;
+    if (isSupabaseActive && supabase && (isRemoteExisting || newRemoteId)) {
+      if (isRemoteExisting) {
+        // สินค้าเดิม: ไม่ส่งยอดสต็อกแบบทับค่า แต่ส่งยอดที่เปลี่ยนแยก (ไม่ทับยอดที่เครื่องอื่นขายไป)
+        const { stock: _s1, ...updatePayload } = supaPayload;
+        const { stock: _s2, ...updateBase } = baseSupabasePayload;
+        savedSupaRow = await saveRowOrQueue('products', {
+          id: productData.id,
+          isNew: false,
+          payload: updatePayload,
+          basePayload: updateBase,
+        });
+        const stockDelta = (Number(cleanPayload.stock) || 0) - (Number(existingProd?.stock) || 0);
+        if (existingProd && stockDelta !== 0) {
+          remoteBalances = await pushStockDeltas([{ product_id: productData.id, delta: stockDelta }]);
         }
-      } catch (err) {
-        console.warn('Supabase upsert fallback to local:', err.message);
+      } else {
+        savedSupaRow = await saveRowOrQueue('products', {
+          id: newRemoteId,
+          isNew: true,
+          payload: supaPayload,
+          basePayload: baseSupabasePayload,
+        });
       }
     }
 
@@ -2286,14 +2378,11 @@ export const posService = {
           (Number(productData.stock) || 0) * linkedDeductQty + remainder
         );
         if (isSupabaseActive && supabase && !String(linkedProductId).startsWith('prod-')) {
-          try {
-            await supabase
-              .from('products')
-              .update({ stock: nextMasterStock, updated_at: nowIso })
-              .eq('id', linkedProductId);
-          } catch {
-            // fallback local
-          }
+          // ส่งเป็นยอดเปลี่ยนแปลงของสินค้าหลัก (ไม่ทับยอดที่เครื่องอื่นขายไป)
+          Object.assign(
+            remoteBalances,
+            await pushStockDeltas([{ product_id: linkedProductId, delta: nextMasterStock - currentMasterStock }])
+          );
         }
         updatedList = updatedList.map((p) =>
           p.id === linkedProductId
@@ -2303,7 +2392,7 @@ export const posService = {
       }
     }
 
-    const targetId = savedSupaRow?.id || productData.id || `prod-${Date.now()}`;
+    const targetId = savedSupaRow?.id || productData.id || newRemoteId || `prod-${Date.now()}`;
 
     // บันทึกข้อมูลเสริมลง PRODUCT_META เพื่อให้ไม่สูญหายแม้ตาราง Supabase ยังไม่ได้เพิ่มคอลัมน์ใหม่
     const localMeta = getLocal(STORAGE_KEYS.PRODUCT_META, {});
@@ -2347,7 +2436,8 @@ export const posService = {
       updatedList = [mergedProduct, ...updatedList];
     }
 
-    const syncedList = normalizeAndSyncProducts(updatedList);
+    // ยอดสต็อกล่าสุดจากฐานข้อมูล (รวมยอดที่เครื่องอื่นขายไประหว่างนั้น)
+    const syncedList = applyRemoteBalances(normalizeAndSyncProducts(updatedList), remoteBalances);
     setLocal(STORAGE_KEYS.PRODUCTS, syncedList);
     // สินค้าใหม่ที่มีสต็อกตั้งต้น = OPENING, แก้จำนวนสต็อกในฟอร์มสินค้า = EDIT
     await recordStockMovements(
@@ -2457,25 +2547,18 @@ export const posService = {
     const target = products.find((p) => p.id === productId);
 
     if (isSupabaseActive && supabase && !String(productId).startsWith('prod-')) {
-      try {
-        await supabase
-          .from('products')
-          .update({
-            is_trashed: true,
-            deleted_at: nowIso,
-            linked_product_id: null,
-            linked_deduct_qty: 1,
-            updated_at: nowIso,
-          })
-          .eq('id', productId);
-        if (isUuid(productId)) {
-          await supabase
-            .from('products')
-            .update({ linked_product_id: null, linked_deduct_qty: 1, updated_at: nowIso })
-            .eq('linked_product_id', productId);
+      // ออฟไลน์ = เข้าคิว / สินค้ารองที่ผูกกับสินค้านี้ปลดการผูกทีละตัว (คิวรองรับการแก้ตาม id)
+      await updateOrQueue('products', productId, {
+        is_trashed: true,
+        deleted_at: nowIso,
+        linked_product_id: null,
+        linked_deduct_qty: 1,
+        updated_at: nowIso,
+      });
+      if (isUuid(productId)) {
+        for (const child of products.filter((p) => p.linked_product_id === productId && isUuid(p.id))) {
+          await updateOrQueue('products', child.id, { linked_product_id: null, linked_deduct_qty: 1, updated_at: nowIso });
         }
-      } catch {
-        // fallback local
       }
     }
 
@@ -2534,14 +2617,7 @@ export const posService = {
 
     if (isSupabaseActive && supabase && !String(productId).startsWith('prod-')) {
       try {
-        await supabase
-          .from('products')
-          .update({
-            is_trashed: false,
-            deleted_at: null,
-            updated_at: nowIso,
-          })
-          .eq('id', productId);
+        await updateOrQueue('products', productId, { is_trashed: false, deleted_at: null, updated_at: nowIso });
       } catch {
         // fallback local
       }
@@ -2577,7 +2653,7 @@ export const posService = {
   async permanentDeleteProduct(productId, isSupabaseActive) {
     if (isSupabaseActive && supabase && !String(productId).startsWith('prod-')) {
       try {
-        await supabase.from('products').delete().eq('id', productId);
+        await deleteOrQueue('products', productId);
       } catch {
         // ignore fallback
       }
@@ -2611,7 +2687,7 @@ export const posService = {
       for (const item of currentTrash) {
         if (item.id && !String(item.id).startsWith('prod-')) {
           try {
-            await supabase.from('products').delete().eq('id', item.id);
+            await deleteOrQueue('products', item.id);
           } catch {
             // ignore
           }
@@ -2639,22 +2715,33 @@ export const posService = {
     const safeCostPrice = hasNewCost ? Math.max(0, Number(newCostPrice) || 0) : undefined;
     const nowIso = new Date().toISOString();
 
-    if (isSupabaseActive && supabase && !String(productId).startsWith('prod-')) {
-      try {
-        const updatePayload = { stock: safeStock, updated_at: nowIso };
-        if (hasNewCost) updatePayload.cost_price = safeCostPrice;
-        await supabase
-          .from('products')
-          .update(updatePayload)
-          .eq('id', productId);
-      } catch {
-        // fallback local
-      }
-    }
     const baseProducts =
       Array.isArray(currentProducts) && currentProducts.length > 0
         ? currentProducts
         : getLocal(STORAGE_KEYS.PRODUCTS, INITIAL_PRODUCTS);
+    let remoteBalances = {};
+    if (isSupabaseActive && supabase && !String(productId).startsWith('prod-')) {
+      // ส่งเป็นยอดเปลี่ยนแปลง ไม่ทับยอดที่เครื่องอื่นขายไป / ออฟไลน์ = เข้าคิว
+      // - เพิ่ม/ลด: ยอดใหม่ - ยอดในเครื่อง
+      // - กำหนดยอดใหม่ (นับของจริงแล้ว): ยอดใหม่ - ยอดล่าสุดบนฐานข้อมูล (ออฟไลน์ใช้ยอดในเครื่อง)
+      const current = baseProducts.find((p) => p.id === productId);
+      let baseStock = Number(current?.stock) || 0;
+      if (movementMeta.adjust_mode === 'set' && isOnline()) {
+        try {
+          const { data } = await supabase.from('products').select('stock').eq('id', productId).maybeSingle();
+          if (data) baseStock = Number(data.stock) || 0;
+        } catch {
+          // ใช้ยอดในเครื่อง
+        }
+      }
+      remoteBalances = await pushStockDeltas([
+        {
+          product_id: productId,
+          delta: safeStock - baseStock,
+          ...(hasNewCost ? { cost_price: safeCostPrice } : {}),
+        },
+      ]);
+    }
     const updated = baseProducts.map((p) => {
       if (p.id !== productId) return p;
       return {
@@ -2664,12 +2751,13 @@ export const posService = {
         updated_at: nowIso,
       };
     });
-    const synced = normalizeAndSyncProducts(updated);
+    const synced = applyRemoteBalances(normalizeAndSyncProducts(updated), remoteBalances);
     setLocal(STORAGE_KEYS.PRODUCTS, synced);
+    const { adjust_mode: _adjustMode, ...ledgerMeta } = movementMeta;
     await recordStockMovements(
       baseProducts,
       synced,
-      { movement_type: 'ADJUST', ...movementMeta },
+      { movement_type: 'ADJUST', ...ledgerMeta },
       isSupabaseActive
     );
     return synced;
@@ -2689,7 +2777,8 @@ export const posService = {
 
     if (isSupabaseActive && supabase && !String(productId).startsWith('prod-')) {
       try {
-        await supabase.from('products').update(patch).eq('id', productId);
+        // ออฟไลน์ = เข้าคิว (ฐานข้อมูลที่ยังไม่มีคอลัมน์จะแจ้งเตือน แต่ค่ายังเก็บใน PRODUCT_META)
+        await updateOrQueue('products', productId, patch);
       } catch {
         // ฐานข้อมูลยังไม่มีคอลัมน์ ใช้ค่าในเครื่องแทน
       }
@@ -2900,6 +2989,19 @@ export const posService = {
       } else if (item.kind === 'order') {
         // รายการที่เข้าคิวจากเวอร์ชันก่อน beta 0.3.6
         result = await pushOrderToSupabase(item.order, item.deductions || []);
+      } else if (item.kind === 'stock_rpc') {
+        result = await callStockRpc(item.payload);
+      } else if (item.kind === 'update') {
+        try {
+          const { error } = await supabase.from(item.table).update(item.patch).eq('id', item.rowId);
+          result = {
+            ok: !error,
+            networkError: error ? isNetworkError(error) : false,
+            message: error?.message,
+          };
+        } catch (err) {
+          result = { ok: false, networkError: isNetworkError(err), message: err?.message };
+        }
       } else if (item.kind === 'delete') {
         try {
           const { error } = await supabase.from(item.table).delete().eq('id', item.rowId);
@@ -2964,7 +3066,8 @@ export const posService = {
     };
     if (isSupabaseActive && supabase && !String(productId).startsWith('prod-')) {
       try {
-        await supabase.from('products').update(patch).eq('id', productId);
+        // ออฟไลน์ = เข้าคิว (ฐานข้อมูลที่ยังไม่มีคอลัมน์จะแจ้งเตือน แต่ค่ายังเก็บใน PRODUCT_META)
+        await updateOrQueue('products', productId, patch);
       } catch {
         // ฐานข้อมูลยังไม่มีคอลัมน์ ใช้ค่าในเครื่องแทน
       }
@@ -3041,11 +3144,8 @@ export const posService = {
   async saveStockCount(record, isSupabaseActive) {
     const saved = { ...record, updated_at: new Date().toISOString() };
     if (isSupabaseActive && supabase) {
-      try {
-        await supabase.from('stock_counts').upsert([saved]);
-      } catch (err) {
-        console.warn('Supabase stock count fallback:', err.message);
-      }
+      // ออฟไลน์ = เข้าคิว (id สร้างในแอป ส่งซ้ำได้)
+      await upsertOrQueue('stock_counts', [saved]);
     }
     const counts = getLocal(STORAGE_KEYS.STOCK_COUNTS, []);
     const exists = counts.some((c) => c.id === saved.id);
@@ -3073,30 +3173,22 @@ export const posService = {
         : getLocal(STORAGE_KEYS.PRODUCTS, INITIAL_PRODUCTS);
     if (deltas.size === 0) return baseProducts;
 
+    // ฐานข้อมูล: ส่งผลต่างจากการนับเป็นยอดเปลี่ยนแปลง (ใช้เลขที่ใบนับเป็นรหัสกันปรับซ้ำ) ออฟไลน์ = เข้าคิว
+    let remoteBalances = {};
     if (isSupabaseActive && supabase) {
-      const remoteIds = [...deltas.keys()].filter((id) => !String(id).startsWith('prod-'));
-      if (remoteIds.length > 0) {
-        try {
-          const { data: rows } = await supabase.from('products').select('id, stock').in('id', remoteIds);
-          for (const row of rows || []) {
-            await supabase
-              .from('products')
-              .update({ stock: Math.max(0, (Number(row.stock) || 0) + deltas.get(row.id)), updated_at: nowIso })
-              .eq('id', row.id);
-          }
-        } catch (err) {
-          console.warn('Supabase cycle count fallback:', err.message);
-        }
-      }
+      remoteBalances = await pushStockDeltas(
+        [...deltas.entries()].map(([product_id, delta]) => ({ product_id, delta })),
+        `count:${count.id || count.count_number}`
+      );
     }
 
-    const updated = normalizeAndSyncProducts(
+    const updated = applyRemoteBalances(normalizeAndSyncProducts(
       baseProducts.map((p) =>
         deltas.has(p.id)
           ? { ...p, stock: Math.max(0, (Number(p.stock) || 0) + deltas.get(p.id)), updated_at: nowIso }
           : p
       )
-    );
+    ), remoteBalances);
     setLocal(STORAGE_KEYS.PRODUCTS, updated);
     await recordStockMovements(
       baseProducts,
@@ -3131,23 +3223,16 @@ export const posService = {
       color: catData.color || 'indigo',
     };
 
+    // id สร้างในแอป (cat-...) จึงบันทึกแบบ upsert ได้ทั้งออนไลน์และเข้าคิวตอนออฟไลน์
+    let saved = null;
     if (isSupabaseActive && supabase) {
-      try {
-        const { data, error } = await supabase
-          .from('categories')
-          .insert([newCat])
-          .select()
-          .single();
-        if (!error && data) return data;
-      } catch {
-        // fallback local
-      }
+      saved = await saveRowOrQueue('categories', { id, isNew: true, payload: newCat });
     }
 
     const categories = getLocal(STORAGE_KEYS.CATEGORIES, INITIAL_CATEGORIES);
-    const updated = [...categories, newCat];
+    const updated = [...categories.filter((c) => c.id !== id), saved || newCat];
     setLocal(STORAGE_KEYS.CATEGORIES, updated);
-    return newCat;
+    return saved || newCat;
   },
 
   /**
@@ -3156,14 +3241,7 @@ export const posService = {
   async updateCategory(categoryId, catData, isSupabaseActive) {
     const cleanName = catData.name.trim();
     if (isSupabaseActive && supabase && categoryId !== 'all') {
-      try {
-        await supabase
-          .from('categories')
-          .update({ name: cleanName })
-          .eq('id', categoryId);
-      } catch {
-        // fallback local
-      }
+      await updateOrQueue('categories', categoryId, { name: cleanName });
     }
     const categories = getLocal(STORAGE_KEYS.CATEGORIES, INITIAL_CATEGORIES);
     const updated = categories.map((c) =>
@@ -3180,7 +3258,7 @@ export const posService = {
     if (categoryId === 'all') return false;
     if (isSupabaseActive && supabase) {
       try {
-        await supabase.from('categories').delete().eq('id', categoryId);
+        await deleteOrQueue('categories', categoryId);
       } catch {
         // fallback local
       }
@@ -3288,51 +3366,28 @@ export const posService = {
     }
     setLocal(STORAGE_KEYS.CUSTOMER_META, customerMeta);
 
-    if (isSupabaseActive && supabase) {
-      try {
-        if (customerData.id && !String(customerData.id).startsWith('cus-')) {
-          let { data, error } = await supabase
-            .from('customers')
-            .update(payload)
-            .eq('id', customerData.id)
-            .select()
-            .single();
-          if (error) {
-            const retry = await supabase
-              .from('customers')
-              .update(basePayload)
-              .eq('id', customerData.id)
-              .select()
-              .single();
-            if (!retry.error) data = retry.data;
-          }
-          if (data) {
-            customerMeta[data.id] = metaEntry;
-            setLocal(STORAGE_KEYS.CUSTOMER_META, customerMeta);
-            return { ...data, ...metaEntry };
-          }
-        } else {
-          let { data, error } = await supabase
-            .from('customers')
-            .insert([{ ...payload, total_spent: 0, order_count: 0, points: 0 }])
-            .select()
-            .single();
-          if (error) {
-            const retry = await supabase
-              .from('customers')
-              .insert([{ ...basePayload, total_spent: 0, order_count: 0, points: 0 }])
-              .select()
-              .single();
-            if (!retry.error) data = retry.data;
-          }
-          if (data) {
-            customerMeta[data.id] = metaEntry;
-            setLocal(STORAGE_KEYS.CUSTOMER_META, customerMeta);
-            return { ...data, ...metaEntry };
-          }
-        }
-      } catch (err) {
-        console.warn('Supabase customer upsert fallback:', err.message);
+    // ลูกค้าใหม่ในโหมดฐานข้อมูล: id (UUID) สร้างในแอป เพื่อเพิ่มลูกค้าตอนออฟไลน์แล้วซิงค์ทีหลังได้
+    const isRemoteExisting = Boolean(customerData.id) && !String(customerData.id).startsWith('cus-');
+    const newRemoteId = !customerData.id && isSupabaseActive && supabase ? generateUuid() : null;
+    if (isSupabaseActive && supabase && (isRemoteExisting || newRemoteId)) {
+      const counters = isRemoteExisting ? {} : { total_spent: 0, order_count: 0, points: 0 };
+      const data = await saveRowOrQueue('customers', {
+        id: customerData.id || newRemoteId,
+        isNew: !isRemoteExisting,
+        payload: { ...payload, ...counters },
+        basePayload: { ...basePayload, updated_at: nowIso, ...counters },
+      });
+      if (data) {
+        customerMeta[data.id] = metaEntry;
+        setLocal(STORAGE_KEYS.CUSTOMER_META, customerMeta);
+        // เก็บสำเนาในเครื่องด้วย (ใช้ตอนออฟไลน์)
+        const local = getLocal(STORAGE_KEYS.CUSTOMERS, INITIAL_CUSTOMERS);
+        const merged = { ...data, ...metaEntry };
+        setLocal(
+          STORAGE_KEYS.CUSTOMERS,
+          local.some((c) => c.id === data.id) ? local.map((c) => (c.id === data.id ? merged : c)) : [merged, ...local]
+        );
+        return merged;
       }
     }
 
@@ -3346,7 +3401,8 @@ export const posService = {
     } else {
       const newCustomer = {
         ...payload,
-        id: `cus-${Date.now()}`,
+        // โหมดฐานข้อมูล = id เดียวกับที่ส่งเข้าคิว / Demo = id ในเครื่อง
+        id: newRemoteId || `cus-${Date.now()}`,
         total_spent: 0,
         order_count: 0,
         points: 0,
@@ -3431,10 +3487,15 @@ export const posService = {
     if (isSupabaseActive && supabase) {
       let remoteError = null;
       try {
-        const { error } = await supabase.from('app_users').upsert([record]);
+        const { error } = isOnline() ? await supabase.from('app_users').upsert([record]) : { error: { message: 'offline', networkOffline: true } };
         remoteError = error;
       } catch (err) {
-        console.warn('Supabase app_users fallback:', err.message);
+        remoteError = err;
+      }
+      // ออฟไลน์/เน็ตหลุด: เข้าคิวไว้ส่งทีหลัง (ผู้ใช้ใช้งานในเครื่องนี้ได้ทันที)
+      if (remoteError && (remoteError.networkOffline || isNetworkError(remoteError))) {
+        enqueueOffline({ kind: 'upsert', table: 'app_users', rows: [record] });
+        remoteError = null;
       }
       // บทบาทที่ร้านสร้างเองติด CHECK constraint ของฐานข้อมูลเดิม
       if (remoteError?.code === '23514') {

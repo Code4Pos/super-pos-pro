@@ -58,10 +58,10 @@ npm run build    # ต้องผ่านก่อน commit ทุกคร�
 
 | ไฟล์ | รูปแบบ |
 |---|---|
-| `package.json` | `"version": "0.3.23-beta"` |
-| `index.html` | `<title>SiamPOS Pro (version beta 0.3.23) — ...` |
-| `admin.html` | `<title>SiamPOS Pro (version beta 0.3.23) — ...` |
-| `src/context/POSContext.jsx` | `export const APP_VERSION = 'version beta 0.3.23';` |
+| `package.json` | `"version": "0.3.24-beta"` |
+| `index.html` | `<title>SiamPOS Pro (version beta 0.3.24) — ...` |
+| `admin.html` | `<title>SiamPOS Pro (version beta 0.3.24) — ...` |
+| `src/context/POSContext.jsx` | `export const APP_VERSION = 'version beta 0.3.24';` |
 
 ถ้า agent อีกตัวเพิ่งเพิ่มเวอร์ชันไปใน commit ที่ยังไม่ได้ push ให้ใช้เวอร์ชันนั้นต่อ ไม่ต้องเพิ่มซ้ำ
 
@@ -88,6 +88,7 @@ npm run build    # ต้องผ่านก่อน commit ทุกคร�
 > ให้ agent เขียนสั้นๆ เมื่อจบงานที่ยังไม่เสร็จ หรือเมื่อมีเรื่องที่อีกฝ่ายต้องรู้ (ลบรายการที่เสร็จแล้วทิ้ง)
 > รูปแบบ: `- [YYYY-MM-DD] (Claude|Gemini) สิ่งที่ทำ / สิ่งที่ค้าง / ไฟล์ที่เกี่ยวข้อง`
 
+- [2026-11-20] (Claude) beta 0.3.24 (แก้ข้อมูลอื่นนอกจากบิลตอนออฟไลน์ + สต็อกแบบ delta): **สต็อกส่งเป็นผลต่างผ่าน RPC `siampos_adjust_stock(p_ref, p_changes)`** (Migration beta 0.3.24: ตาราง `stock_adjustment_refs` กันส่งซ้ำด้วย ref, คืน `balances` ยอดล่าสุด) ผ่าน `pushStockDeltas(changes, ref)` ใน posService — ใช้กับปรับสต็อก (`updateStock`; โหมด `adjust_mode: 'set'` จาก StockModal คิดผลต่างเทียบยอดบนฐานข้อมูล), แก้สินค้า (`upsertProduct` ไม่ส่ง `stock` ทับแล้ว), รับสินค้าเข้า (`import:<เลขที่>` + ต้นทุนเฉลี่ย), อนุมัติตรวจนับ (`count:<id>`) / **ห้ามเขียน `products.stock` แบบค่าตรงอีก** ให้ใช้ `pushStockDeltas` / ยังไม่รัน Migration = fallback อ่านยอดแล้วบวก (ส่งซ้ำได้ไม่ปลอดภัย) / **สินค้า/ลูกค้าใหม่ในโหมดฐานข้อมูลใช้ id UUID สร้างในแอป** (เพิ่มตอนออฟไลน์ได้) / helper `saveRowOrQueue` (ใหม่ = upsert, เดิม = update ลองซ้ำด้วย `basePayload`) และ `updateOrQueue(table, id, patch)` / คิวออฟไลน์มี kind ใหม่ `stock_rpc`, `update` / เข้าคิวแล้ว: สินค้า (รวมถังขยะ/ลบ/ค่า reorder/ล็อต), หมวดหมู่, ลูกค้า, ผู้ใช้, ใบตรวจนับ / ที่ยังเขียนตรง: เครื่องมืออัปโหลดข้อมูลทั้งเครื่อง (`uploadLocalDataToSupabase`)
 - [2026-11-20] (Claude) beta 0.3.23 (หลายสาขาใช้ฐานข้อมูลเดียวกัน): **รหัสสาขาต่อเครื่อง** `device.branchCode` (การ์ด "เครื่องนี้", ว่าง = `shopBranch` ของร้าน) อ่านผ่าน `posService.getDeviceBranchCode()` / ตัวแปรใหม่ `{BRANCH}` ใน `docNumbers.js` (`normalizeBranchCode` 5 หลัก) — `docTemplateOptions()` ใน posService ส่ง deviceCode + branchCode ให้ทุกจุดออกเลข, `nextOrderNumber(..., template, branchCode)` / **บิลบันทึก `orders.branch_code`**, **ใบกำกับ/ใบลด-เพิ่มหนี้บันทึก `seller_branch`** (ใบกำกับใช้สาขาของบิล, ใบลด/เพิ่มหนี้ใช้สาขาของใบกำกับต้นฉบับ) / พิมพ์: ใบเสร็จความร้อน (HTML+Canvas) ใช้ `order.branch_code`, ใบกำกับ/ใบลดหนี้ A4 ใช้ `seller_branch` (ไม่มี = `shopBranch`) / รายงานภาษีขายมีตัวกรองสาขา (เอกสารเก่าที่ไม่มีสาขา = สาขาของร้าน) / **Migration beta 0.3.23** (ALTER `orders.branch_code`, `tax_invoices.seller_branch`, `tax_notes.seller_branch` + `create_order` เวอร์ชันล่าสุดที่รวมการปิดใบสั่งขายของ 0.3.20 ด้วย) — ยังไม่รัน: `insertWithRunningNumber` (`optionalColumns`) ตัดคอลัมน์ใหม่แล้วส่งใหม่, `fetchOrdersInRange` ดึงใหม่โดยไม่ขอ `branch_code`, `create_order` เดิมไม่สนใจ key ใหม่ / ยังไม่ทำ: ที่อยู่แยกตามสาขาบนใบกำกับ (ยังใช้ที่อยู่ของร้าน), สต็อก/ลูกค้า/รายงานอื่นแยกสาขา
 - [2026-11-20] (Claude) beta 0.3.22 (เลขที่เอกสารไม่ชนกันข้ามเครื่อง): `allocateDocNumber(docType, { table, field, localNumbers, isSupabaseActive })` ใน posService (export) — ออนไลน์จะดึงเลขที่ในรอบเดียวกันจากฐานข้อมูล (`like prefix%`, ทีละหน้า) รวมกับเลขในเครื่องก่อนออกเลขถัดไป ออฟไลน์/Demo ใช้เลขในเครื่อง / ใช้กับใบนำเข้า (`createStockImport`), ใบโอน, ใบสั่งขาย, ใบตรวจนับ (POSContext) แทน `nextLocalDocNumber` / ข้อจำกัด 0.3.15 ลดเหลือกรณีสองเครื่องกดสร้างในเสี้ยววินาทีเดียวกัน หรือสร้างตอนออฟไลน์
 - [2026-11-20] (Claude) beta 0.3.21 (เพดานส่วนลดคุมการแก้ราคาต่อหน่วย): รายการในตะกร้ามี `system_unit_price` (ราคาที่ระบบคิดก่อนแก้เอง) / `CartPanel` แก้ราคาต่อหน่วยต่ำกว่า `system_unit_price` เกิน `maxCashierDiscountPercent` (% ต่อรายการ) และผู้ใช้ไม่มีสิทธิ์ `approve_discount` → ต้อง PIN ผู้จัดการ/ผู้ดูแลระบบผ่าน `ApproverPinModal` (ยังไม่ตั้งผู้ใช้ = ไม่บังคับ) / ข้อจำกัดของเดิมใน 0.3.13 ปิดแล้ว

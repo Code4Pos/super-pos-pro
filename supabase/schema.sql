@@ -940,3 +940,54 @@ BEGIN
 END;
 $$;
 NOTIFY pgrst, 'reload schema';
+
+
+-- =====================================================================
+-- Migration beta 0.3.24: ปรับสต็อกแบบ "ยอดเปลี่ยนแปลง" (delta) ส่งซ้ำได้ + รองรับออฟไลน์
+-- เดิมการปรับสต็อก/ตรวจนับ/แก้สินค้าเขียนยอดสต็อกแบบทับค่า ถ้าเครื่องอื่นขายไประหว่างนั้น ยอดขายจะหาย
+-- p_ref = รหัสการปรับครั้งนั้น (สร้างในแอป) ส่งซ้ำ (ซิงค์คิวซ้ำ) จะไม่ปรับซ้ำ
+-- p_changes = [{ product_id, delta, cost_price? }] / ยอมให้สต็อกติดลบเหมือนการขาย
+-- =====================================================================
+CREATE TABLE IF NOT EXISTS stock_adjustment_refs (
+  id TEXT PRIMARY KEY,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+ALTER TABLE stock_adjustment_refs ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Authenticated access to stock_adjustment_refs" ON stock_adjustment_refs;
+CREATE POLICY "Authenticated access to stock_adjustment_refs" ON stock_adjustment_refs
+  FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+CREATE OR REPLACE FUNCTION siampos_adjust_stock(p_ref TEXT, p_changes JSONB)
+RETURNS JSONB LANGUAGE plpgsql AS $$
+DECLARE
+  c JSONB;
+  v_stock NUMERIC;
+  v_balances JSONB := '{}'::jsonb;
+  v_inserted TEXT;
+BEGIN
+  INSERT INTO stock_adjustment_refs (id) VALUES (p_ref)
+  ON CONFLICT (id) DO NOTHING
+  RETURNING id INTO v_inserted;
+  IF v_inserted IS NULL THEN
+    RETURN jsonb_build_object('status', 'duplicate');
+  END IF;
+
+  FOR c IN SELECT * FROM jsonb_array_elements(COALESCE(p_changes, '[]'::jsonb)) LOOP
+    UPDATE products
+      SET stock = stock + COALESCE((c->>'delta')::numeric, 0),
+          cost_price = COALESCE(NULLIF(c->>'cost_price', '')::numeric, cost_price),
+          updated_at = NOW()
+      WHERE id::text = c->>'product_id'
+      RETURNING stock INTO v_stock;
+    IF FOUND THEN
+      v_balances := v_balances || jsonb_build_object(c->>'product_id', v_stock);
+    END IF;
+  END LOOP;
+
+  RETURN jsonb_build_object('status', 'applied', 'balances', v_balances);
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION siampos_adjust_stock(TEXT, JSONB) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION siampos_adjust_stock(TEXT, JSONB) TO authenticated;
+NOTIFY pgrst, 'reload schema';
