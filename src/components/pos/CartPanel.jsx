@@ -39,6 +39,7 @@ export default function CartPanel({ onOpenCheckout, onCloseMobileDrawer }) {
     printerSettings,
     authEnabled,
     can,
+    expiredLotItems,
   } = usePOS();
 
   const {
@@ -355,6 +356,12 @@ export default function CartPanel({ onOpenCheckout, onCloseMobileDrawer }) {
                   <div className="text-xs font-bold text-slate-800 line-clamp-1">
                     {item.product_name}
                   </div>
+                  {expiredLotItems?.has(item.product_id) && (
+                    <div className="mt-0.5 inline-flex items-center px-1.5 py-0.5 rounded-md bg-rose-100 text-rose-700 text-[10px] font-extrabold">
+                      ล็อตหมดอายุ{' '}
+                      {new Date(`${expiredLotItems.get(item.product_id).expiryDate}T00:00:00`).toLocaleDateString('th-TH')}
+                    </div>
+                  )}
 
                   {/* ปุ่มกดแก้ไขราคาต่อหน่วยในบิล (เปิด Numpad) */}
                   <div className="flex items-center gap-1.5 mt-1 flex-wrap">

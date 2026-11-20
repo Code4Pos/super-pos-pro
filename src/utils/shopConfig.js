@@ -119,6 +119,18 @@ export const SHOP_CONFIG_FIELDS = [
     ],
   },
   {
+    key: 'expiredLotPolicy',
+    group: 'sales',
+    type: 'select',
+    default: 'warn',
+    label: 'เมื่อขายสินค้าที่มีล็อตหมดอายุ',
+    hint: 'เฉพาะสินค้าที่เปิดติดตามล็อต — เตือนเมื่อการขายจะตัดสต็อกจากล็อตที่หมดอายุแล้ว (ตัดล็อตตาม FEFO/FIFO)',
+    options: [
+      { value: 'warn', label: 'แจ้งเตือนในตะกร้าและหน้าชำระเงิน' },
+      { value: 'off', label: 'ไม่ต้องเตือน' },
+    ],
+  },
+  {
     key: 'maxCashierDiscountPercent',
     group: 'sales',
     type: 'number',

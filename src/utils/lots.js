@@ -156,3 +156,53 @@ export function summarizeLotsByProduct(lots = []) {
   });
   return map;
 }
+
+/**
+ * จำลองการตัดล็อตของสินค้าในตะกร้า แล้วหาว่ารายการไหนจะถูกตัดจากล็อตที่หมดอายุแล้ว
+ * - สินค้ารองที่ผูกกับสินค้าหลักแปลงเป็นหน่วยฐานของสินค้าหลัก (quantity x linked_deduct_qty)
+ * - ใช้กลยุทธ์เดียวกับตอนตัดสต็อกจริง (FEFO/FIFO) และนับรวมทุกรายการของสินค้าหลักเดียวกัน
+ * คืนค่า Map: product_id ของรายการในตะกร้า → { expiredQty (หน่วยฐาน), expiryDate (ล็อตหมดอายุเก่าสุด) }
+ */
+export function findExpiredLotsInCart(cart = [], products = [], lots = [], now = new Date()) {
+  const result = new Map();
+  if (!cart.length || !lots.length) return result;
+  const productMap = new Map(products.map((p) => [p.id, p]));
+
+  // รวมจำนวนในตะกร้าต่อสินค้าหลัก (เรียงตามลำดับรายการ)
+  const byMaster = new Map();
+  cart.forEach((item) => {
+    const product = productMap.get(item.product?.id) || item.product;
+    if (!product) return;
+    const master = product.linked_product_id ? productMap.get(product.linked_product_id) : product;
+    if (!master?.track_lots) return;
+    const factor = product.linked_product_id ? Number(product.linked_deduct_qty) || 1 : 1;
+    const baseQty = round4((Number(item.quantity) || 0) * factor);
+    if (baseQty <= 0) return;
+    if (!byMaster.has(master.id)) byMaster.set(master.id, { master, items: [] });
+    byMaster.get(master.id).items.push({ itemId: product.id, baseQty });
+  });
+
+  byMaster.forEach(({ master, items }) => {
+    const totalQty = items.reduce((sum, i) => sum + i.baseQty, 0);
+    const ordered = sortLotsForConsumption(
+      lots.filter((l) => l.product_id === master.id && Number(l.remaining_qty) > 0),
+      master.lot_strategy || 'FEFO'
+    );
+    let remaining = totalQty;
+    let expiredQty = 0;
+    let expiryDate = null;
+    for (const lot of ordered) {
+      if (remaining <= 0) break;
+      const take = Math.min(Number(lot.remaining_qty) || 0, remaining);
+      if (getExpiryStatus(lot, now) === 'expired') {
+        expiredQty = round4(expiredQty + take);
+        if (!expiryDate || lot.expiry_date < expiryDate) expiryDate = lot.expiry_date;
+      }
+      remaining = round4(remaining - take);
+    }
+    if (expiredQty > 0) {
+      items.forEach((i) => result.set(i.itemId, { expiredQty, expiryDate, masterId: master.id, masterUnit: master.unit }));
+    }
+  });
+  return result;
+}

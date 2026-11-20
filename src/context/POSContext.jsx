@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useEffect, useMemo, useCall
 import { posService, normalizeAndSyncProducts, allocateDocNumber } from '../services/posService';
 import { printerService, SHARED_SHOP_SETTING_KEYS } from '../services/printerService';
 import { calculateEffectiveUnitPrice, calculateRoundingDiscount, calculateLoyaltyPoints } from '../utils/formatters';
+import { findExpiredLotsInCart } from '../utils/lots';
 import { summarizeSplitPayments } from '../utils/payments';
 import { calculateCustomerCredit, checkCreditSale } from '../utils/credit';
 import { hasPermission, canAccessTab, applyRoleConfig, applyDisabledModules } from '../utils/rbac';
@@ -14,7 +15,7 @@ import {
 
 const SESSION_STORAGE_KEY = 'siampos_session_v1';
 
-export const APP_VERSION = 'version beta 0.3.24';
+export const APP_VERSION = 'version beta 0.3.25';
 const HELD_BILLS_STORAGE_KEY = 'siampos_held_bills_v1';
 
 const POSContext = createContext(null);
@@ -380,6 +381,31 @@ export function POSProvider({ children, scope = 'all' }) {
     setBillDiscount(0);
     setPricingMode('auto');
   }, []);
+
+  // รายการในตะกร้าที่จะถูกตัดจากล็อตหมดอายุ (ค่าตั้ง expiredLotPolicy: 'warn' | 'off')
+  const expiredLotPolicy = printerSettings.expiredLotPolicy || 'warn';
+  const expiredLotItems = useMemo(
+    () => (expiredLotPolicy === 'off' ? new Map() : findExpiredLotsInCart(cart, products, productLots)),
+    [expiredLotPolicy, cart, products, productLots]
+  );
+  // แจ้งเตือนครั้งเดียวต่อสินค้าที่เพิ่งเริ่มตัดจากล็อตหมดอายุ (เอาออกจากตะกร้าแล้วเพิ่มใหม่ = เตือนอีกครั้ง)
+  const warnedExpiredRef = useRef(new Set());
+  useEffect(() => {
+    const warned = warnedExpiredRef.current;
+    expiredLotItems.forEach((info, productId) => {
+      if (warned.has(productId)) return;
+      warned.add(productId);
+      const item = cart.find((c) => c.product.id === productId);
+      const expiry = info.expiryDate ? new Date(`${info.expiryDate}T00:00:00`).toLocaleDateString('th-TH') : '';
+      showToast(
+        `"${item?.product.name || 'สินค้า'}" จะถูกตัดจากล็อตที่หมดอายุแล้ว ${info.expiredQty} ${info.masterUnit || ''} (หมดอายุ ${expiry})`,
+        'warning'
+      );
+    });
+    [...warned].forEach((id) => {
+      if (!expiredLotItems.has(id)) warned.delete(id);
+    });
+  }, [expiredLotItems, cart, showToast]);
 
   // คำนวณรายละเอียดราคาปลีก-ส่ง และ VAT ทั้ง 3 รูปแบบ (no_vat, vat_in, vat_out)
   const cartSummary = useMemo(() => {
@@ -2105,6 +2131,7 @@ export function POSProvider({ children, scope = 'all' }) {
     createStockTransfer,
     changeStockTransferStatus,
     productLots,
+    expiredLotItems,
     updateLotSettings,
     reconcileProductLots,
     updateLotDetails,

@@ -36,7 +36,9 @@ const PAYMENT_TABS = [
  * - ชำระแบบเครดิตบังคับเลือกลูกค้าก่อนเสมอ
  */
 export default function CheckoutModal({ isOpen, onClose, onOrderSuccess }) {
-  const { cartSummary, selectedCustomer, checkoutOrder, getCustomerCredit, can, printerSettings } = usePOS();
+  const { cartSummary, selectedCustomer, checkoutOrder, getCustomerCredit, can, printerSettings, expiredLotItems } = usePOS();
+  // รายการที่จะถูกตัดจากล็อตหมดอายุ (แสดงเตือนก่อนรับเงิน)
+  const expiredItems = (cartSummary.items || []).filter((item) => expiredLotItems?.has(item.product_id));
   // บทบาทที่ไม่มีสิทธิ์ขายเชื่อ (เช่น แคชเชียร์) จะไม่เห็นแท็บเครดิต
   const canCreditSale = can('credit_sale');
   // ช่องทางชำระเงินที่ร้านเปิดใช้ (ค่าตั้ง enabledPaymentMethods) — เงินสดเปิดเสมอ
@@ -195,6 +197,15 @@ export default function CheckoutModal({ isOpen, onClose, onOrderSuccess }) {
 
         {/* เนื้อหาหลัก ไม่มี Scrollbar แนวตั้ง */}
         <div className="p-3 sm:p-4 space-y-3 overflow-y-auto flex-1 flex flex-col justify-between">
+          {expiredItems.length > 0 && (
+            <div className="flex items-start gap-2 px-3 py-2 rounded-xl bg-rose-50 border border-rose-200 text-[11px] font-bold text-rose-700 shrink-0">
+              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+              <span>
+                มีสินค้าที่จะถูกตัดจากล็อตที่หมดอายุแล้ว:{' '}
+                {expiredItems.map((item) => item.product_name).join(', ')} — ตรวจสอบสินค้าก่อนรับเงิน
+              </span>
+            </div>
+          )}
           {/* แถบเมนูเลือกวิธีชำระเงินแถวเดียว (Single-Row Tabs) */}
           <div
             className="grid gap-1 sm:gap-1.5 p-1 rounded-2xl bg-slate-100 border border-slate-200 shrink-0"
