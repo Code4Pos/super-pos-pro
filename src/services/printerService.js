@@ -1,3 +1,4 @@
+import { formatBranchLabel, resolveBranch } from '../utils/branches';
 import { formatCurrency, formatDateTime } from '../utils/formatters';
 import { PAYMENT_METHOD_LABELS, getOrderPayments } from '../utils/payments';
 import { calculateOrderVat, bahtText } from '../utils/tax';
@@ -6,8 +7,7 @@ import { loadImage } from '../utils/imageTools';
 import { isNativePrinterAvailable, nativePrintHtml, bluetoothWrite, bluetoothStatus, bytesToBase64 } from './nativePrinter';
 
 function formatBranch(branch) {
-  const b = String(branch || '00000');
-  return b === '00000' ? 'สำนักงานใหญ่' : `สาขาที่ ${b}`;
+  return formatBranchLabel(branch || '00000');
 }
 
 const PRINTER_SETTINGS_KEY = 'siampos_printer_settings_v2';
@@ -324,8 +324,13 @@ function renderSlipToCanvas(order, settings, mode = 'receipt') {
     if (settings.receiptHeaderText) {
       drawCentered(settings.receiptHeaderText, `${smallFontSize}px Prompt, sans-serif`);
     }
-    if (settings.receiptShowPhone !== false && settings.shopPhone) {
-      drawCentered(`โทร. ${settings.shopPhone}`, `${smallFontSize}px Prompt, sans-serif`);
+    // สาขาที่ออกบิล (ตั้งชื่อ/เบอร์สาขาไว้ = แสดงของสาขา ไม่งั้นใช้ของร้าน)
+    const receiptBranch = resolveBranch(settings, order.branch_code);
+    if (receiptBranch.name) {
+      drawCentered(receiptBranch.name, `${smallFontSize}px Prompt, sans-serif`);
+    }
+    if (settings.receiptShowPhone !== false && receiptBranch.phone) {
+      drawCentered(`โทร. ${receiptBranch.phone}`, `${smallFontSize}px Prompt, sans-serif`);
     }
     // ร้านจดทะเบียน VAT: ใบเสร็จนี้เป็นใบกำกับภาษีอย่างย่อ ต้องแสดงเลขผู้เสียภาษีของร้าน
     if (settings.vatRegistered) {
@@ -520,6 +525,8 @@ function buildThermalReceiptHtml(order, settings, paperSize) {
   const widthCss = is58 ? '54mm' : '74mm';
   const scale = receiptFontScale(settings);
   const px = (n) => `${(n * scale).toFixed(1)}px`;
+  // สาขาที่ออกบิล: ชื่อ/เบอร์ของสาขา (ไม่ได้ตั้ง = ของร้าน)
+  const htmlBranch = resolveBranch(settings, order.branch_code);
   const fontSize = px(is58 ? 11 : 12.5);
   const items = order.items || [];
   const showUnitPrice = settings.receiptShowUnitPrice !== false;
@@ -586,7 +593,8 @@ function buildThermalReceiptHtml(order, settings, paperSize) {
     ${settings.receiptLogo ? `<img src="${settings.receiptLogo}" alt="" style="display:block;margin:0 auto 4px;max-width:80%;max-height:26mm;" />` : ''}
     <div style="font-size:${px(is58 ? 14 : 16)};font-weight:700;">${escapeHtml(settings.shopName)}</div>
     ${settings.receiptHeaderText ? `<div style="font-size:${px(10.5)};">${escapeHtml(settings.receiptHeaderText)}</div>` : ''}
-    ${settings.receiptShowPhone !== false && settings.shopPhone ? `<div style="font-size:${px(10.5)};">โทร. ${escapeHtml(settings.shopPhone)}</div>` : ''}
+    ${htmlBranch.name ? `<div style="font-size:${px(10.5)};">${escapeHtml(htmlBranch.name)}</div>` : ''}
+    ${settings.receiptShowPhone !== false && htmlBranch.phone ? `<div style="font-size:${px(10.5)};">โทร. ${escapeHtml(htmlBranch.phone)}</div>` : ''}
     ${settings.vatRegistered ? `<div style="font-size:10px;">เลขประจำตัวผู้เสียภาษี ${escapeHtml(settings.shopTaxId)} (${formatBranch(order.branch_code || settings.shopBranch)})</div><div style="font-size:11px;font-weight:700;">ใบเสร็จรับเงิน/ใบกำกับภาษีอย่างย่อ</div>` : ''}
   </div>
   <div class="divider"></div>
@@ -1134,6 +1142,8 @@ function buildPurchaseOrderHtml(importDoc, supplier, settings) {
  * ใบกำกับภาษีเต็มรูปแบบ / ใบเสร็จรับเงิน ขนาด A4 (มาตรา 86/4 ประมวลรัษฎากร)
  */
 function buildTaxInvoiceHtml(invoice, settings, copyLabel) {
+  // สาขาผู้ขายของใบกำกับ: ชื่อ ที่อยู่ เบอร์ ของสาขา (ไม่ได้ตั้ง = ของร้าน)
+  const sellerBranch = resolveBranch(settings, invoice.seller_branch);
   const rowsHtml = (invoice.items || [])
     .map(
       (it, idx) => `
@@ -1175,9 +1185,10 @@ function buildTaxInvoiceHtml(invoice, settings, copyLabel) {
   <div class="header">
     <div>
       <div style="font-size:18px;font-weight:700;">${escapeHtml(settings.shopName)}</div>
-      <div>${escapeHtml(settings.shopAddress)}</div>
-      <div>โทร. ${escapeHtml(settings.shopPhone)}</div>
-      <div><strong>เลขประจำตัวผู้เสียภาษี:</strong> ${escapeHtml(settings.shopTaxId)} (${formatBranch(invoice.seller_branch || settings.shopBranch)})</div>
+      ${sellerBranch.name ? `<div>${escapeHtml(sellerBranch.name)}</div>` : ''}
+      <div>${escapeHtml(sellerBranch.address)}</div>
+      <div>โทร. ${escapeHtml(sellerBranch.phone)}</div>
+      <div><strong>เลขประจำตัวผู้เสียภาษี:</strong> ${escapeHtml(settings.shopTaxId)} (${sellerBranch.label})</div>
     </div>
     <div style="text-align:right;">
       <div class="title">ใบกำกับภาษี / ใบเสร็จรับเงิน</div>
@@ -1234,6 +1245,7 @@ function buildTaxInvoiceHtml(invoice, settings, copyLabel) {
  * แสดงใบกำกับเดิมที่อ้างอิง มูลค่าเดิม มูลค่าที่ถูกต้อง ผลต่าง ภาษีของผลต่าง และเหตุผล
  */
 function buildTaxNoteHtml(note, settings, copyLabel) {
+  const sellerBranch = resolveBranch(settings, note.seller_branch);
   const isCredit = note.note_type === 'credit';
   const original = Number(note.original_total) || 0;
   const correct = isCredit ? original - (Number(note.total_amount) || 0) : original + (Number(note.total_amount) || 0);
@@ -1278,9 +1290,10 @@ function buildTaxNoteHtml(note, settings, copyLabel) {
   <div class="header">
     <div>
       <div style="font-size:18px;font-weight:700;">${escapeHtml(settings.shopName)}</div>
-      <div>${escapeHtml(settings.shopAddress)}</div>
-      <div>โทร. ${escapeHtml(settings.shopPhone)}</div>
-      <div><strong>เลขประจำตัวผู้เสียภาษี:</strong> ${escapeHtml(settings.shopTaxId)} (${formatBranch(note.seller_branch || settings.shopBranch)})</div>
+      ${sellerBranch.name ? `<div>${escapeHtml(sellerBranch.name)}</div>` : ''}
+      <div>${escapeHtml(sellerBranch.address)}</div>
+      <div>โทร. ${escapeHtml(sellerBranch.phone)}</div>
+      <div><strong>เลขประจำตัวผู้เสียภาษี:</strong> ${escapeHtml(settings.shopTaxId)} (${sellerBranch.label})</div>
     </div>
     <div style="text-align:right;">
       <div class="title">${isCredit ? 'ใบลดหนี้' : 'ใบเพิ่มหนี้'}</div>

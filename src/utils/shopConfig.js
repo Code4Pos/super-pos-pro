@@ -11,6 +11,7 @@
 import { normalizeRoleConfig, OPTIONAL_MODULES } from './rbac';
 import { CREDIT_TERM_OPTIONS } from './credit';
 import { normalizeDocumentNumbering } from './docNumbers';
+import { normalizeBranches } from './branches';
 
 export const PAYMENT_METHOD_OPTIONS = [
   { value: 'cash', label: 'เงินสด' },
@@ -283,6 +284,16 @@ export const SHOP_CONFIG_FIELDS = [
     default: {},
     normalize: normalizeRoleConfig,
     label: 'สิทธิ์ตามบทบาท (ปรับทับค่าเริ่มต้น / บทบาทที่ร้านสร้างเอง)',
+  },
+
+  // ===================== สาขา (tax) — แก้ที่หน้า ตั้งค่า › ภาษี =====================
+  {
+    key: 'branches',
+    group: 'tax',
+    type: 'json',
+    default: [],
+    normalize: normalizeBranches,
+    label: 'ข้อมูลสาขา (ชื่อ ที่อยู่ เบอร์โทร) ที่พิมพ์บนใบเสร็จ/ใบกำกับภาษีของแต่ละสาขา',
   },
 
   // ===================== เลขที่เอกสาร (documents) — แก้ที่หน้า ตั้งค่า › เลขที่เอกสาร =====================

@@ -150,9 +150,22 @@ export default function DeviceSettings() {
                 value={branch}
                 maxLength={5}
                 placeholder={String(printerSettings.shopBranch || '00000')}
+                list="siampos-branch-options"
                 onChange={(e) => setBranch(e.target.value.replace(/\D/g, ''))}
                 className="mt-1 block w-28 px-3 py-2 rounded-xl border border-slate-300 text-sm font-mono font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500"
               />
+              {/* รายชื่อสาขาที่ตั้งไว้ในหน้าตั้งค่าภาษี */}
+              <datalist id="siampos-branch-options">
+                {(printerSettings.branches || []).map((b) => (
+                  <option key={b.code} value={b.code}>
+                    {b.name || b.code}
+                  </option>
+                ))}
+              </datalist>
+              {(() => {
+                const found = (printerSettings.branches || []).find((b) => b.code === branch.padStart(5, '0'));
+                return found?.name ? <span className="block mt-0.5 text-[10px] font-bold text-indigo-600">{found.name}</span> : null;
+              })()}
             </label>
             <button
               type="button"

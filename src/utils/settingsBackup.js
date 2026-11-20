@@ -17,7 +17,7 @@ const registryKeys = (group) => SHOP_CONFIG_FIELDS.filter((f) => f.group === gro
 export const SETTINGS_GROUPS = [
   { id: 'shop', label: 'ข้อมูลร้าน', keys: ['shopName', 'shopAddress', 'shopPhone', 'footerText'] },
   { id: 'payment', label: 'พร้อมเพย์', keys: ['promptpayId'] },
-  { id: 'tax', label: 'ภาษี (VAT)', keys: ['vatRegistered', 'shopTaxId', 'shopBranch', 'vatMode'] },
+  { id: 'tax', label: 'ภาษี (VAT)', keys: ['vatRegistered', 'shopTaxId', 'shopBranch', 'vatMode', 'branches'] },
   { id: 'receipt', label: 'ใบเสร็จ', keys: registryKeys('receipt') },
   { id: 'sales', label: 'กติกาการขาย', keys: registryKeys('sales') },
   { id: 'defaults', label: 'การแจ้งเตือน & ค่าเริ่มต้น', keys: registryKeys('defaults') },
