@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import {
   TrendingUp,
   DollarSign,
@@ -8,18 +8,93 @@ import {
   AlertTriangle,
   ArrowRight,
   CreditCard,
+  CalendarDays,
+  Loader2,
+  WifiOff,
 } from 'lucide-react';
 import { usePOS } from '../context/POSContext';
 import { getMinStock, isLowStock } from '../utils/stockAlerts';
 import { formatCurrency, formatNumber } from '../utils/formatters';
 import { getOrderPayments } from '../utils/payments';
 
+// ช่วงเวลาของแดชบอร์ด (คำนวณจากวันที่ท้องถิ่น)
+const RANGE_OPTIONS = [
+  { id: 'today', label: 'วันนี้' },
+  { id: '7d', label: '7 วัน' },
+  { id: '30d', label: '30 วัน' },
+  { id: 'thisMonth', label: 'เดือนนี้' },
+  { id: 'lastMonth', label: 'เดือนที่แล้ว' },
+];
+
+function getRangeBounds(rangeId, now = new Date()) {
+  const startOfDay = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const tomorrow = new Date(startOfDay(now).getTime() + 86400000);
+  switch (rangeId) {
+    case '7d':
+      return { start: new Date(tomorrow.getTime() - 7 * 86400000), end: tomorrow };
+    case '30d':
+      return { start: new Date(tomorrow.getTime() - 30 * 86400000), end: tomorrow };
+    case 'thisMonth':
+      return { start: new Date(now.getFullYear(), now.getMonth(), 1), end: tomorrow };
+    case 'lastMonth':
+      return {
+        start: new Date(now.getFullYear(), now.getMonth() - 1, 1),
+        end: new Date(now.getFullYear(), now.getMonth(), 1),
+      };
+    default:
+      return { start: startOfDay(now), end: tomorrow };
+  }
+}
+
+// คอลัมน์ที่แดชบอร์ดใช้ (รวมรายการสินค้าเพื่อหาสินค้าขายดี)
+const DASHBOARD_ORDER_COLUMNS =
+  'id, order_number, status, grand_total, total_cost, wholesale_savings, pricing_mode, payment_method, payments, items, created_at';
+
 export default function DashboardPage({ onNavigate }) {
-  const { orders, products, printerSettings } = usePOS();
+  const { orders, products, printerSettings, fetchOrdersInRange, dbMode } = usePOS();
   const defaultMinStock = printerSettings?.defaultMinStock;
 
+  // บิลทั้งหมดในช่วงที่เลือก (โหลดจากฐานข้อมูล ไม่จำกัดแค่บิลล่าสุด 200 ใบ)
+  const [rangeId, setRangeId] = useState('today');
+  const [rangeOrders, setRangeOrders] = useState(null);
+  const [loadingRange, setLoadingRange] = useState(false);
+  const [offlineData, setOfflineData] = useState(false);
+  const [loadError, setLoadError] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    const { start, end } = getRangeBounds(rangeId);
+    setLoadingRange(true);
+    setLoadError('');
+    fetchOrdersInRange(start, end, DASHBOARD_ORDER_COLUMNS)
+      .then((res) => {
+        if (cancelled) return;
+        setRangeOrders(res.orders);
+        setOfflineData(res.offline);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        // โหลดไม่ได้: ใช้บิลที่โหลดไว้ตอนเปิดหลังร้านที่อยู่ในช่วงนี้แทน
+        setRangeOrders(
+          orders.filter((o) => {
+            const d = new Date(o.created_at);
+            return d >= start && d < end;
+          })
+        );
+        setLoadError(err.message);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingRange(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // orders ใช้เป็นข้อมูลสำรองเท่านั้น ไม่ต้องโหลดใหม่ทุกครั้งที่บิลล่าสุดเปลี่ยน
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rangeId, fetchOrdersInRange]);
+
   const analytics = useMemo(() => {
-    const validOrders = orders.filter((o) => o.status === 'completed');
+    const validOrders = (rangeOrders || []).filter((o) => o.status === 'completed');
 
     let totalRevenue = 0;
     let totalCost = 0;
@@ -89,7 +164,7 @@ export default function DashboardPage({ onNavigate }) {
       topProducts,
       lowStockProducts,
     };
-  }, [orders, products]);
+  }, [rangeOrders, products, defaultMinStock]);
 
   const maxProductRev = Math.max(
     1,
@@ -98,6 +173,37 @@ export default function DashboardPage({ onNavigate }) {
 
   return (
     <div className="flex-1 overflow-y-auto p-3 sm:p-5 pb-24 lg:pb-8 space-y-4 sm:space-y-5">
+      {/* เลือกช่วงเวลา */}
+      <div className="flex flex-wrap items-center gap-2">
+        <CalendarDays className="w-4 h-4 text-indigo-600 shrink-0" />
+        <div className="flex flex-wrap gap-1.5">
+          {RANGE_OPTIONS.map((opt) => (
+            <button
+              key={opt.id}
+              type="button"
+              onClick={() => setRangeId(opt.id)}
+              className={`px-3 h-8 rounded-xl border text-xs font-bold ${
+                rangeId === opt.id
+                  ? 'bg-indigo-600 border-indigo-600 text-white'
+                  : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+              }`}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+        {loadingRange && (
+          <span className="flex items-center gap-1 text-[11px] text-slate-500">
+            <Loader2 className="w-3.5 h-3.5 animate-spin" /> กำลังโหลดบิล...
+          </span>
+        )}
+        {!loadingRange && (offlineData || loadError) && dbMode === 'supabase' && (
+          <span className="flex items-center gap-1 text-[11px] font-semibold text-amber-700">
+            <WifiOff className="w-3.5 h-3.5" /> ใช้บิลที่มีในเครื่อง ตัวเลขอาจไม่ครบ
+          </span>
+        )}
+      </div>
+
       {/* KPI Cards แถวบน (2 คอลัมน์บนมือถือ, 4 คอลัมน์บนจอใหญ่) */}
       <div className="grid grid-cols-2 xl:grid-cols-4 gap-2.5 sm:gap-4">
         <div className="bg-white p-3.5 sm:p-5 rounded-2xl border border-slate-200/80 shadow-xs flex items-start justify-between gap-2">

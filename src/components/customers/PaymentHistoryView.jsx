@@ -16,7 +16,8 @@ function currentMonthValue() {
  * แสดงบิลที่ถูกตัดชำระในแต่ละครั้ง (FIFO) พิมพ์ใบเสร็จซ้ำ และส่งออก CSV
  */
 export default function PaymentHistoryView() {
-  const { customers, orders, customerPayments = [] } = usePOS();
+  // creditSourceOrders = บิลขายเชื่อทุกใบ (ไม่จำกัดแค่บิลล่าสุด 200 ใบ)
+  const { customers, creditSourceOrders: orders, customerPayments = [] } = usePOS();
   const [search, setSearch] = useState('');
   const [month, setMonth] = useState(currentMonthValue());
   const [methodFilter, setMethodFilter] = useState('all');

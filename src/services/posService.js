@@ -415,7 +415,8 @@ const TODAY_ORDER_COLUMNS =
 // จำนวนบิลที่เก็บไว้ในเครื่อง (โหมดหน้าขาย)
 const LOCAL_ORDER_KEEP = 300;
 // จำนวนบิลสูงสุดที่โหลดมาคำนวณยอดค้างเครดิต
-const CREDIT_ORDER_LIMIT = 5000;
+// จำนวนบิลเครดิต / รายการรับชำระสูงสุดที่โหลดมาคำนวณยอดค้าง (ดึงทีละ 1,000 แถว)
+const CREDIT_ORDER_LIMIT = 50000;
 
 function startOfLocalDayIso(date = new Date()) {
   const d = new Date(date);
@@ -459,14 +460,32 @@ function mergeLocalUnsyncedOrders(remoteOrders = [], { todayOnly = false, filter
   return [...extras, ...merged].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
 }
 
+// Supabase (PostgREST) ส่งได้สูงสุด 1,000 แถวต่อครั้ง: ดึงทีละหน้าจนครบหรือถึง maxRows
+const SUPABASE_PAGE_SIZE = 1000;
+
+/**
+ * ดึงข้อมูลทีละหน้า buildQuery() ต้องคืน query ใหม่ทุกครั้ง (มี select/filter/order แล้ว)
+ * คืนค่า { data, error } รูปแบบเดียวกับ supabase
+ */
+async function fetchPagedRows(buildQuery, maxRows = SUPABASE_PAGE_SIZE) {
+  const rows = [];
+  for (let from = 0; from < maxRows; from += SUPABASE_PAGE_SIZE) {
+    const to = Math.min(from + SUPABASE_PAGE_SIZE, maxRows) - 1;
+    const { data, error } = await buildQuery().range(from, to);
+    if (error) return { data: null, error };
+    rows.push(...(data || []));
+    if (!data || data.length < to - from + 1) break;
+  }
+  return { data: rows, error: null };
+}
+
 async function loadRemoteWithLocal(table, storageKey, limit = 1000, orderField = 'created_at') {
   const localRows = getLocal(storageKey, []);
   try {
-    const res = await supabase
-      .from(table)
-      .select('*')
-      .order(orderField, { ascending: false })
-      .limit(limit);
+    const res = await fetchPagedRows(
+      () => supabase.from(table).select('*').order(orderField, { ascending: false }),
+      limit
+    );
     if (res.error || !Array.isArray(res.data)) return localRows;
     const remoteIds = new Set(res.data.map((r) => r.id));
     return [...res.data, ...localRows.filter((r) => !remoteIds.has(r.id))];
@@ -1466,7 +1485,7 @@ export const posService = {
           remoteSpecialRules,
           remoteLotConsumptions,
         ] = await Promise.all([
-          loadRemoteWithLocal('customer_payments', STORAGE_KEYS.CUSTOMER_PAYMENTS),
+          loadRemoteWithLocal('customer_payments', STORAGE_KEYS.CUSTOMER_PAYMENTS, CREDIT_ORDER_LIMIT),
           loadRemoteWithLocal('app_users', STORAGE_KEYS.USERS),
           loadRemoteWithLocal('product_lots', STORAGE_KEYS.PRODUCT_LOTS, 5000),
           loadRemoteWithLocal('sales_orders', STORAGE_KEYS.SALES_ORDERS, 1000),
@@ -1621,6 +1640,65 @@ export const posService = {
   },
 
   /**
+   * โหลดบิลทั้งหมดในช่วงวันที่ [start, end) สำหรับรายงาน (ไม่จำกัด 200 บิลล่าสุดแบบตอนเปิดหลังร้าน)
+   * columns = คอลัมน์ที่ต้องใช้ (ไม่ต้องดึง items ถ้าไม่จำเป็น) / ออฟไลน์หรือ Demo = ใช้บิลในเครื่อง
+   */
+  async fetchOrdersInRange({ start, end, columns = '*', isSupabaseActive = false, maxRows = 50000 } = {}) {
+    const startMs = new Date(start).getTime();
+    const endMs = new Date(end).getTime();
+    const inRange = (o) => {
+      const t = new Date(o.created_at).getTime();
+      return t >= startMs && t < endMs;
+    };
+    const localResult = (offline) => ({
+      orders: getLocal(STORAGE_KEYS.ORDERS, INITIAL_ORDERS).filter(inRange),
+      offline,
+    });
+    if (!isSupabaseActive || !supabase) return localResult(false);
+    if (!isOnline()) return localResult(true);
+    try {
+      const { data, error } = await fetchPagedRows(
+        () =>
+          supabase
+            .from('orders')
+            .select(columns)
+            .gte('created_at', new Date(startMs).toISOString())
+            .lt('created_at', new Date(endMs).toISOString())
+            .order('created_at', { ascending: false }),
+        maxRows
+      );
+      if (error) throw error;
+      return { orders: mergeLocalUnsyncedOrders(data || [], { filter: inRange }), offline: false };
+    } catch (err) {
+      if (isNetworkError(err)) return localResult(true);
+      throw err;
+    }
+  },
+
+  /**
+   * โหลดบิลตามเลขที่บิล (ทีละ 100 เลข) ใช้หาสถานะบิลที่ใบกำกับภาษีอ้างอิงข้ามเดือน
+   */
+  async fetchOrdersByNumbers(orderNumbers = [], { columns = 'id, order_number, status, created_at', isSupabaseActive = false } = {}) {
+    const numbers = [...new Set(orderNumbers.filter(Boolean))];
+    const local = () => {
+      const set = new Set(numbers);
+      return getLocal(STORAGE_KEYS.ORDERS, INITIAL_ORDERS).filter((o) => set.has(o.order_number));
+    };
+    if (numbers.length === 0) return [];
+    if (!isSupabaseActive || !supabase || !isOnline()) return local();
+    const rows = [];
+    for (let i = 0; i < numbers.length; i += 100) {
+      const { data, error } = await supabase.from('orders').select(columns).in('order_number', numbers.slice(i, i + 100));
+      if (error) {
+        if (isNetworkError(error)) return local();
+        throw error;
+      }
+      rows.push(...(data || []));
+    }
+    return rows;
+  },
+
+  /**
    * โหลดข้อมูลเครดิต (บิลขายเชื่อที่ยังไม่ยกเลิก + การรับชำระหนี้) เมื่อจำเป็นเท่านั้น
    * - customerId = ลูกค้ารายเดียว (ตอนขายเชื่อ) / ไม่ระบุ = ทุกคน (หน้าต่าง "เครดิต")
    */
@@ -1640,23 +1718,25 @@ export const posService = {
     if (!isSupabaseActive || !supabase) return localResult(false);
     if (!isOnline()) return localResult(true);
     try {
-      let orderQuery = supabase
-        .from('orders')
-        .select(TODAY_ORDER_COLUMNS)
-        .in('payment_method', ['credit', 'split'])
-        .not('customer_id', 'is', null)
-        .order('created_at', { ascending: false })
-        .limit(CREDIT_ORDER_LIMIT);
-      let paymentQuery = supabase
-        .from('customer_payments')
-        .select('*')
-        .order('created_at', { ascending: false })
-        .limit(CREDIT_ORDER_LIMIT);
-      if (customerId) {
-        orderQuery = orderQuery.eq('customer_id', customerId);
-        paymentQuery = paymentQuery.eq('customer_id', customerId);
-      }
-      const [ordRes, payRes] = await Promise.all([orderQuery, paymentQuery]);
+      const orderQuery = () => {
+        let q = supabase
+          .from('orders')
+          .select(TODAY_ORDER_COLUMNS)
+          .in('payment_method', ['credit', 'split'])
+          .not('customer_id', 'is', null)
+          .order('created_at', { ascending: false });
+        if (customerId) q = q.eq('customer_id', customerId);
+        return q;
+      };
+      const paymentQuery = () => {
+        let q = supabase.from('customer_payments').select('*').order('created_at', { ascending: false });
+        if (customerId) q = q.eq('customer_id', customerId);
+        return q;
+      };
+      const [ordRes, payRes] = await Promise.all([
+        fetchPagedRows(orderQuery, CREDIT_ORDER_LIMIT),
+        fetchPagedRows(paymentQuery, CREDIT_ORDER_LIMIT),
+      ]);
       if (ordRes.error) throw ordRes.error;
       if (payRes.error) throw payRes.error;
 
@@ -1785,7 +1865,7 @@ export const posService = {
         // ยอดรับชำระหนี้ และใบวางบิล (ถ้ายังไม่มีตารางในฐานข้อมูลให้ใช้ข้อมูลในเครื่อง)
         const [customerPayments, billingNotes, stockLedger, taxInvoices, remoteUsers, taxNotes, remoteCounts, remoteLots] =
           await Promise.all([
-            loadRemoteWithLocal('customer_payments', STORAGE_KEYS.CUSTOMER_PAYMENTS),
+            loadRemoteWithLocal('customer_payments', STORAGE_KEYS.CUSTOMER_PAYMENTS, CREDIT_ORDER_LIMIT),
             loadRemoteWithLocal('billing_notes', STORAGE_KEYS.BILLING_NOTES),
             loadRemoteWithLocal('stock_ledger', STORAGE_KEYS.STOCK_LEDGER, MAX_LOCAL_LEDGER_ENTRIES),
             loadRemoteWithLocal('tax_invoices', STORAGE_KEYS.TAX_INVOICES, 5000),

@@ -14,7 +14,7 @@ import {
 
 const SESSION_STORAGE_KEY = 'siampos_session_v1';
 
-export const APP_VERSION = 'version beta 0.3.18';
+export const APP_VERSION = 'version beta 0.3.19';
 const HELD_BILLS_STORAGE_KEY = 'siampos_held_bills_v1';
 
 const POSContext = createContext(null);
@@ -203,9 +203,23 @@ export function POSProvider({ children, scope = 'all' }) {
       setSuppliers(data.suppliers || []);
       setStockImports(data.stockImports || []);
       setOrders(data.orders);
-      // ยอดเครดิตที่โหลดไว้อาจเก่าแล้ว ให้โหลดใหม่เมื่อใช้ครั้งถัดไป
-      setCreditOrders([]);
-      setCreditLoadedFor(new Set());
+      if (scope === 'pos') {
+        // ยอดเครดิตที่โหลดไว้อาจเก่าแล้ว ให้โหลดใหม่เมื่อใช้ครั้งถัดไป
+        setCreditOrders([]);
+        setCreditLoadedFor(new Set());
+      } else {
+        // หลังร้าน: โหลดบิลขายเชื่อทุกใบ (ไม่จำกัดแค่บิลล่าสุด 200 ใบ) ให้ยอดลูกหนี้/Aging/ใบวางบิลถูกต้อง
+        try {
+          const credit = await posService.fetchCreditData({ isSupabaseActive: data.mode === 'supabase' });
+          setCreditOrders(credit.orders);
+          setCustomerPayments((prev) => mergeById(credit.payments, prev));
+          setCreditLoadedFor(new Set(['all']));
+        } catch (err) {
+          console.warn('โหลดบิลเครดิตไม่สำเร็จ:', err.message);
+          setCreditOrders([]);
+          setCreditLoadedFor(new Set());
+        }
+      }
       setWholesaleRules(data.wholesaleRules || []);
       setSpecialRules(data.specialRules || []);
       setPrinterSettings(printerService.getSettings());
@@ -604,12 +618,23 @@ export function POSProvider({ children, scope = 'all' }) {
   // หน้าขาย (scope = 'pos') ใช้บิลเครดิตที่โหลดเมื่อจำเป็น รวมกับบิลที่ขายในเครื่องนี้ / creditLoaded บอกว่าโหลดยอดของลูกค้าคนนี้แล้วหรือยัง
   const getCustomerCredit = useCallback(
     (customer) => {
-      if (scope !== 'pos') return calculateCustomerCredit(customer, orders, customerPayments);
+      // หลังร้าน: รวมบิลเครดิตที่โหลดครบทุกใบ (creditOrders) กับบิลล่าสุดที่โหลดตอนเปิด
+      if (scope !== 'pos') return calculateCustomerCredit(customer, mergeById(creditOrders, orders), customerPayments);
       const summary = calculateCustomerCredit(customer, mergeById(creditOrders, orders), customerPayments);
       const creditLoaded = !customer || creditLoadedFor.has('all') || creditLoadedFor.has(customer.id);
       return { ...summary, creditLoaded };
     },
     [scope, orders, creditOrders, creditLoadedFor, customerPayments]
+  );
+
+  // บิลสำหรับคำนวณลูกหนี้ = บิลเครดิตที่โหลดครบ + บิลล่าสุด (บิลเครดิตใหม่ในเครื่องนี้)
+  const creditSourceOrders = useMemo(() => mergeById(creditOrders, orders), [creditOrders, orders]);
+
+  // โหลดบิลตามช่วงวันที่สำหรับรายงาน (รายงานภาษีขาย / แนะนำสั่งซื้อ)
+  const fetchOrdersInRange = useCallback(
+    (start, end, columns = '*') =>
+      posService.fetchOrdersInRange({ start, end, columns, isSupabaseActive: dbMode === 'supabase' }),
+    [dbMode]
   );
 
   // โหลดยอดเครดิตจากฐานข้อมูล (customerId = รายเดียว, ไม่ระบุ = ทุกคน) คืน { orders, payments, offline }
@@ -1562,11 +1587,9 @@ export function POSProvider({ children, scope = 'all' }) {
   // รับชำระหนี้จากลูกค้าเครดิต
   const recordCustomerPayment = useCallback(
     async (paymentData) => {
-      const { savedPayment, updatedPayments } = await posService.recordCustomerPayment(
-        paymentData,
-        dbMode === 'supabase'
-      );
-      setCustomerPayments(updatedPayments);
+      const { savedPayment } = await posService.recordCustomerPayment(paymentData, dbMode === 'supabase');
+      // เพิ่มรายการใหม่เข้ารายการที่โหลดไว้ (รายการในเครื่องอาจไม่ครบ ห้ามแทนที่ทั้งก้อน)
+      setCustomerPayments((prev) => mergeById([savedPayment], prev));
       showToast(
         `รับชำระหนี้ ${savedPayment.receipt_number} จำนวน ${savedPayment.amount.toLocaleString('th-TH', { minimumFractionDigits: 2 })} บาท แล้ว`,
         'success'
@@ -2006,6 +2029,8 @@ export function POSProvider({ children, scope = 'all' }) {
     getCustomerCredit,
     loadCreditData,
     fetchRecentOrders,
+    creditSourceOrders,
+    fetchOrdersInRange,
     recordCustomerPayment,
     stockLedger,
     taxInvoices,

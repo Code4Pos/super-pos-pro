@@ -1,6 +1,7 @@
-import React, { useState, useMemo } from 'react';
-import { FileSpreadsheet, Download, AlertTriangle } from 'lucide-react';
+import React, { useState, useMemo, useEffect } from 'react';
+import { FileSpreadsheet, Download, AlertTriangle, Loader2 } from 'lucide-react';
 import { usePOS } from '../context/POSContext';
+import { posService } from '../services/posService';
 import { buildSalesTaxReport } from '../utils/tax';
 import { formatCurrency, formatNumber } from '../utils/formatters';
 
@@ -18,12 +19,55 @@ function formatDateOnly(dateStr) {
  * แยกใบกำกับภาษีเต็มรูป (รายฉบับ) และใบกำกับภาษีอย่างย่อ (บิลขายปลีกรวมยอด)
  */
 export default function SalesTaxReportPage() {
-  const { orders, taxInvoices = [], taxNotes = [], printerSettings, dbMode } = usePOS();
+  const { taxInvoices = [], taxNotes = [], printerSettings, dbMode, fetchOrdersInRange, showToast } = usePOS();
   const [month, setMonth] = useState(currentMonthValue());
+  // บิลทั้งหมดของเดือนที่เลือก (โหลดจากฐานข้อมูลเมื่อเปลี่ยนเดือน ไม่จำกัดแค่บิลล่าสุด 200 ใบ)
+  const [monthOrders, setMonthOrders] = useState([]);
+  const [loadingOrders, setLoadingOrders] = useState(false);
+  const [offlineData, setOfflineData] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    const [y, m] = month.split('-').map(Number);
+    const start = new Date(y, m - 1, 1);
+    const end = new Date(y, m, 1);
+    setLoadingOrders(true);
+    (async () => {
+      try {
+        // ใช้เฉพาะคอลัมน์ที่คำนวณภาษีต้องใช้ (ไม่ดึงรายการสินค้า)
+        const res = await fetchOrdersInRange(start, end, 'id, order_number, status, grand_total, tax_amount, created_at');
+        let rows = res.orders;
+        // ใบกำกับเต็มรูปของเดือนนี้ที่อ้างอิงบิลเดือนอื่น: โหลดสถานะบิลเพิ่ม (ใช้ตรวจบิลที่ถูกยกเลิก)
+        const known = new Set(rows.map((o) => o.order_number));
+        const missing = taxInvoices
+          .filter((t) => {
+            const d = new Date(t.created_at);
+            return d >= start && d < end;
+          })
+          .map((t) => t.order_number)
+          .filter((n) => n && !known.has(n));
+        if (missing.length > 0) {
+          const extra = await posService.fetchOrdersByNumbers(missing, { isSupabaseActive: dbMode === 'supabase' });
+          rows = [...rows, ...extra.filter((o) => !known.has(o.order_number))];
+        }
+        if (!cancelled) {
+          setMonthOrders(rows);
+          setOfflineData(res.offline);
+        }
+      } catch (err) {
+        if (!cancelled) showToast(`โหลดบิลของเดือนนี้ไม่สำเร็จ: ${err.message}`, 'error');
+      } finally {
+        if (!cancelled) setLoadingOrders(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [month, dbMode, fetchOrdersInRange, taxInvoices, showToast]);
 
   const report = useMemo(
-    () => buildSalesTaxReport(orders, taxInvoices, month, taxNotes),
-    [orders, taxInvoices, month, taxNotes]
+    () => buildSalesTaxReport(monthOrders, taxInvoices, month, taxNotes),
+    [monthOrders, taxInvoices, month, taxNotes]
   );
 
   // ส่งออก CSV (มี BOM ให้ Excel อ่านภาษาไทยได้)
@@ -112,9 +156,14 @@ export default function SalesTaxReportPage() {
           <span>ร้านยังไม่ได้ตั้งค่าเป็นผู้จดทะเบียน VAT ตัวเลขด้านล่างเป็นการประมาณภาษีจากราคาขายรวม VAT</span>
         </div>
       )}
-      {dbMode === 'supabase' && (
-        <div className="p-3 rounded-2xl bg-slate-100 border border-slate-200 text-[11px] text-slate-600">
-          หมายเหตุ: ยอดใบกำกับภาษีอย่างย่อคำนวณจากบิลที่โหลดไว้ (บิลล่าสุด 200 ใบ) ถ้าเดือนนี้มีบิลมากกว่านั้น ยอดอาจไม่ครบ
+      {loadingOrders && (
+        <div className="p-3 rounded-2xl bg-slate-100 border border-slate-200 text-[11px] text-slate-600 flex items-center gap-1.5">
+          <Loader2 className="w-3.5 h-3.5 animate-spin" /> กำลังโหลดบิลทั้งหมดของเดือนนี้...
+        </div>
+      )}
+      {offlineData && dbMode === 'supabase' && (
+        <div className="p-3 rounded-2xl bg-amber-50 border border-amber-200 text-[11px] text-amber-800">
+          ออฟไลน์อยู่: ยอดคำนวณจากบิลที่มีในเครื่องเท่านั้น อาจไม่ครบ
         </div>
       )}
 

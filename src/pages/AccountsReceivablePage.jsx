@@ -14,7 +14,8 @@ import { formatCurrency, formatDateTime, formatNumber } from '../utils/formatter
  * - ออก/พิมพ์ใบวางบิล และรับชำระหนี้
  */
 export default function AccountsReceivablePage() {
-  const { customers, orders, customerPayments, billingNotes, can } = usePOS();
+  // creditSourceOrders = บิลขายเชื่อทุกใบ (ไม่จำกัดแค่บิลล่าสุด 200 ใบ)
+  const { customers, creditSourceOrders: orders, customerPayments, billingNotes, can } = usePOS();
   const [viewMode, setViewMode] = useState('aging'); // 'aging' | 'billing' | 'payments'
   const [billingCustomer, setBillingCustomer] = useState(null);
   const [paymentCustomer, setPaymentCustomer] = useState(null);

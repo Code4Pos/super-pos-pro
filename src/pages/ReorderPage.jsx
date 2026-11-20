@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { ClipboardList, Building2, FilePlus2, Search } from 'lucide-react';
 import { usePOS } from '../context/POSContext';
 import SearchableDropdown from '../components/common/SearchableDropdown';
@@ -17,8 +17,16 @@ const STATUS_META = {
  * ใบสั่งซื้อจะถูกสร้างเป็นใบนำเข้าสถานะ "รออนุมัติ" (ยังไม่เพิ่มสต็อก) แล้วรับของผ่านหน้านำเข้าสินค้า
  */
 export default function ReorderPage() {
-  const { products, orders, suppliers = [], createStockImport, updateReorderSettings, showToast, printerSettings } =
-    usePOS();
+  const {
+    products,
+    orders,
+    suppliers = [],
+    createStockImport,
+    updateReorderSettings,
+    showToast,
+    printerSettings,
+    fetchOrdersInRange,
+  } = usePOS();
   // ค่าเริ่มต้นจากค่าตั้งร้าน (ตั้งค่า › การแจ้งเตือน & ค่าเริ่มต้น)
   const reorderOptions = useMemo(
     () => ({
@@ -34,9 +42,32 @@ export default function ReorderPage() {
   const [supplierId, setSupplierId] = useState('');
   const [creating, setCreating] = useState(false);
 
+  // บิลทั้งหมดในช่วงที่คิดยอดขายเฉลี่ย (โหลดจากฐานข้อมูล ไม่จำกัดแค่บิลล่าสุด 200 ใบ)
+  const [demandOrders, setDemandOrders] = useState(null);
+  const [loadingDemand, setLoadingDemand] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    const end = new Date(Date.now() + 60000);
+    const start = new Date(end.getTime() - reorderOptions.demandDays * 86400000);
+    setLoadingDemand(true);
+    fetchOrdersInRange(start, end, 'id, order_number, status, created_at, items')
+      .then((res) => {
+        if (!cancelled) setDemandOrders(res.orders);
+      })
+      .catch((err) => {
+        if (!cancelled) showToast(`โหลดยอดขายย้อนหลังไม่สำเร็จ ใช้บิลที่มีในเครื่องแทน: ${err.message}`, 'warning');
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingDemand(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [reorderOptions.demandDays, fetchOrdersInRange, showToast]);
+
   const suggestions = useMemo(
-    () => calculateReorderSuggestions(products, orders, reorderOptions),
-    [products, orders, reorderOptions]
+    () => calculateReorderSuggestions(products, demandOrders || orders, reorderOptions),
+    [products, demandOrders, orders, reorderOptions]
   );
 
   const counts = useMemo(() => {
@@ -158,6 +189,10 @@ export default function ReorderPage() {
               </h1>
               <p className="text-xs text-slate-500">
                 จุดสั่งซื้อ = ยอดขายเฉลี่ย/วัน ({reorderOptions.demandDays} วันล่าสุด) × ระยะรอสินค้า + สต็อกสำรอง
+                {loadingDemand && <span className="ml-1 text-indigo-600">• กำลังโหลดยอดขายย้อนหลัง...</span>}
+                {!loadingDemand && demandOrders && (
+                  <span className="ml-1">• คิดจาก {formatNumber(demandOrders.length)} บิล</span>
+                )}
               </p>
             </div>
           </div>
