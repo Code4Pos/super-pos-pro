@@ -6,12 +6,13 @@ import { canAccessAnyAdminTab } from './utils/rbac';
 import Header from './components/layout/Header';
 import POSPage from './pages/POSPage';
 import LoginScreen from './components/auth/LoginScreen';
+import ShopSetupWizard from './components/setup/ShopSetupWizard';
 import ModeSelectorScreen from './components/layout/ModeSelectorScreen';
 
 const ENTRY_SESSION_KEY = 'siampos_entry_chosen_v1';
 
 function PosAppContent() {
-  const { toast, authEnabled, currentUser, canTab } = usePOS();
+  const { toast, authEnabled, currentUser, canTab, loading, printerSettings } = usePOS();
 
   // แสดงหน้าเลือกโหมด (หน้าร้าน / หลังร้าน) เมื่อเปิดเข้าแอปครั้งแรกใน Session นี้
   // แต่ถ้าสลับมาจากหลังร้าน (?mode=pos), เคยกดเลือกเข้าหน้าขายแล้ว หรือตั้งโหมดเริ่มต้นของเครื่องเป็น 'pos' จะเข้าหน้าขายทันที
@@ -63,6 +64,11 @@ function PosAppContent() {
       setShowModeSelector(true);
     }
   }, [canTab]);
+
+  // ร้านถูกคืนค่าโรงงานและยังไม่มีผู้ใช้: เข้าสู่ขั้นตอนสร้างร้าน
+  if (!loading && printerSettings.setupRequired && !authEnabled) {
+    return <ShopSetupWizard />;
+  }
 
   if (authEnabled && !currentUser) {
     return <LoginScreen />;

@@ -5,6 +5,7 @@ import SalesRulesSettings from '../components/settings/SalesRulesSettings';
 import DocumentNumberingSettings from '../components/settings/DocumentNumberingSettings';
 import AlertsDefaultsSettings from '../components/settings/AlertsDefaultsSettings';
 import SettingsBackup from '../components/settings/SettingsBackup';
+import ShopResetSettings from '../components/settings/ShopResetSettings';
 import TaxSettings from '../components/settings/TaxSettings';
 import PaymentSettings from '../components/settings/PaymentSettings';
 import PrinterSettings from '../components/settings/PrinterSettings';
@@ -18,6 +19,7 @@ const SECTIONS = {
   'settings-docs': DocumentNumberingSettings,
   'settings-defaults': AlertsDefaultsSettings,
   'settings-backup': SettingsBackup,
+  'settings-reset': ShopResetSettings,
   'settings-tax': TaxSettings,
   'settings-payment': PaymentSettings,
   'settings-printer': PrinterSettings,
@@ -31,7 +33,7 @@ export default function SettingsPage({ section }) {
   const Section = SECTIONS[section] || ShopSettings;
   return (
     <div className="flex-1 overflow-y-auto bg-slate-50 p-3 sm:p-5 pb-24 lg:pb-5">
-      <div className={`${section === 'settings-receipt' || section === 'settings-docs' ? 'max-w-5xl' : 'max-w-3xl'} mx-auto space-y-4`}>
+      <div className={`${['settings-receipt', 'settings-docs', 'settings-reset'].includes(section) ? 'max-w-5xl' : 'max-w-3xl'} mx-auto space-y-4`}>
         <Section />
         {/* ค่าตั้งเฉพาะเครื่อง (รหัสเครื่อง / อัปโหลดข้อมูลจากเครื่องหลัก / บัญชีร้าน) แสดงที่หน้าข้อมูลร้านและเครื่องพิมพ์ */}
         {(section === 'settings-shop' || section === 'settings-printer') && <DeviceSettings />}

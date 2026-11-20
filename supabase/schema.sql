@@ -820,3 +820,83 @@ NOTIFY pgrst, 'reload schema';
 -- =====================================================================
 ALTER TABLE app_users DROP CONSTRAINT IF EXISTS app_users_role_check;
 NOTIFY pgrst, 'reload schema';
+
+
+-- =====================================================================
+-- Migration beta 0.3.18: รีเซ็ตร้าน 3 ระดับ (ตั้งค่า › รีเซ็ต & สำรองข้อมูลร้าน)
+--   1 = ล้างข้อมูลการขาย (เก็บสินค้า/สต็อก ลูกค้า ผู้ผลิต ค่าตั้ง ผู้ใช้)
+--   2 = รีเซ็ตร้าน (ล้างข้อมูลทั้งหมด เก็บค่าตั้งร้าน และผู้ใช้ที่เป็นผู้ดูแลระบบ)
+--   3 = ค่าโรงงาน (ล้างทุกอย่าง แล้วสร้างแถวค่าตั้งร้านใหม่ที่ setupRequired = true)
+-- p_reset_id = รหัสการรีเซ็ต (UUID จากแอป) เก็บใน shop_settings.config.shopResetId (+ shopResetAt เวลารีเซ็ต)
+-- เครื่องอื่นเห็นรหัสใหม่แล้วจะล้างแคชและคิวรอซิงค์ของตัวเอง (กันบิลเก่าถูกส่งกลับขึ้นมา)
+-- ใช้ได้เฉพาะผู้ที่ล็อกอินบัญชีร้านแล้ว ทำงานใน transaction เดียว (ผิดพลาด = ไม่ลบอะไรเลย)
+-- ต้องรัน Migration beta 0.3.13 (คอลัมน์ config) ก่อน
+-- =====================================================================
+CREATE OR REPLACE FUNCTION siampos_reset_shop(p_level INTEGER, p_reset_id TEXT)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  IF auth.role() IS DISTINCT FROM 'authenticated' THEN
+    RAISE EXCEPTION 'ต้องล็อกอินบัญชีร้านก่อนรีเซ็ต';
+  END IF;
+  IF p_level NOT IN (1, 2, 3) THEN
+    RAISE EXCEPTION 'ระดับการรีเซ็ตไม่ถูกต้อง';
+  END IF;
+
+  -- ระดับ 1: เอกสารการขายและความเคลื่อนไหวทั้งหมด (ไม่แตะยอดสต็อกและล็อตคงเหลือ)
+  DELETE FROM order_items WHERE true;
+  DELETE FROM customer_payments WHERE true;
+  DELETE FROM billing_notes WHERE true;
+  DELETE FROM tax_notes WHERE true;
+  DELETE FROM tax_invoices WHERE true;
+  DELETE FROM orders WHERE true;
+  DELETE FROM stock_ledger WHERE true;
+  DELETE FROM stock_imports WHERE true;
+  DELETE FROM stock_transfers WHERE true;
+  DELETE FROM stock_counts WHERE true;
+  DELETE FROM sales_orders WHERE true;
+  DELETE FROM lot_consumptions WHERE true;
+
+  IF p_level = 1 THEN
+    UPDATE customers SET total_spent = 0, order_count = 0, points = 0 WHERE true;
+  END IF;
+
+  -- ระดับ 2: ข้อมูลหลักทั้งหมด + ผู้ใช้ที่ไม่ใช่ผู้ดูแลระบบ
+  IF p_level >= 2 THEN
+    DELETE FROM product_lots WHERE true;
+    DELETE FROM inventory_balances WHERE true;
+    DELETE FROM warehouses WHERE true;
+    DELETE FROM wholesale_rules WHERE true;
+    DELETE FROM special_rules WHERE true;
+    DELETE FROM products WHERE true;
+    DELETE FROM categories WHERE true;
+    DELETE FROM units WHERE true;
+    DELETE FROM customers WHERE true;
+    DELETE FROM suppliers WHERE true;
+    DELETE FROM app_users WHERE role <> 'admin';
+  END IF;
+
+  -- ระดับ 3: ทุกอย่าง แล้วเริ่มค่าตั้งร้านใหม่ (แอปจะเข้าสู่ขั้นตอนสร้างร้าน)
+  IF p_level = 3 THEN
+    DELETE FROM app_users WHERE true;
+    DELETE FROM shop_settings WHERE true;
+    INSERT INTO shop_settings (id, config, updated_at)
+    VALUES ('default', jsonb_build_object('shopResetId', p_reset_id, 'shopResetAt', NOW(), 'setupRequired', true), NOW());
+  ELSE
+    INSERT INTO shop_settings (id, config, updated_at)
+    VALUES ('default', jsonb_build_object('shopResetId', p_reset_id, 'shopResetAt', NOW()), NOW())
+    ON CONFLICT (id) DO UPDATE
+      SET config = COALESCE(shop_settings.config, '{}'::jsonb) || jsonb_build_object('shopResetId', p_reset_id, 'shopResetAt', NOW()),
+          updated_at = NOW();
+  END IF;
+
+  RETURN jsonb_build_object('level', p_level, 'reset_id', p_reset_id);
+END;
+$$;
+
+REVOKE ALL ON FUNCTION siampos_reset_shop(INTEGER, TEXT) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION siampos_reset_shop(INTEGER, TEXT) TO authenticated;
+NOTIFY pgrst, 'reload schema';

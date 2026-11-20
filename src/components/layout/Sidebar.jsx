@@ -37,6 +37,7 @@ import {
   Hash,
   BellRing,
   ArchiveRestore,
+  DatabaseBackup,
 } from 'lucide-react';
 import { usePOS } from '../../context/POSContext';
 import { countLowStock } from '../../utils/stockAlerts';
@@ -226,6 +227,7 @@ export const SIDEBAR_MENU_GROUPS = [
       { id: 'settings-docs', label: 'เลขที่เอกสาร', description: 'คำนำหน้าและรูปแบบเลขที่', icon: Hash },
       { id: 'settings-defaults', label: 'การแจ้งเตือน & ค่าเริ่มต้น', description: 'สต็อกต่ำ หมดอายุ เครดิต เมนูที่ใช้', icon: BellRing },
       { id: 'settings-backup', label: 'สำรอง & ย้ายค่าตั้ง', description: 'ส่งออก/นำเข้า และคืนค่าเริ่มต้น', icon: ArchiveRestore },
+      { id: 'settings-reset', label: 'รีเซ็ต & สำรองข้อมูลร้าน', description: 'สำรอง/กู้คืนทั้งร้าน และรีเซ็ต 3 ระดับ', icon: DatabaseBackup },
       { id: 'settings-tax', label: 'ภาษี (VAT)', description: 'รูปแบบคิด VAT และเลขผู้เสียภาษี', icon: Percent },
       { id: 'settings-payment', label: 'การชำระเงิน', description: 'พร้อมเพย์ และลิ้นชักเก็บเงิน', icon: Wallet },
       { id: 'settings-printer', label: 'เครื่องพิมพ์', description: 'กระดาษ การเชื่อมต่อ พิมพ์อัตโนมัติ', icon: Printer },

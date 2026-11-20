@@ -14,7 +14,7 @@ import {
 
 const SESSION_STORAGE_KEY = 'siampos_session_v1';
 
-export const APP_VERSION = 'version beta 0.3.17';
+export const APP_VERSION = 'version beta 0.3.18';
 const HELD_BILLS_STORAGE_KEY = 'siampos_held_bills_v1';
 
 const POSContext = createContext(null);
@@ -209,6 +209,14 @@ export function POSProvider({ children, scope = 'all' }) {
       setWholesaleRules(data.wholesaleRules || []);
       setSpecialRules(data.specialRules || []);
       setPrinterSettings(printerService.getSettings());
+      // ร้านถูกรีเซ็ต/กู้คืนจากเครื่องอื่น: ล้างตะกร้าและบิลที่พักไว้ของเครื่องนี้
+      if (posService.consumeShopResetNotice()) {
+        setCart([]);
+        setHeldBills([]);
+        setBillDiscount(0);
+        setSelectedCustomer(null);
+        showToast('ร้านถูกรีเซ็ตหรือกู้คืนข้อมูลจากเครื่องอื่น โหลดข้อมูลใหม่แล้ว', 'warning');
+      }
     } catch (err) {
       console.error('Error loading POS data:', err);
       showToast('เกิดข้อผิดพลาดในการโหลดข้อมูล', 'error');
@@ -1819,6 +1827,60 @@ export function POSProvider({ children, scope = 'all' }) {
     }
   }, [clearCart]);
 
+  // ===================== รีเซ็ตร้าน / สำรองข้อมูลทั้งร้าน / สร้างร้าน =====================
+  const clearSession = useCallback(() => {
+    setSessionUserId(null);
+    try {
+      localStorage.removeItem(SESSION_STORAGE_KEY);
+    } catch {
+      // ignore storage errors
+    }
+  }, []);
+
+  // รีเซ็ตร้าน 1 = ล้างข้อมูลการขาย, 2 = รีเซ็ตร้าน (เก็บผู้ดูแลระบบ), 3 = ค่าโรงงาน
+  const resetShop = useCallback(
+    async (level) => {
+      await posService.resetShop(level, dbMode === 'supabase');
+      clearCart();
+      setHeldBills([]);
+      if (level >= 3 || (level === 2 && currentUser && currentUser.role !== 'admin')) clearSession();
+      await refreshData();
+      showToast(
+        level === 1 ? 'ล้างข้อมูลการขายเรียบร้อย' : level === 2 ? 'รีเซ็ตร้านเรียบร้อย' : 'คืนค่าโรงงานเรียบร้อย',
+        'success'
+      );
+    },
+    [dbMode, clearCart, currentUser, clearSession, refreshData, showToast]
+  );
+
+  const exportShopBackup = useCallback(
+    () => posService.exportShopBackup(dbMode === 'supabase', APP_VERSION),
+    [dbMode]
+  );
+
+  // กู้คืนทั้งร้านจากไฟล์สำรอง (แทนที่ข้อมูลทั้งหมด) คืนผลรายตาราง
+  const restoreShopBackup = useCallback(
+    async (backup) => {
+      const result = await posService.restoreShopBackup(backup, dbMode === 'supabase');
+      clearCart();
+      setHeldBills([]);
+      // ผู้ใช้และ PIN มาจากไฟล์สำรอง จึงให้ล็อกอินใหม่ (หน้าต่างผลจะปิดไป สรุปผลด้วยข้อความแทน)
+      clearSession();
+      await refreshData();
+      const failed = (result.results || []).filter((r) => r.error);
+      const rows = (result.results || []).reduce((sum, r) => sum + (Number(r.inserted) || 0), 0);
+      showToast(
+        failed.length > 0
+          ? `กู้คืนแล้ว ${rows} แถว แต่มีตารางที่ผิดพลาด: ${failed.map((r) => r.table).join(', ')}`
+          : `กู้คืนข้อมูลทั้งร้านเรียบร้อย (${rows} แถว) กรุณาล็อกอินใหม่`,
+        failed.length > 0 ? 'error' : 'success'
+      );
+      if (failed.length > 0) console.warn('ผลกู้คืนข้อมูลที่ผิดพลาด:', failed);
+      return result;
+    },
+    [dbMode, clearCart, clearSession, refreshData, showToast]
+  );
+
   const saveUser = useCallback(
     async (userData) => {
       try {
@@ -1983,6 +2045,9 @@ export function POSProvider({ children, scope = 'all' }) {
     uploadLocalData,
     refreshData,
     resetDemo,
+    resetShop,
+    exportShopBackup,
+    restoreShopBackup,
     toast,
     showToast,
   };

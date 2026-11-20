@@ -52,7 +52,12 @@ const STORAGE_KEYS = {
   SHOP_SETTINGS: 'siampos_shop_settings_v1',
   DEVICE: 'siampos_device_v1',
   SERVER_CONFIG: 'siampos_server_config_v1',
+  // รหัสการรีเซ็ตร้านล่าสุดที่เครื่องนี้รับรู้แล้ว (เทียบกับ shop_settings.config.shopResetId)
+  RESET_SEEN: 'siampos_shop_reset_seen_v1',
 };
+
+// ตะกร้าที่พักไว้ (เก็บโดย POSContext) ต้องล้างเมื่อร้านถูกรีเซ็ต
+const HELD_BILLS_KEY = 'siampos_held_bills_v1';
 
 function getLocal(key, fallback) {
   try {
@@ -1213,6 +1218,146 @@ async function applyImportItemsToStock(
   return syncedProducts;
 }
 
+// ข้อมูลในเครื่องที่ล้างตามระดับการรีเซ็ต (ระดับ 1 = เอกสารการขาย, ระดับ 2 = + ข้อมูลหลัก)
+const RESET_LEVEL1_KEYS = [
+  'ORDERS', 'CUSTOMER_PAYMENTS', 'BILLING_NOTES', 'TAX_NOTES', 'TAX_INVOICES', 'STOCK_LEDGER',
+  'STOCK_IMPORTS', 'STOCK_TRANSFERS', 'STOCK_COUNTS', 'SALES_ORDERS', 'LOT_CONSUMPTIONS',
+  'OFFLINE_QUEUE', 'OFFLINE_FAILED', 'PENDING_POS_ACTION',
+];
+const RESET_LEVEL2_KEYS = [
+  'PRODUCTS', 'PRODUCT_META', 'TRASH_PRODUCTS', 'UNITS', 'CUSTOMERS', 'CUSTOMER_META', 'SUPPLIERS',
+  'WAREHOUSES', 'INVENTORY_BALANCES', 'PRODUCT_LOTS', 'WHOLESALE_RULES', 'SPECIAL_RULES',
+];
+
+/**
+ * ล้างข้อมูลร้านในเครื่องตามระดับ (ตั้งเป็นค่าว่าง ไม่ลบ key เพื่อไม่ให้ Demo Mode ย้อนไปใช้ข้อมูลตัวอย่าง)
+ * level 3 ล้างผู้ใช้ทั้งหมด, level 2 เก็บเฉพาะผู้ดูแลระบบ
+ */
+function clearLocalShopData(level) {
+  const empty = (key) => setLocal(STORAGE_KEYS[key], key === 'PRODUCT_META' || key === 'CUSTOMER_META' ? {} : []);
+  RESET_LEVEL1_KEYS.forEach(empty);
+  try {
+    localStorage.removeItem(HELD_BILLS_KEY);
+  } catch {
+    // ignore
+  }
+  if (level === 1) {
+    const customers = getLocal(STORAGE_KEYS.CUSTOMERS, null);
+    if (Array.isArray(customers)) {
+      setLocal(
+        STORAGE_KEYS.CUSTOMERS,
+        customers.map((c) => ({ ...c, total_spent: 0, order_count: 0, points: 0 }))
+      );
+    }
+    return;
+  }
+  RESET_LEVEL2_KEYS.forEach(empty);
+  // หมวด "สินค้าทั้งหมด" เป็นหมวดระบบ ต้องมีเสมอ
+  setLocal(STORAGE_KEYS.CATEGORIES, INITIAL_CATEGORIES.filter((c) => c.id === 'all'));
+  const users = getLocal(STORAGE_KEYS.USERS, []);
+  setLocal(STORAGE_KEYS.USERS, level >= 3 ? [] : users.filter((u) => u.role === 'admin'));
+}
+
+// เครื่องนี้เพิ่งตรวจพบว่าร้านถูกรีเซ็ต/กู้คืนจากเครื่องอื่น (POSContext อ่านแล้วแจ้งผู้ใช้)
+let shopResetNotice = false;
+
+/**
+ * ตรวจรหัสการรีเซ็ตร้านบนฐานข้อมูล ถ้าเปลี่ยนจากที่เครื่องนี้รู้ → ล้างแคช คิวรอซิงค์ และตะกร้าที่พักไว้
+ * - เครื่องที่ยังไม่เคยรู้รหัส (อัปเดตมาจากเวอร์ชันเก่า): ทิ้งเฉพาะคิวที่เกิดก่อนเวลารีเซ็ต
+ */
+async function syncShopResetMarker() {
+  if (!supabase || !isOnline()) return false;
+  let config = null;
+  try {
+    const { data, error } = await supabase.from('shop_settings').select('config').eq('id', 'default').maybeSingle();
+    if (error) return false;
+    config = data?.config || null;
+  } catch {
+    return false;
+  }
+  const remoteId = config?.shopResetId || '';
+  if (!remoteId) return false;
+  const seen = getLocal(STORAGE_KEYS.RESET_SEEN, null);
+  if (seen === remoteId) return false;
+  if (seen === null) {
+    const resetAt = config?.shopResetAt ? new Date(config.shopResetAt) : null;
+    if (resetAt && !Number.isNaN(resetAt.getTime())) {
+      const keepNewer = (items) => items.filter((q) => new Date(q.queued_at || 0) > resetAt);
+      setLocal(STORAGE_KEYS.OFFLINE_QUEUE, keepNewer(getLocal(STORAGE_KEYS.OFFLINE_QUEUE, [])));
+      setLocal(STORAGE_KEYS.OFFLINE_FAILED, keepNewer(getLocal(STORAGE_KEYS.OFFLINE_FAILED, [])));
+    }
+    setLocal(STORAGE_KEYS.RESET_SEEN, remoteId);
+    return false;
+  }
+  // ร้านถูกรีเซ็ตหรือกู้คืนจากเครื่องอื่น: ล้างทุกอย่างในเครื่อง แล้วโหลดใหม่จากฐานข้อมูล
+  clearLocalShopData(3);
+  setLocal(STORAGE_KEYS.RESET_SEEN, remoteId);
+  shopResetNotice = true;
+  return true;
+}
+
+// ตารางที่สำรอง/กู้คืน เรียงตามลำดับที่ต้องใส่ข้อมูล (ตารางที่ถูกอ้างอิงมาก่อน)
+const BACKUP_TABLES = [
+  { table: 'categories', key: 'CATEGORIES' },
+  { table: 'units', key: 'UNITS' },
+  { table: 'suppliers', key: 'SUPPLIERS' },
+  { table: 'warehouses', key: 'WAREHOUSES' },
+  { table: 'products', key: 'PRODUCTS' },
+  { table: 'customers', key: 'CUSTOMERS' },
+  { table: 'app_users', key: 'USERS' },
+  { table: 'orders', key: 'ORDERS' },
+  { table: 'order_items', key: null },
+  { table: 'customer_payments', key: 'CUSTOMER_PAYMENTS' },
+  { table: 'billing_notes', key: 'BILLING_NOTES' },
+  { table: 'tax_invoices', key: 'TAX_INVOICES' },
+  { table: 'tax_notes', key: 'TAX_NOTES' },
+  { table: 'stock_ledger', key: 'STOCK_LEDGER' },
+  { table: 'stock_counts', key: 'STOCK_COUNTS' },
+  { table: 'product_lots', key: 'PRODUCT_LOTS' },
+  { table: 'inventory_balances', key: 'INVENTORY_BALANCES' },
+  { table: 'stock_transfers', key: 'STOCK_TRANSFERS' },
+  { table: 'sales_orders', key: 'SALES_ORDERS' },
+  { table: 'stock_imports', key: 'STOCK_IMPORTS' },
+  { table: 'wholesale_rules', key: 'WHOLESALE_RULES' },
+  { table: 'special_rules', key: 'SPECIAL_RULES' },
+  { table: 'lot_consumptions', key: 'LOT_CONSUMPTIONS' },
+];
+// ข้อมูลเสริมที่เก็บเฉพาะในเครื่อง (ใช้คู่กับข้อมูลในฐานข้อมูล)
+const BACKUP_LOCAL_EXTRAS = ['PRODUCT_META', 'CUSTOMER_META', 'TRASH_PRODUCTS'];
+export const SHOP_BACKUP_TYPE = 'siampos-shop-backup';
+const BACKUP_PAGE_SIZE = 1000;
+const RESTORE_CHUNK_SIZE = 500;
+
+const isMissingTableError = (error) =>
+  ['42P01', 'PGRST205', 'PGRST200'].includes(error?.code) || /does not exist|could not find the table/i.test(error?.message || '');
+
+// ดึงทุกแถวของตาราง (ทีละ 1,000 แถว)
+async function fetchAllRows(table) {
+  const rows = [];
+  for (let from = 0; ; from += BACKUP_PAGE_SIZE) {
+    const { data, error } = await supabase
+      .from(table)
+      .select('*')
+      .order('id', { ascending: true })
+      .range(from, from + BACKUP_PAGE_SIZE - 1);
+    if (error) {
+      if (isMissingTableError(error)) return null;
+      throw new Error(`${table}: ${error.message}`);
+    }
+    rows.push(...(data || []));
+    if (!data || data.length < BACKUP_PAGE_SIZE) break;
+  }
+  return rows;
+}
+
+function rpcMissingMessage(error) {
+  const msg = String(error?.message || '');
+  if (error?.code === 'PGRST202' || /siampos_reset_shop/.test(msg)) {
+    return 'ฐานข้อมูลยังไม่มีฟังก์ชันรีเซ็ตร้าน กรุณารัน Migration beta 0.3.18 ใน supabase/schema.sql';
+  }
+  return msg || 'รีเซ็ตร้านไม่สำเร็จ';
+}
+
 export { nextLocalDocNumber };
 
 export const posService = {
@@ -1232,6 +1377,8 @@ export const posService = {
     let offlineFallback = false;
     if (isSupabaseConfigured && supabase) {
       try {
+        // ร้านถูกรีเซ็ตจากเครื่องอื่น = ล้างแคชและคิวของเครื่องนี้ก่อนส่งคิวขึ้นฐานข้อมูล
+        await syncShopResetMarker();
         await this.flushOfflineQueue();
         const [catRes, prodRes, cusRes, ordRes] = await Promise.all([
           supabase.from('categories').select('*').order('created_at', { ascending: true }),
@@ -1549,6 +1696,8 @@ export const posService = {
     if (isSupabaseConfigured && supabase) {
       try {
         // ซิงค์บิลที่ค้างจากตอนออฟไลน์ก่อน เพื่อให้ข้อมูลที่โหลดมาเป็นยอดล่าสุด
+        // ร้านถูกรีเซ็ตจากเครื่องอื่น = ล้างแคชและคิวของเครื่องนี้ก่อนส่งคิวขึ้นฐานข้อมูล
+        await syncShopResetMarker();
         await this.flushOfflineQueue();
         const [catRes, prodRes, cusRes, ordRes] = await Promise.all([
           supabase.from('categories').select('*').order('created_at', { ascending: true }),
@@ -4335,6 +4484,163 @@ export const posService = {
     } catch {
       return null;
     }
+  },
+
+  /**
+   * อ่านแล้วล้างสถานะ "ร้านถูกรีเซ็ตจากเครื่องอื่น"
+   */
+  consumeShopResetNotice() {
+    const notice = shopResetNotice;
+    shopResetNotice = false;
+    return notice;
+  },
+
+  /**
+   * รีเซ็ตร้าน 3 ระดับ (1 = ล้างข้อมูลการขาย, 2 = รีเซ็ตร้าน เก็บผู้ดูแลระบบ, 3 = ค่าโรงงาน)
+   * โหมด Supabase เรียก RPC siampos_reset_shop (transaction เดียว) แล้วล้างข้อมูลในเครื่อง
+   */
+  async resetShop(level, isSupabaseActive) {
+    const lvl = Number(level);
+    if (![1, 2, 3].includes(lvl)) throw new Error('ระดับการรีเซ็ตไม่ถูกต้อง');
+    const resetId = generateUuid();
+    const resetAt = new Date().toISOString();
+
+    if (isSupabaseActive && supabase) {
+      if (!isOnline()) throw new Error('ต้องเชื่อมต่ออินเทอร์เน็ตก่อนรีเซ็ตร้าน');
+      if (this.getOfflineQueue().length > 0) {
+        throw new Error('ยังมีรายการรอซิงค์ในเครื่องนี้ กรุณาซิงค์ให้เสร็จก่อนรีเซ็ต');
+      }
+      const { error } = await supabase.rpc('siampos_reset_shop', { p_level: lvl, p_reset_id: resetId });
+      if (error) throw new Error(rpcMissingMessage(error));
+    }
+
+    clearLocalShopData(lvl);
+    setLocal(STORAGE_KEYS.RESET_SEEN, resetId);
+    const marker = { shopResetId: resetId, shopResetAt: resetAt };
+    if (lvl === 3) {
+      // ค่าตั้งร้านกลับเป็นค่าเริ่มต้น และรอสร้างร้านใหม่
+      printerService.applyRemoteShopSettings({ ...marker, setupRequired: true, updated_at: resetAt });
+    } else {
+      printerService.applyRemoteShopSettings({ ...printerService.getLocalShopSettings(), ...marker, updated_at: resetAt });
+    }
+    return { level: lvl, resetId };
+  },
+
+  /**
+   * สำรองข้อมูลทั้งร้าน (ทุกตาราง + ค่าตั้งร้าน + ข้อมูลเสริมในเครื่อง) เป็น object สำหรับบันทึกเป็นไฟล์ JSON
+   */
+  async exportShopBackup(isSupabaseActive, appVersion = '') {
+    const useRemote = Boolean(isSupabaseActive && supabase);
+    if (useRemote && !isOnline()) throw new Error('ต้องเชื่อมต่ออินเทอร์เน็ตก่อนสำรองข้อมูล');
+    const tables = {};
+    const skipped = [];
+    for (const { table, key } of BACKUP_TABLES) {
+      if (useRemote) {
+        const rows = await fetchAllRows(table);
+        if (rows === null) skipped.push(table);
+        else tables[table] = rows;
+      } else if (key) {
+        tables[table] = getLocal(STORAGE_KEYS[key], []);
+      }
+    }
+    if (useRemote) {
+      const rows = await fetchAllRows('shop_settings');
+      if (rows) tables.shop_settings = rows;
+    }
+    const local = Object.fromEntries(BACKUP_LOCAL_EXTRAS.map((k) => [k, getLocal(STORAGE_KEYS[k], k === 'TRASH_PRODUCTS' ? [] : {})]));
+    const shopSettings = printerService.getLocalShopSettings();
+    const counts = Object.fromEntries(Object.entries(tables).map(([t, rows]) => [t, rows.length]));
+    return {
+      type: SHOP_BACKUP_TYPE,
+      formatVersion: 1,
+      appVersion,
+      mode: useRemote ? 'supabase' : 'demo',
+      exportedAt: new Date().toISOString(),
+      shopName: shopSettings.shopName || '',
+      counts,
+      skipped,
+      tables,
+      shopSettings,
+      local,
+    };
+  },
+
+  /**
+   * กู้คืนข้อมูลทั้งร้านจากไฟล์สำรอง (แทนที่ทั้งร้าน: ล้างแบบค่าโรงงานก่อน แล้วใส่ข้อมูลจากไฟล์)
+   * คืนค่า { results: [{ table, inserted, error }], resetId }
+   */
+  async restoreShopBackup(backup, isSupabaseActive) {
+    if (!backup || backup.type !== SHOP_BACKUP_TYPE || !backup.tables) {
+      throw new Error('ไม่ใช่ไฟล์สำรองข้อมูลร้านของ SiamPOS Pro');
+    }
+    const useRemote = Boolean(isSupabaseActive && supabase);
+    const targetMode = useRemote ? 'supabase' : 'demo';
+    if (backup.mode !== targetMode) {
+      throw new Error(
+        backup.mode === 'demo'
+          ? 'ไฟล์นี้สำรองจากโหมด Demo กู้คืนเข้าฐานข้อมูลจริงไม่ได้'
+          : 'ไฟล์นี้สำรองจากฐานข้อมูลจริง กู้คืนในโหมด Demo ไม่ได้'
+      );
+    }
+    const resetId = generateUuid();
+    const resetAt = new Date().toISOString();
+    const results = [];
+
+    if (useRemote) {
+      if (!isOnline()) throw new Error('ต้องเชื่อมต่ออินเทอร์เน็ตก่อนกู้คืนข้อมูล');
+      const { error } = await supabase.rpc('siampos_reset_shop', { p_level: 3, p_reset_id: resetId });
+      if (error) throw new Error(rpcMissingMessage(error));
+
+      for (const { table } of BACKUP_TABLES) {
+        const rows = backup.tables[table];
+        if (!Array.isArray(rows) || rows.length === 0) continue;
+        let inserted = 0;
+        let tableError = null;
+        for (let i = 0; i < rows.length; i += RESTORE_CHUNK_SIZE) {
+          const chunk = rows.slice(i, i + RESTORE_CHUNK_SIZE);
+          const { error: insertError } = await supabase.from(table).upsert(chunk);
+          if (insertError) {
+            tableError = insertError.message;
+            break;
+          }
+          inserted += chunk.length;
+        }
+        results.push({ table, inserted, total: rows.length, error: tableError });
+      }
+      // ค่าตั้งร้าน: ใช้ของในไฟล์ + รหัสรีเซ็ตใหม่ (ให้เครื่องอื่นล้างแคชของตัวเอง)
+      const shopRow = (backup.tables.shop_settings || [])[0] || shopSettingsToRow(backup.shopSettings || {});
+      const nextRow = {
+        ...shopRow,
+        id: 'default',
+        config: { ...(shopRow.config || {}), shopResetId: resetId, shopResetAt: resetAt, setupRequired: false },
+        updated_at: resetAt,
+      };
+      const saved = await upsertShopSettingsRow(nextRow);
+      results.push({ table: 'shop_settings', inserted: saved.ok ? 1 : 0, total: 1, error: saved.error?.message || null });
+    }
+
+    // ข้อมูลในเครื่อง
+    clearLocalShopData(3);
+    if (!useRemote) {
+      BACKUP_TABLES.forEach(({ table, key }) => {
+        if (!key) return;
+        const rows = Array.isArray(backup.tables[table]) ? backup.tables[table] : [];
+        setLocal(STORAGE_KEYS[key], rows);
+        results.push({ table, inserted: rows.length, total: rows.length, error: null });
+      });
+    }
+    BACKUP_LOCAL_EXTRAS.forEach((k) => {
+      if (backup.local?.[k] !== undefined) setLocal(STORAGE_KEYS[k], backup.local[k]);
+    });
+    setLocal(STORAGE_KEYS.RESET_SEEN, resetId);
+    printerService.applyRemoteShopSettings({
+      ...(backup.shopSettings || {}),
+      shopResetId: resetId,
+      shopResetAt: resetAt,
+      setupRequired: false,
+      updated_at: resetAt,
+    });
+    return { results, resetId };
   },
 
   /**

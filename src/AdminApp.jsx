@@ -23,6 +23,7 @@ import LotsPage from './pages/LotsPage';
 import WarehousesPage from './pages/WarehousesPage';
 import SalesOrdersPage from './pages/SalesOrdersPage';
 import LoginScreen from './components/auth/LoginScreen';
+import ShopSetupWizard from './components/setup/ShopSetupWizard';
 import { ADMIN_TABS, SETTINGS_TABS } from './utils/rbac';
 
 const ACTIVE_TAB_STORAGE_KEY = 'siampos_active_tab_v1';
@@ -53,7 +54,7 @@ function AdminAppContent() {
   // ซ่อน/ย่อ Sidebar เป็นค่าเริ่มต้น (false = โหมดย่อแสดงเฉพาะไอคอน, true = โหมดแสดงเต็ม)
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [showModeSelector, setShowModeSelector] = useState(false);
-  const { toast, authEnabled, currentUser, canTab } = usePOS();
+  const { toast, authEnabled, currentUser, canTab, loading, printerSettings } = usePOS();
 
   // ถ้าบทบาทของผู้ใช้เข้าหน้านี้ไม่ได้ ให้ย้ายไปหน้าหลังร้านแรกที่มีสิทธิ์
   useEffect(() => {
@@ -66,6 +67,11 @@ function AdminAppContent() {
       }
     }
   }, [activeTab, canTab]);
+
+  // ร้านถูกคืนค่าโรงงานและยังไม่มีผู้ใช้: เข้าสู่ขั้นตอนสร้างร้าน
+  if (!loading && printerSettings.setupRequired && !authEnabled) {
+    return <ShopSetupWizard />;
+  }
 
   if (authEnabled && !currentUser) {
     return <LoginScreen />;
