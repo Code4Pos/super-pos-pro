@@ -1,7 +1,7 @@
 {
   "name": "siam-wholesale-pos",
   "private": true,
-  "version": "0.3.27-beta",
+  "version": "0.3.28-beta",
   "type": "module",
   "scripts": {
     "dev": "vite",

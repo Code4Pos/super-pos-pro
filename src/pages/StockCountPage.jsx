@@ -3,6 +3,7 @@ import { ClipboardCheck, Plus, Search, Save, Send, CheckCircle2, XCircle, ArrowL
 import { usePOS } from '../context/POSContext';
 import ConfirmModal from '../components/common/ConfirmModal';
 import { formatCurrency, formatDateTime, formatNumber } from '../utils/formatters';
+import { SALES_WAREHOUSE_ID } from '../utils/warehouses';
 
 const STATUS_META = {
   counting: { label: 'กำลังนับ', className: 'bg-amber-50 text-amber-700 border-amber-200' },
@@ -28,7 +29,13 @@ export default function StockCountPage() {
     approveStockCount,
     cancelStockCount,
     can,
+    canTab,
+    warehouses = [],
   } = usePOS();
+  // beta 0.3.28: นับแยกคลัง (เมื่อเปิดใช้โมดูลหลายคลัง)
+  const activeWarehouses = warehouses.filter((w) => w.is_active !== false);
+  const showWarehouse = activeWarehouses.length > 1 && (typeof canTab !== 'function' || canTab('warehouses'));
+  const [newWarehouse, setNewWarehouse] = useState(SALES_WAREHOUSE_ID);
   const [openCountId, setOpenCountId] = useState(null);
   const [newCategory, setNewCategory] = useState('all');
   const [draftItems, setDraftItems] = useState(null);
@@ -49,11 +56,17 @@ export default function StockCountPage() {
     const masterProducts = products.filter(
       (p) => !p.linked_product_id && (newCategory === 'all' || p.category_id === newCategory)
     );
-    const label =
+    const categoryLabel =
       newCategory === 'all'
         ? 'สินค้าทั้งหมด'
         : categories.find((c) => c.id === newCategory)?.name || newCategory;
-    const saved = await createStockCount({ scopeLabel: label, productIds: masterProducts.map((p) => p.id) });
+    const warehouseName = showWarehouse ? activeWarehouses.find((w) => w.id === newWarehouse)?.name : '';
+    const label = warehouseName ? `${categoryLabel} • ${warehouseName}` : categoryLabel;
+    const saved = await createStockCount({
+      scopeLabel: label,
+      productIds: masterProducts.map((p) => p.id),
+      warehouseId: showWarehouse ? newWarehouse : '',
+    });
     if (saved) {
       setOpenCountId(saved.id);
       setDraftItems(saved.items);
@@ -101,7 +114,19 @@ export default function StockCountPage() {
             </div>
           </div>
           {canCount && (
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              {showWarehouse && (
+                <select
+                  value={newWarehouse}
+                  onChange={(e) => setNewWarehouse(e.target.value)}
+                  className="px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-bold"
+                  title="คลังที่นับ"
+                >
+                  {activeWarehouses.map((w) => (
+                    <option key={w.id} value={w.id}>{w.name}</option>
+                  ))}
+                </select>
+              )}
               <select
                 value={newCategory}
                 onChange={(e) => setNewCategory(e.target.value)}

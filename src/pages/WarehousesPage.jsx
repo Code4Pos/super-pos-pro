@@ -28,7 +28,14 @@ export default function WarehousesPage() {
     saveWarehouse,
     changeStockTransferStatus,
     can,
+    productLots = [],
   } = usePOS();
+  // เลขล็อตที่ย้ายในใบโอน (beta 0.3.27 เก็บใน item.lot_moves)
+  const lotNumberById = useMemo(() => new Map(productLots.map((l) => [l.id, l.lot_number])), [productLots]);
+  const describeTransferLots = (t) =>
+    (t.items || [])
+      .flatMap((i) => (i.lot_moves || []).map((m) => `${lotNumberById.get(m.from_lot_id) || '?'} ×${formatNumber(m.qty)}`))
+      .join(', ');
   const [viewMode, setViewMode] = useState('balances'); // 'balances' | 'transfers' | 'warehouses'
   const [search, setSearch] = useState('');
   const [onlyNegative, setOnlyNegative] = useState(false);
@@ -270,6 +277,9 @@ export default function WarehousesPage() {
                       <div className="text-[11px] text-slate-600 truncate">
                         {(t.items || []).map((i) => `${i.product_name} ${formatNumber(i.qty)} ${i.unit}`).join(' • ')}
                       </div>
+                      {describeTransferLots(t) && (
+                        <div className="text-[11px] text-indigo-700 truncate">ล็อต: {describeTransferLots(t)}</div>
+                      )}
                       <div className="text-[11px] text-slate-400">
                         ส่งโดย {t.created_by_name || '-'} {formatDateTime(t.created_at)}
                         {t.received_at && ` • รับโดย ${t.received_by_name || '-'} ${formatDateTime(t.received_at)}`}

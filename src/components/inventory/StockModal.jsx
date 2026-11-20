@@ -7,10 +7,12 @@ import {
   Check,
   GitBranch,
   DollarSign,
+  Warehouse,
 } from 'lucide-react';
 import { usePOS } from '../../context/POSContext';
 import { formatCurrency } from '../../utils/formatters';
 import { ADJUST_REASONS, requiresApprover } from '../../utils/stockLedger';
+import { getWarehouseQty, SALES_WAREHOUSE_ID } from '../../utils/warehouses';
 
 export default function StockModal({ product, onClose }) {
   const {
@@ -22,7 +24,12 @@ export default function StockModal({ product, onClose }) {
     can,
     verifyApprover,
     showToast,
+    warehouses = [],
+    inventoryBalances = [],
+    canTab,
   } = usePOS();
+  // beta 0.3.28: เลือกคลังที่ปรับสต็อก (เฉพาะสินค้าหลัก และเมื่อเปิดใช้โมดูลหลายคลัง)
+  const [warehouseId, setWarehouseId] = useState(SALES_WAREHOUSE_ID);
   // เมื่อเปิดระบบผู้ใช้: ผู้มีสิทธิ์อนุมัติจะเป็นผู้อนุมัติอัตโนมัติ ถ้าไม่มีสิทธิ์ต้องให้ผู้จัดการใส่ PIN
   const [approverId, setApproverId] = useState('');
   const [approverPin, setApproverPin] = useState('');
@@ -60,6 +67,16 @@ export default function StockModal({ product, onClose }) {
     : 0;
   const currentCost = Number(product?.cost_price) || 0;
 
+  const activeWarehouses = warehouses.filter((w) => w.is_active !== false);
+  const showWarehouse =
+    !isSecondaryLinked && activeWarehouses.length > 1 && (typeof canTab !== 'function' || canTab('warehouses'));
+  // ยอดตั้งต้นของการปรับ = ยอดของคลังที่เลือก (หน้าร้าน = สต็อกรวม - คลังอื่น)
+  const baseQty =
+    showWarehouse && product ? getWarehouseQty(product, warehouseId, inventoryBalances, warehouses) : currentStock;
+  // ส่งคลังให้ชั้นข้อมูลเมื่อยอดคลังต่างจากสต็อกรวม (มีของในคลังอื่น) หรือเลือกคลังอื่น
+  const useWarehouseMeta = showWarehouse && (warehouseId !== SALES_WAREHOUSE_ID || baseQty !== currentStock);
+  const selectedWarehouseName = activeWarehouses.find((w) => w.id === warehouseId)?.name || '';
+
   useEffect(() => {
     if (product) {
       const mProd = product.linked_product_id
@@ -82,6 +99,7 @@ export default function StockModal({ product, onClose }) {
       setApprovedBy('');
       setApproverId('');
       setApproverPin('');
+      setWarehouseId(SALES_WAREHOUSE_ID);
     }
   }, [product?.id]);
 
@@ -111,19 +129,23 @@ export default function StockModal({ product, onClose }) {
     } else {
       nextMasterStock = Math.max(0, numAmount * multiplier + numRemainder);
     }
-  } else {
+  }
+  // สินค้าหลัก: คิดยอดใหม่ของคลังที่เลือก แล้วแปลงเป็นสต็อกรวม (สต็อกรวม + ผลต่างของคลัง)
+  let nextWarehouseQty = baseQty;
+  if (!isSecondaryLinked) {
     if (mode === 'add') {
-      nextMasterStock = Math.max(0, currentStock + numAmount);
+      nextWarehouseQty = Math.max(0, baseQty + numAmount);
     } else if (mode === 'reduce') {
-      nextMasterStock = Math.max(0, currentStock - numAmount);
+      nextWarehouseQty = Math.max(0, baseQty - numAmount);
     } else {
-      nextMasterStock = Math.max(0, numAmount);
+      nextWarehouseQty = Math.max(0, numAmount);
     }
+    nextMasterStock = Math.max(0, currentStock + (nextWarehouseQty - baseQty));
   }
 
   const previewStock = isSecondaryLinked
     ? Math.floor(nextMasterStock / multiplier)
-    : nextMasterStock;
+    : nextWarehouseQty;
   const previewRemainder = isSecondaryLinked
     ? nextMasterStock % multiplier
     : 0;
@@ -161,8 +183,9 @@ export default function StockModal({ product, onClose }) {
       const movementMeta = {
         // โหมดปรับ: 'set' = กำหนดยอดใหม่จากการนับจริง (ฐานข้อมูลคิดจากยอดล่าสุดบนฐานข้อมูล)
         adjust_mode: mode,
-        reason: finalReason,
+        reason: useWarehouseMeta && selectedWarehouseName ? `${finalReason} (คลัง: ${selectedWarehouseName})` : finalReason,
         approved_by: approverName,
+        ...(useWarehouseMeta ? { warehouse_id: warehouseId } : {}),
         reference_doc: authEnabled && currentUser ? `ปรับสต็อกโดย ${currentUser.name}` : 'ปรับสต็อกด้วยมือ',
       };
       if (isSecondaryLinked && masterProd) {
@@ -177,7 +200,7 @@ export default function StockModal({ product, onClose }) {
         );
       } else {
         const nextCost = hasCostUpdate ? Number(costPrice) || 0 : undefined;
-        await updateProductStock(product.id, previewStock, nextCost, movementMeta);
+        await updateProductStock(product.id, nextMasterStock, nextCost, movementMeta);
       }
       onClose();
     } finally {
@@ -213,6 +236,29 @@ export default function StockModal({ product, onClose }) {
                 1 {product.unit} = {multiplier} {masterProd.unit}
               </span>
             </div>
+          )}
+
+          {showWarehouse && (
+            <label className="flex items-center gap-2 px-3 py-2 rounded-xl bg-slate-50 border border-slate-200">
+              <Warehouse className="w-4 h-4 text-indigo-600 shrink-0" />
+              <span className="text-xs font-bold text-slate-700 shrink-0">คลังที่ปรับ</span>
+              <select
+                value={warehouseId}
+                onChange={(e) => {
+                  setWarehouseId(e.target.value);
+                  if (mode === 'set') {
+                    setAmount(getWarehouseQty(product, e.target.value, inventoryBalances, warehouses));
+                  }
+                }}
+                className="flex-1 min-w-0 px-2 py-1 rounded-lg border border-slate-300 bg-white text-xs font-bold"
+              >
+                {activeWarehouses.map((w) => (
+                  <option key={w.id} value={w.id}>
+                    {w.name} ({getWarehouseQty(product, w.id, inventoryBalances, warehouses)} {product.unit})
+                  </option>
+                ))}
+              </select>
+            </label>
           )}
 
           {/* แถบเลือกโหมด: เพิ่มสต็อก | ลดสต็อก | กำหนดยอดใหม่ */}
@@ -254,7 +300,7 @@ export default function StockModal({ product, onClose }) {
               type="button"
               onClick={() => {
                 setMode('set');
-                setAmount(currentStock);
+                setAmount(isSecondaryLinked ? currentStock : baseQty);
                 setRemainderAmount(currentRemainder);
                 setCostPrice(product.cost_price ?? 0);
               }}
@@ -368,7 +414,7 @@ export default function StockModal({ product, onClose }) {
               <strong className="text-slate-800">
                 {isSecondaryLinked && masterProd
                   ? `${currentStock} ${product.unit} (${currentRemainder} ${masterProd.unit})`
-                  : `${currentStock} ${product.unit}`}
+                  : `${baseQty} ${product.unit}`}
               </strong>
             </div>
             <div>

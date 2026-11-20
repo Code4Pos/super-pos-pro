@@ -786,8 +786,17 @@ function planLotChanges(entries, afterProducts, meta = {}) {
     const delta = Number(entry.change_qty) || 0;
 
     if (delta < 0) {
-      // ขาย/ปรับลด = ล็อตหน้าร้าน (beta 0.3.27) ล็อตไม่พอ = "ไม่ระบุล็อต" ติดลบ (ยอดล็อตหน้าร้านยังเท่ายอดหน้าร้าน)
-      const result = consumeLotsWithShortage(lots, product, -delta, strategy, nowIso, SALES_WAREHOUSE_ID, meta);
+      // ขาย/ปรับลด = ล็อตหน้าร้าน (beta 0.3.27) / ปรับสต็อกหรือตรวจนับแยกคลัง = ล็อตของคลังนั้น (meta.warehouse_id, beta 0.3.28)
+      // ล็อตไม่พอ = "ไม่ระบุล็อต" ติดลบ (ยอดล็อตของคลังยังเท่ายอดคลัง)
+      const result = consumeLotsWithShortage(
+        lots,
+        product,
+        -delta,
+        strategy,
+        nowIso,
+        meta.warehouse_id || SALES_WAREHOUSE_ID,
+        meta
+      );
       lots = result.lots;
       if (meta.reference_doc && result.consumed.length > 0) {
         const record = {
@@ -2763,7 +2772,9 @@ export const posService = {
       // - กำหนดยอดใหม่ (นับของจริงแล้ว): ยอดใหม่ - ยอดล่าสุดบนฐานข้อมูล (ออฟไลน์ใช้ยอดในเครื่อง)
       const current = baseProducts.find((p) => p.id === productId);
       let baseStock = Number(current?.stock) || 0;
-      if (movementMeta.adjust_mode === 'set' && isOnline()) {
+      // ปรับแยกคลัง (ระบุ warehouse_id): ยอดใหม่คำนวณจากยอดคลังในเครื่องแล้ว จึงส่งผลต่างเทียบยอดในเครื่องเสมอ
+      const isOtherWarehouse = Boolean(movementMeta.warehouse_id);
+      if (movementMeta.adjust_mode === 'set' && !isOtherWarehouse && isOnline()) {
         try {
           const { data } = await supabase.from('products').select('stock').eq('id', productId).maybeSingle();
           if (data) baseStock = Number(data.stock) || 0;
@@ -2790,6 +2801,14 @@ export const posService = {
     });
     const synced = applyRemoteBalances(normalizeAndSyncProducts(updated), remoteBalances);
     setLocal(STORAGE_KEYS.PRODUCTS, synced);
+    // beta 0.3.28: ปรับสต็อกของคลังอื่น = ปรับยอดคลังนั้นด้วย (ยอดหน้าร้านคำนวณจากสต็อกรวมจึงไม่เปลี่ยน)
+    if (movementMeta.warehouse_id && movementMeta.warehouse_id !== SALES_WAREHOUSE_ID) {
+      const before = Number(baseProducts.find((p) => p.id === productId)?.stock) || 0;
+      const whDelta = Math.round((safeStock - before) * 10000) / 10000;
+      if (whDelta) {
+        await addToWarehouseBalances(new Map([[productId, whDelta]]), movementMeta.warehouse_id, isSupabaseActive, nowIso);
+      }
+    }
     const { adjust_mode: _adjustMode, ...ledgerMeta } = movementMeta;
     await recordStockMovements(
       baseProducts,
@@ -3270,6 +3289,9 @@ export const posService = {
         : getLocal(STORAGE_KEYS.PRODUCTS, INITIAL_PRODUCTS);
     if (deltas.size === 0) return baseProducts;
 
+    // คลังที่นับ (beta 0.3.28 เก็บในรายการ items[].warehouse_id) ไม่มี = หน้าร้าน
+    const countWarehouseId = (count.items || []).find((it) => it.warehouse_id)?.warehouse_id || SALES_WAREHOUSE_ID;
+
     // ฐานข้อมูล: ส่งผลต่างจากการนับเป็นยอดเปลี่ยนแปลง (ใช้เลขที่ใบนับเป็นรหัสกันปรับซ้ำ) ออฟไลน์ = เข้าคิว
     let remoteBalances = {};
     if (isSupabaseActive && supabase) {
@@ -3287,6 +3309,8 @@ export const posService = {
       )
     ), remoteBalances);
     setLocal(STORAGE_KEYS.PRODUCTS, updated);
+    // นับคลังอื่น: ผลต่างปรับยอดคลังนั้นด้วย
+    await addToWarehouseBalances(deltas, countWarehouseId, isSupabaseActive, nowIso);
     await recordStockMovements(
       baseProducts,
       updated,
@@ -3295,6 +3319,7 @@ export const posService = {
         reason: 'ตรวจนับสต็อก (Cycle Count)',
         reference_doc: count.count_number,
         approved_by: approvedBy,
+        warehouse_id: countWarehouseId,
       },
       isSupabaseActive
     );

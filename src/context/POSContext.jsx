@@ -6,7 +6,7 @@ import { findExpiredLotsInCart } from '../utils/lots';
 import { summarizeSplitPayments } from '../utils/payments';
 import { calculateCustomerCredit, checkCreditSale } from '../utils/credit';
 import { hasPermission, canAccessTab, applyRoleConfig, applyDisabledModules } from '../utils/rbac';
-import { validateTransfer } from '../utils/warehouses';
+import { validateTransfer, getWarehouseQty, SALES_WAREHOUSE_ID } from '../utils/warehouses';
 import {
   calculateReservedByProduct,
   validateSalesOrderItems,
@@ -15,7 +15,7 @@ import {
 
 const SESSION_STORAGE_KEY = 'siampos_session_v1';
 
-export const APP_VERSION = 'version beta 0.3.27';
+export const APP_VERSION = 'version beta 0.3.28';
 const HELD_BILLS_STORAGE_KEY = 'siampos_held_bills_v1';
 
 const POSContext = createContext(null);
@@ -1051,6 +1051,8 @@ export function POSProvider({ children, scope = 'all' }) {
       );
       // ตั้งค่าตามผลลัพธ์จากชั้นข้อมูลอีกครั้ง เพื่อให้รายการเคลื่อนไหวสต็อกถูกดึงหลังบันทึกแล้ว
       setProducts(syncedList);
+      // ปรับสต็อกของคลังอื่น (beta 0.3.28) เปลี่ยนยอดคลังด้วย
+      if (movementMeta.warehouse_id) setInventoryBalances(posService.getInventoryBalances());
       const finalTarget =
         syncedList.find((p) => p.id === productId) || updatedTarget;
       if (finalTarget) {
@@ -1517,11 +1519,14 @@ export function POSProvider({ children, scope = 'all' }) {
   );
 
   const createStockCount = useCallback(
-    async ({ scopeLabel, productIds }) => {
+    async ({ scopeLabel, productIds, warehouseId = '' }) => {
       const nowIso = new Date().toISOString();
+      // คลังที่นับ (beta 0.3.28) เก็บในแต่ละรายการ เพื่อไม่ต้องเพิ่มคอลัมน์ในตาราง stock_counts / หน้าร้าน = ไม่ใส่
+      const countWarehouse = warehouseId && warehouseId !== SALES_WAREHOUSE_ID ? warehouseId : '';
       const items = products
         .filter((p) => !p.linked_product_id && productIds.includes(p.id))
         .map((p) => ({
+          ...(countWarehouse ? { warehouse_id: countWarehouse } : {}),
           product_id: p.id,
           product_name: p.name,
           sku: p.sku || '',
@@ -1563,7 +1568,11 @@ export function POSProvider({ children, scope = 'all' }) {
 
   const submitStockCount = useCallback(
     async (count, items) => {
-      const stockById = new Map(products.map((p) => [p.id, Number(p.stock) || 0]));
+      // ยอดในระบบ ณ ตอนส่ง = ยอดของคลังที่นับ (หน้าร้าน = สต็อกรวม - คลังอื่น)
+      const countWarehouse = (count.items || []).find((it) => it.warehouse_id)?.warehouse_id || SALES_WAREHOUSE_ID;
+      const stockById = new Map(
+        products.map((p) => [p.id, getWarehouseQty(p, countWarehouse, inventoryBalances, warehouses)])
+      );
       const saved = await persistStockCount({
         ...count,
         items: items.map((it) => ({ ...it, system_qty: stockById.get(it.product_id) ?? 0 })),
@@ -1574,7 +1583,7 @@ export function POSProvider({ children, scope = 'all' }) {
       showToast(`ส่งผลตรวจนับ ${saved.count_number} รออนุมัติ`, 'info');
       return saved;
     },
-    [products, currentUser, persistStockCount, showToast]
+    [products, currentUser, persistStockCount, showToast, inventoryBalances, warehouses]
   );
 
   const approveStockCount = useCallback(
@@ -1587,6 +1596,7 @@ export function POSProvider({ children, scope = 'all' }) {
         products
       );
       setProducts(updatedProducts);
+      setInventoryBalances(posService.getInventoryBalances());
       const saved = await persistStockCount({
         ...count,
         status: 'approved',
