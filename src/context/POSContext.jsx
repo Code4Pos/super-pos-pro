@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { posService, normalizeAndSyncProducts, nextLocalDocNumber } from '../services/posService';
+import { posService, normalizeAndSyncProducts, allocateDocNumber } from '../services/posService';
 import { printerService, SHARED_SHOP_SETTING_KEYS } from '../services/printerService';
 import { calculateEffectiveUnitPrice, calculateRoundingDiscount, calculateLoyaltyPoints } from '../utils/formatters';
 import { summarizeSplitPayments } from '../utils/payments';
@@ -14,7 +14,7 @@ import {
 
 const SESSION_STORAGE_KEY = 'siampos_session_v1';
 
-export const APP_VERSION = 'version beta 0.3.21';
+export const APP_VERSION = 'version beta 0.3.23';
 const HELD_BILLS_STORAGE_KEY = 'siampos_held_bills_v1';
 
 const POSContext = createContext(null);
@@ -1304,7 +1304,13 @@ export function POSProvider({ children, scope = 'all' }) {
         id: `trf-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
         // ใช้วันที่ตามเวลาเครื่อง (ไม่ใช่ UTC) เพื่อไม่ให้เลขที่ช่วงเช้ามืดเป็นวันก่อนหน้า
         // เลขที่ตามรูปแบบของร้าน (ตั้งค่า › เลขที่เอกสาร)
-        transfer_number: nextLocalDocNumber('stockTransfer', stockTransfers.map((t) => t.transfer_number)),
+        // เช็คเลขบนฐานข้อมูลก่อนออกเลข (กันชนกับเครื่องอื่น)
+        transfer_number: await allocateDocNumber('stockTransfer', {
+          table: 'stock_transfers',
+          field: 'transfer_number',
+          localNumbers: stockTransfers.map((t) => t.transfer_number),
+          isSupabaseActive: dbMode === 'supabase',
+        }),
         from_warehouse_id: fromId,
         to_warehouse_id: toId,
         items: items
@@ -1369,7 +1375,12 @@ export function POSProvider({ children, scope = 'all' }) {
       }
       const record = {
         id: `so-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-        so_number: nextLocalDocNumber('salesOrder', salesOrders.map((o) => o.so_number)),
+        so_number: await allocateDocNumber('salesOrder', {
+          table: 'sales_orders',
+          field: 'so_number',
+          localNumbers: salesOrders.map((o) => o.so_number),
+          isSupabaseActive: dbMode === 'supabase',
+        }),
         customer_id: customer.id,
         customer_name: customer.shop_name && customer.shop_name !== '-' ? `${customer.name} (${customer.shop_name})` : customer.name,
         items: buildSalesOrderItems(items, products),
@@ -1490,7 +1501,12 @@ export function POSProvider({ children, scope = 'all' }) {
       }
       const record = {
         id: `cc-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-        count_number: nextLocalDocNumber('stockCount', stockCounts.map((c) => c.count_number)),
+        count_number: await allocateDocNumber('stockCount', {
+          table: 'stock_counts',
+          field: 'count_number',
+          localNumbers: stockCounts.map((c) => c.count_number),
+          isSupabaseActive: dbMode === 'supabase',
+        }),
         scope_label: scopeLabel,
         status: 'counting',
         items,
@@ -1501,7 +1517,7 @@ export function POSProvider({ children, scope = 'all' }) {
       showToast(`สร้างใบตรวจนับ ${saved.count_number} (${items.length} รายการ)`, 'success');
       return saved;
     },
-    [products, currentUser, persistStockCount, showToast, stockCounts]
+    [products, currentUser, persistStockCount, showToast, stockCounts, dbMode]
   );
 
   const saveStockCountProgress = useCallback(

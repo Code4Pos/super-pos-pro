@@ -36,9 +36,9 @@ export function localDateCode(date = new Date()) {
  * ใช้ค่าที่มากกว่าระหว่างเลขรันที่จำไว้ กับเลขสูงสุดของบิลในรอบเดียวกันที่มีในเครื่อง (กันเลขซ้ำเมื่อค่าที่จำไว้หาย)
  * คืนค่า { orderNumber, device } โดย device คือค่าที่ต้องบันทึกกลับ
  */
-export function nextOrderNumber(device, existingOrders = [], date = new Date(), template = DEFAULT_ORDER_TEMPLATE) {
+export function nextOrderNumber(device, existingOrders = [], date = new Date(), template = DEFAULT_ORDER_TEMPLATE, branchCode = '00000') {
   const code = sanitizeDeviceCode(device?.code) || generateDeviceCode();
-  const { prefix, suffix, digits } = resolveDocumentTemplate(template, { date, deviceCode: code });
+  const { prefix, suffix, digits } = resolveDocumentTemplate(template, { date, deviceCode: code, branchCode });
   // รอบของเลขรัน = ส่วนหน้า|ส่วนหลังเลขรัน (เปลี่ยนวัน/เดือน/รูปแบบ = เริ่มนับใหม่)
   const periodKey = `${prefix}|${suffix}`;
   const maxExisting = existingOrders.reduce((max, o) => {

@@ -21,6 +21,8 @@ export default function DeviceSettings() {
   const { showToast, dbMode, isOffline, uploadLocalData, printerSettings } = usePOS();
   const [device, setDevice] = useState(() => posService.getDeviceSettings());
   const [code, setCode] = useState(device.code);
+  // รหัสสาขาของเครื่อง (หลายสาขาใช้ฐานข้อมูลเดียวกัน) ว่าง = ใช้รหัสสาขาของร้าน
+  const [branch, setBranch] = useState(device.branchCode || '');
   const [email, setEmail] = useState('');
   const [uploading, setUploading] = useState(false);
   const [uploadResult, setUploadResult] = useState(null);
@@ -42,14 +44,15 @@ export default function DeviceSettings() {
   }, []);
 
   const clean = sanitizeDeviceCode(code);
-  const isDirty = clean !== device.code;
+  const isDirty = clean !== device.code || branch !== (device.branchCode || '');
 
   const handleSave = () => {
     try {
-      const saved = posService.saveDeviceSettings({ code: clean });
+      const saved = posService.saveDeviceSettings({ code: clean, branchCode: branch });
       setDevice(saved);
       setCode(saved.code);
-      showToast(`ตั้งรหัสเครื่องเป็น ${saved.code} แล้ว`, 'success');
+      setBranch(saved.branchCode || '');
+      showToast(`บันทึกรหัสเครื่อง ${saved.code} และสาขา ${posService.getDeviceBranchCode()} แล้ว`, 'success');
     } catch (err) {
       showToast(err.message, 'error');
     }
@@ -127,18 +130,30 @@ export default function DeviceSettings() {
       </div>
       <div className="p-4 space-y-4">
         <div className="space-y-1.5">
-          <label className="text-[11px] font-bold text-slate-600" htmlFor="device-code">
-            รหัสเครื่อง (ขึ้นต้นเลขที่บิล)
-          </label>
-          <div className="flex gap-2">
-            <input
-              id="device-code"
-              type="text"
-              value={code}
-              maxLength={10}
-              onChange={(e) => setCode(e.target.value.toUpperCase())}
-              className="w-40 px-3 py-2 rounded-xl border border-slate-300 text-sm font-mono font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500"
-            />
+          <div className="flex flex-wrap items-end gap-2">
+            <label className="block">
+              <span className="text-[11px] font-bold text-slate-600">รหัสเครื่อง (ขึ้นต้นเลขที่บิล)</span>
+              <input
+                id="device-code"
+                type="text"
+                value={code}
+                maxLength={10}
+                onChange={(e) => setCode(e.target.value.toUpperCase())}
+                className="mt-1 block w-40 px-3 py-2 rounded-xl border border-slate-300 text-sm font-mono font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+            </label>
+            <label className="block">
+              <span className="text-[11px] font-bold text-slate-600">รหัสสาขาของเครื่อง</span>
+              <input
+                type="text"
+                inputMode="numeric"
+                value={branch}
+                maxLength={5}
+                placeholder={String(printerSettings.shopBranch || '00000')}
+                onChange={(e) => setBranch(e.target.value.replace(/\D/g, ''))}
+                className="mt-1 block w-28 px-3 py-2 rounded-xl border border-slate-300 text-sm font-mono font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+            </label>
             <button
               type="button"
               disabled={!isDirty || !clean}
@@ -153,9 +168,13 @@ export default function DeviceSettings() {
             <span className="font-mono font-bold text-slate-700">
               {previewDocumentNumber(getDocumentTemplate(printerSettings.documentNumbering, 'order'), {
                 deviceCode: clean || '???',
+                branchCode: branch || printerSettings.shopBranch,
               })}
             </span>
             {' '}ตั้งรหัสไม่ซ้ำกันในแต่ละเครื่อง (เช่น POS1, POS2) เพื่อให้เลขที่บิลไม่ชนกันแม้ขายตอนออฟไลน์
+            <br />
+            รหัสสาขา 5 หลัก (00000 = สำนักงานใหญ่) ใช้พิมพ์บนใบเสร็จ/ใบกำกับภาษีที่ออกจากเครื่องนี้ และใช้กับ {'{BRANCH}'} ในเลขที่เอกสาร
+            เว้นว่าง = ใช้รหัสสาขาของร้าน ({String(printerSettings.shopBranch || '00000')})
           </p>
         </div>
 

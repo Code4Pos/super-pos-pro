@@ -1,7 +1,7 @@
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { B2B_CUSTOMER_DEFAULTS, normalizeB2BFields } from '../utils/credit';
 import { calculateOrderVat } from '../utils/tax';
-import { getDocumentTemplate, nextDocumentNumber, resolveDocumentTemplate } from '../utils/docNumbers';
+import { getDocumentTemplate, nextDocumentNumber, resolveDocumentTemplate, normalizeBranchCode } from '../utils/docNumbers';
 import { hashPin, generateSalt } from '../utils/rbac';
 import { consumeLots, addToLots, restoreToLots, summarizeLotsByProduct } from '../utils/lots';
 import { normalizeWarehouses, applyBalanceDelta, TRANSIT_WAREHOUSE_ID, SALES_WAREHOUSE_ID } from '../utils/warehouses';
@@ -499,6 +499,31 @@ async function loadRemoteWithLocal(table, storageKey, limit = 1000, orderField =
  * คืนค่าเอกสารที่บันทึก และรายการทั้งหมดในเครื่อง
  */
 /**
+ * รหัสสาขาของเครื่องนี้ (ตั้งในการ์ด "เครื่องนี้") ไม่ได้ตั้ง = รหัสสาขาของร้าน (หน้าภาษี)
+ * ใช้ในเลขที่เอกสาร {BRANCH} และบันทึกเป็นสาขาที่ออกบิล/ใบกำกับภาษี
+ */
+function getDeviceBranchCode() {
+  const device = getLocal(STORAGE_KEYS.DEVICE, {});
+  if (device?.branchCode) return normalizeBranchCode(device.branchCode);
+  return normalizeBranchCode(printerService.getSettings().shopBranch);
+}
+
+// ตัวเลือกสำหรับแปลงรูปแบบเลขที่ (วันที่ รหัสเครื่อง รหัสสาขา)
+function docTemplateOptions(date = new Date()) {
+  return {
+    date,
+    deviceCode: getLocal(STORAGE_KEYS.DEVICE, {})?.code || '',
+    branchCode: getDeviceBranchCode(),
+  };
+}
+
+// ฐานข้อมูลยังไม่มีคอลัมน์ใหม่ (ยังไม่ได้รัน Migration)
+function isMissingColumnError(error) {
+  const msg = String(error?.message || '');
+  return error?.code === 'PGRST204' || error?.code === '42703' || (/column/i.test(msg) && /(does not exist|could not find)/i.test(msg));
+}
+
+/**
  * รูปแบบเลขที่ของเอกสารแต่ละชนิดตามค่าตั้งร้าน (ตั้งค่า › เลขที่เอกสาร)
  */
 function getDocTemplate(docType) {
@@ -509,10 +534,7 @@ function getDocTemplate(docType) {
  * เลขที่ถัดไปจากเลขที่ที่มีในเครื่อง (เอกสารที่ไม่มีการตรวจเลขซ้ำกับฐานข้อมูล)
  */
 function nextLocalDocNumber(docType, existingNumbers = [], date = new Date()) {
-  return nextDocumentNumber(getDocTemplate(docType), existingNumbers, {
-    date,
-    deviceCode: getLocal(STORAGE_KEYS.DEVICE, {})?.code || '',
-  });
+  return nextDocumentNumber(getDocTemplate(docType), existingNumbers, docTemplateOptions(date));
 }
 
 async function insertRemoteWithLocal(table, storageKey, record, localIdPrefix, isSupabaseActive) {
@@ -551,9 +573,10 @@ async function insertWithRunningNumber({
   isSupabaseActive,
   remoteAllowed = true,
   now = new Date(),
+  optionalColumns = [],
 }) {
   const template = getDocTemplate(docType);
-  const templateOptions = { date: now, deviceCode: getLocal(STORAGE_KEYS.DEVICE, {})?.code || '' };
+  const templateOptions = docTemplateOptions(now);
   const { prefix } = resolveDocumentTemplate(template, templateOptions);
   const usedNumbers = [...existingNumbers];
   const remoteEnabled = Boolean(isSupabaseActive && supabase && remoteAllowed);
@@ -571,16 +594,23 @@ async function insertWithRunningNumber({
 
   const localId = () => `${localIdPrefix}-${Date.now()}`;
   let saved = null;
-  for (let attempt = 0; attempt < 5 && !saved; attempt += 1) {
+  let dropOptional = false;
+  for (let attempt = 0; attempt < 6 && !saved; attempt += 1) {
     const record = { ...baseRecord, [numberField]: nextDocumentNumber(template, usedNumbers, templateOptions) };
+    // ฐานข้อมูลเก่ายังไม่มีคอลัมน์เสริม: ส่งเฉพาะคอลัมน์เดิม (ในเครื่องยังเก็บครบ)
+    const remoteRecord = dropOptional
+      ? Object.fromEntries(Object.entries(record).filter(([k]) => !optionalColumns.includes(k)))
+      : record;
     if (!remoteEnabled) {
       saved = { ...record, id: localId() };
       break;
     }
     try {
-      const { data, error } = await supabase.from(table).insert([record]).select().single();
+      const { data, error } = await supabase.from(table).insert([remoteRecord]).select().single();
       if (!error && data) {
-        saved = data;
+        saved = { ...record, ...data };
+      } else if (!dropOptional && optionalColumns.length > 0 && isMissingColumnError(error)) {
+        dropOptional = true;
       } else if (error?.code === '23505') {
         // เลขที่ชนกับเครื่องอื่น ลองเลขถัดไป
         usedNumbers.push(record[numberField]);
@@ -879,6 +909,8 @@ async function pushOrderToSupabase(orderData, deductions = []) {
       delete legacyOrderData.payments;
       delete legacyOrderData.credit_due_date;
       delete legacyOrderData.created_by_name;
+      delete legacyOrderData.branch_code;
+      delete legacyOrderData.sales_order;
       legacyOrderData.payment_method =
         orderData.payment_method === 'split' ? mainPayment?.method || 'cash' : orderData.payment_method;
       ({ data: savedOrder, error: orderError } = await supabase
@@ -1395,7 +1427,30 @@ function rpcMissingMessage(error) {
   return msg || 'รีเซ็ตร้านไม่สำเร็จ';
 }
 
-export { nextLocalDocNumber };
+/**
+ * ออกเลขที่เอกสารโดยเช็คเลขที่มีบนฐานข้อมูลในรอบเดียวกันก่อน (กันสองเครื่องได้เลขซ้ำ)
+ * ออฟไลน์/Demo = นับจากเอกสารในเครื่อง (localNumbers)
+ */
+async function allocateDocNumber(docType, { table, field, localNumbers = [], isSupabaseActive = false, date = new Date() } = {}) {
+  const template = getDocTemplate(docType);
+  const options = docTemplateOptions(date);
+  const used = [...localNumbers];
+  if (isSupabaseActive && supabase && isOnline() && table && field) {
+    const { prefix } = resolveDocumentTemplate(template, options);
+    try {
+      const { data, error } = await fetchPagedRows(
+        () => supabase.from(table).select(field).like(field, `${prefix}%`).order(field, { ascending: false }),
+        20000
+      );
+      if (!error) (data || []).forEach((r) => used.push(r[field]));
+    } catch {
+      // เชื่อมต่อไม่ได้: ใช้เลขจากในเครื่อง
+    }
+  }
+  return nextDocumentNumber(template, used, options);
+}
+
+export { nextLocalDocNumber, allocateDocNumber };
 
 export const posService = {
   /**
@@ -1676,16 +1731,34 @@ export const posService = {
     if (!isSupabaseActive || !supabase) return localResult(false);
     if (!isOnline()) return localResult(true);
     try {
-      const { data, error } = await fetchPagedRows(
+      let selectColumns = columns;
+      let { data, error } = await fetchPagedRows(
         () =>
           supabase
             .from('orders')
-            .select(columns)
+            .select(selectColumns)
             .gte('created_at', new Date(startMs).toISOString())
             .lt('created_at', new Date(endMs).toISOString())
             .order('created_at', { ascending: false }),
         maxRows
       );
+      if (error && isMissingColumnError(error) && /branch_code/.test(columns)) {
+        selectColumns = columns
+          .split(',')
+          .map((c) => c.trim())
+          .filter((c) => c !== 'branch_code')
+          .join(', ');
+        ({ data, error } = await fetchPagedRows(
+          () =>
+            supabase
+              .from('orders')
+              .select(selectColumns)
+              .gte('created_at', new Date(startMs).toISOString())
+              .lt('created_at', new Date(endMs).toISOString())
+              .order('created_at', { ascending: false }),
+          maxRows
+        ));
+      }
       if (error) throw error;
       return { orders: mergeLocalUnsyncedOrders(data || [], { filter: inRange }), offline: false };
     } catch (err) {
@@ -2753,6 +2826,13 @@ export const posService = {
    * - code: รหัสเครื่องที่ใช้ขึ้นต้นเลขที่บิล (ถ้ายังไม่เคยตั้ง จะสุ่มรหัสให้ เช่น POS-K7Q)
    * - defaultMode: โหมดเริ่มต้นเมื่อเปิดแอปในเครื่องนี้ ('ask' = ถามทุกครั้ง, 'pos' = หน้าร้านทันที, 'admin' = หลังร้านทันที)
    */
+  /**
+   * รหัสสาขาที่เครื่องนี้ใช้จริง (ตั้งเอง หรือรหัสสาขาของร้าน)
+   */
+  getDeviceBranchCode() {
+    return getDeviceBranchCode();
+  },
+
   getDeviceSettings() {
     const device = getLocal(STORAGE_KEYS.DEVICE, {});
     const defaultMode = ['pos', 'admin'].includes(device.defaultMode)
@@ -2781,9 +2861,16 @@ export const posService = {
       if (!clean) throw new Error('กรุณาระบุรหัสเครื่อง (A-Z, 0-9 หรือ -)');
       nextCode = clean;
     }
+    // รหัสสาขาของเครื่อง (ว่าง = ใช้รหัสสาขาของร้าน)
+    const nextBranch =
+      patch.branchCode !== undefined
+        ? String(patch.branchCode || '').replace(/\D/g, '')
+          ? normalizeBranchCode(patch.branchCode)
+          : ''
+        : device.branchCode || '';
     // เปลี่ยนรหัสเครื่อง = เริ่มเลขรันใหม่ของรหัสนั้น (เลขรันคำนวณจากบิลที่มีในเครื่องด้วย จึงไม่ซ้ำ)
     const base = nextCode === device.code ? device : { code: nextCode };
-    const saved = { ...base, code: nextCode, defaultMode: nextDefaultMode };
+    const saved = { ...base, code: nextCode, defaultMode: nextDefaultMode, branchCode: nextBranch };
     setLocal(STORAGE_KEYS.DEVICE, saved);
     return saved;
   },
@@ -3392,6 +3479,8 @@ export const posService = {
       buyer_name: String(invoiceData.buyer_name || '').trim(),
       buyer_tax_id: String(invoiceData.buyer_tax_id || '').replace(/\D/g, ''),
       buyer_branch: String(invoiceData.buyer_branch || '00000').padStart(5, '0').slice(-5),
+      // สาขาที่ออกใบกำกับ = สาขาของบิลขาย (ถ้ามี) ไม่งั้นสาขาของเครื่องนี้
+      seller_branch: normalizeBranchCode(invoiceData.order?.branch_code || getDeviceBranchCode()),
       buyer_address: String(invoiceData.buyer_address || '').trim(),
       items: (order.items || []).map((i) => ({
         product_id: i.product_id || null,
@@ -3416,6 +3505,7 @@ export const posService = {
       numberField: 'invoice_number',
       docType: 'taxInvoice',
       localIdPrefix: 'tx',
+      optionalColumns: ['seller_branch'],
       baseRecord,
       existingNumbers: existingInvoices.map((t) => t.invoice_number),
       isSupabaseActive,
@@ -3446,6 +3536,8 @@ export const posService = {
       buyer_name: invoice.buyer_name,
       buyer_tax_id: invoice.buyer_tax_id || '',
       buyer_branch: invoice.buyer_branch || '00000',
+      // ใบลดหนี้/เพิ่มหนี้ออกในนามสาขาเดียวกับใบกำกับต้นฉบับ
+      seller_branch: normalizeBranchCode(invoice.seller_branch || getDeviceBranchCode()),
       buyer_address: invoice.buyer_address || '',
       reason: String(noteData.reason).trim(),
       items: isCredit ? amounts.items || [] : [],
@@ -3464,6 +3556,7 @@ export const posService = {
       numberField: 'note_number',
       docType: isCredit ? 'creditNote' : 'debitNote',
       localIdPrefix: isCredit ? 'cn' : 'dn',
+      optionalColumns: ['seller_branch'],
       baseRecord,
       existingNumbers: existingNotes.map((n) => n.note_number),
       isSupabaseActive,
@@ -3576,7 +3669,8 @@ export const posService = {
       getLocal(STORAGE_KEYS.DEVICE, {}),
       orders,
       new Date(),
-      getDocTemplate('order')
+      getDocTemplate('order'),
+      getDeviceBranchCode()
     );
     setLocal(STORAGE_KEYS.DEVICE, device);
     const orderId = generateUuid();
@@ -3584,6 +3678,8 @@ export const posService = {
     const fullOrder = {
       id: orderId,
       order_number: orderNumber,
+      // สาขาที่ขาย (รหัสสาขาของเครื่องนี้) ใช้กับใบกำกับภาษีอย่างย่อและรายงานภาษีขายแยกสาขา
+      branch_code: getDeviceBranchCode(),
       customer_id: orderPayload.customer?.id || null,
       customer_name: orderPayload.customer?.name || 'ลูกค้าทั่วไป',
       pricing_mode: orderPayload.pricing_mode || 'auto',
@@ -4178,7 +4274,14 @@ export const posService = {
         ? STOCK_IMPORT_STATUS.COMPLETED
         : STOCK_IMPORT_STATUS.PENDING;
     const items = importPayload.items || [];
-    const importNumber = generateImportNumber(nowIso);
+    // เลขที่ใบนำเข้า: เช็คเลขบนฐานข้อมูลก่อน (กันชนกับเครื่องอื่น)
+    const importNumber = await allocateDocNumber('stockImport', {
+      table: 'stock_imports',
+      field: 'import_number',
+      localNumbers: getLocal(STORAGE_KEYS.STOCK_IMPORTS, []).map((imp) => imp.import_number),
+      isSupabaseActive,
+      date: new Date(nowIso),
+    });
 
     let syncedProducts = null;
     if (status === STOCK_IMPORT_STATUS.COMPLETED) {

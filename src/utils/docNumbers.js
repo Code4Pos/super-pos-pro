@@ -4,7 +4,7 @@
  * รูปแบบเป็นข้อความที่มีตัวแปรในวงเล็บปีกกา เช่น "TX{YYYY}{MM}-{SEQ4}" → TX202611-0001
  *   {YYYY} ปี ค.ศ. 4 หลัก   {YY} ปี ค.ศ. 2 หลัก
  *   {BBBB} ปี พ.ศ. 4 หลัก   {BB} ปี พ.ศ. 2 หลัก
- *   {MM} เดือน   {DD} วัน   {DEVICE} รหัสเครื่อง
+ *   {MM} เดือน   {DD} วัน   {DEVICE} รหัสเครื่อง   {BRANCH} รหัสสาขาของเครื่อง (5 หลัก)
  *   {SEQ} เลขรัน (4 หลัก) หรือ {SEQ3} … {SEQ6} กำหนดจำนวนหลัก — ต้องมี 1 ตัวเสมอ
  *
  * เลขรันเริ่มนับใหม่เองเมื่อส่วนหน้า/หลังเลขรันเปลี่ยน ดังนั้น
@@ -34,11 +34,12 @@ export const DOCUMENT_TEMPLATE_TOKENS = [
   { token: '{MM}', label: 'เดือน' },
   { token: '{DD}', label: 'วัน' },
   { token: '{DEVICE}', label: 'รหัสเครื่อง' },
+  { token: '{BRANCH}', label: 'รหัสสาขา (5 หลัก)' },
   { token: '{SEQ4}', label: 'เลขรัน (3-6 หลัก: SEQ3…SEQ6)' },
 ];
 
 const SEQ_PATTERN = /\{SEQ([3-6])?\}/g;
-const ALLOWED_TOKEN = /\{(YYYY|YY|BBBB|BB|MM|DD|DEVICE|SEQ[3-6]?)\}/g;
+const ALLOWED_TOKEN = /\{(YYYY|YY|BBBB|BB|MM|DD|DEVICE|BRANCH|SEQ[3-6]?)\}/g;
 const MAX_TEMPLATE_LENGTH = 40;
 
 /**
@@ -93,9 +94,17 @@ export function describeResetPeriod(template) {
 const pad2 = (n) => String(n).padStart(2, '0');
 
 /**
+ * รหัสสาขา 5 หลักตามแบบกรมสรรพากร (00000 = สำนักงานใหญ่)
+ */
+export function normalizeBranchCode(code) {
+  const digits = String(code ?? '').replace(/\D/g, '').slice(-5);
+  return digits ? digits.padStart(5, '0') : '00000';
+}
+
+/**
  * แยกรูปแบบเป็นส่วนหน้า/ส่วนหลังเลขรัน ณ วันที่และเครื่องที่กำหนด (ใช้วันที่ท้องถิ่น)
  */
-export function resolveDocumentTemplate(template, { date = new Date(), deviceCode = '' } = {}) {
+export function resolveDocumentTemplate(template, { date = new Date(), deviceCode = '', branchCode = '00000' } = {}) {
   const d = new Date(date);
   const ce = d.getFullYear();
   const be = ce + 543;
@@ -108,6 +117,7 @@ export function resolveDocumentTemplate(template, { date = new Date(), deviceCod
     .replace(/\{MM\}/g, pad2(d.getMonth() + 1))
     .replace(/\{DD\}/g, pad2(d.getDate()))
     .replace(/\{DEVICE\}/g, String(deviceCode || '').toUpperCase())
+    .replace(/\{BRANCH\}/g, normalizeBranchCode(branchCode))
     .replace(SEQ_PATTERN, (_, n) => {
       digits = n ? Number(n) : 4;
       return '\u0000';
@@ -135,5 +145,5 @@ export function nextDocumentNumber(template, existingNumbers = [], options = {})
  * ตัวอย่างเลขที่สำหรับแสดงในหน้าตั้งค่า
  */
 export function previewDocumentNumber(template, options = {}) {
-  return nextDocumentNumber(template, [], { deviceCode: 'POS-01', ...options });
+  return nextDocumentNumber(template, [], { deviceCode: 'POS-01', branchCode: '00000', ...options });
 }

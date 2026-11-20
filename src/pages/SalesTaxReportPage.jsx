@@ -2,6 +2,7 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { FileSpreadsheet, Download, AlertTriangle, Loader2 } from 'lucide-react';
 import { usePOS } from '../context/POSContext';
 import { posService } from '../services/posService';
+import { normalizeBranchCode } from '../utils/docNumbers';
 import { buildSalesTaxReport } from '../utils/tax';
 import { formatCurrency, formatNumber } from '../utils/formatters';
 
@@ -35,7 +36,7 @@ export default function SalesTaxReportPage() {
     (async () => {
       try {
         // ใช้เฉพาะคอลัมน์ที่คำนวณภาษีต้องใช้ (ไม่ดึงรายการสินค้า)
-        const res = await fetchOrdersInRange(start, end, 'id, order_number, status, grand_total, tax_amount, created_at');
+        const res = await fetchOrdersInRange(start, end, 'id, order_number, status, grand_total, tax_amount, created_at, branch_code');
         let rows = res.orders;
         // ใบกำกับเต็มรูปของเดือนนี้ที่อ้างอิงบิลเดือนอื่น: โหลดสถานะบิลเพิ่ม (ใช้ตรวจบิลที่ถูกยกเลิก)
         const known = new Set(rows.map((o) => o.order_number));
@@ -65,10 +66,30 @@ export default function SalesTaxReportPage() {
     };
   }, [month, dbMode, fetchOrdersInRange, taxInvoices, showToast]);
 
-  const report = useMemo(
-    () => buildSalesTaxReport(monthOrders, taxInvoices, month, taxNotes),
-    [monthOrders, taxInvoices, month, taxNotes]
-  );
+  // กรองตามสาขาที่ออกเอกสาร (หลายสาขาใช้ฐานข้อมูลเดียวกัน) เอกสารเก่าที่ไม่มีสาขา = สาขาของร้าน
+  const [branchFilter, setBranchFilter] = useState('all');
+  const shopBranch = normalizeBranchCode(printerSettings?.shopBranch);
+  const orderBranch = (o) => normalizeBranchCode(o.branch_code || shopBranch);
+  const docBranch = (d) => normalizeBranchCode(d.seller_branch || shopBranch);
+  const branchOptions = useMemo(() => {
+    const set = new Set([shopBranch]);
+    monthOrders.forEach((o) => set.add(orderBranch(o)));
+    taxInvoices.forEach((t) => set.add(docBranch(t)));
+    taxNotes.forEach((n) => set.add(docBranch(n)));
+    return [...set].sort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [monthOrders, taxInvoices, taxNotes, shopBranch]);
+
+  const report = useMemo(() => {
+    const pick = (rows, getBranch) => (branchFilter === 'all' ? rows : rows.filter((r) => getBranch(r) === branchFilter));
+    return buildSalesTaxReport(
+      pick(monthOrders, orderBranch),
+      pick(taxInvoices, docBranch),
+      month,
+      pick(taxNotes, docBranch)
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [monthOrders, taxInvoices, month, taxNotes, branchFilter, shopBranch]);
 
   // ส่งออก CSV (มี BOM ให้ Excel อ่านภาษาไทยได้)
   const handleExportCsv = () => {
@@ -113,7 +134,7 @@ export default function SalesTaxReportPage() {
     const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
     const a = document.createElement('a');
     a.href = url;
-    a.download = `รายงานภาษีขาย-${month}.csv`;
+    a.download = `รายงานภาษีขาย-${month}${branchFilter !== 'all' ? `-สาขา${branchFilter}` : ''}.csv`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -133,6 +154,21 @@ export default function SalesTaxReportPage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
+          {branchOptions.length > 1 && (
+            <select
+              value={branchFilter}
+              onChange={(e) => setBranchFilter(e.target.value)}
+              className="px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-bold"
+              title="สาขาที่ออกเอกสาร"
+            >
+              <option value="all">ทุกสาขา</option>
+              {branchOptions.map((b) => (
+                <option key={b} value={b}>
+                  {b === '00000' ? 'สำนักงานใหญ่ (00000)' : `สาขา ${b}`}
+                </option>
+              ))}
+            </select>
+          )}
           <input
             type="month"
             value={month}

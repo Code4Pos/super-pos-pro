@@ -502,7 +502,7 @@ BEGIN
 END;
 $$;
 
--- create_order: ย้ายไปไว้ท้ายไฟล์ (Migration beta 0.3.20 — ปิดใบสั่งขายในบิลเดียวกัน)
+-- create_order: ย้ายไปไว้ท้ายไฟล์ (Migration beta 0.3.23 — ปิดใบสั่งขายในบิลเดียวกัน + บันทึกสาขาที่ขาย)
 
 CREATE OR REPLACE FUNCTION void_order(
   p_order_id UUID DEFAULT NULL,
@@ -835,9 +835,20 @@ $$;
 
 -- =====================================================================
 -- Migration beta 0.3.20 (ส่วนที่ 2): create_order ปิดใบสั่งขายในบิลเดียวกัน
--- รันทั้งฟังก์ชันด้านล่าง (ลายเซ็นเดิม สิทธิ์ที่ตั้งไว้ใน lockdown-rls.sql ยังอยู่)
--- p_order.sales_order = { id, fulfilled_by_name } เมื่อบิลนี้เปิดมาจากใบสั่งขาย
+-- ฟังก์ชันล่าสุดย้ายไปอยู่ใน Migration beta 0.3.23 ด้านล่าง (เพิ่มสาขาที่ขาย)
 -- =====================================================================
+
+
+-- =====================================================================
+-- Migration beta 0.3.23: หลายสาขาใช้ฐานข้อมูลเดียวกัน
+-- บันทึกรหัสสาขาที่ออกบิล / ใบกำกับภาษี / ใบลดหนี้-เพิ่มหนี้ (รหัสสาขาตั้งต่อเครื่องในแอป)
+-- รันทั้งส่วนนี้ (รวม create_order เวอร์ชันล่าสุด ที่ปิดใบสั่งขายในบิลเดียวกันด้วย)
+-- =====================================================================
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS branch_code VARCHAR(5);
+ALTER TABLE tax_invoices ADD COLUMN IF NOT EXISTS seller_branch VARCHAR(5);
+ALTER TABLE tax_notes ADD COLUMN IF NOT EXISTS seller_branch VARCHAR(5);
+CREATE INDEX IF NOT EXISTS idx_orders_branch_created ON orders (branch_code, created_at);
+
 CREATE OR REPLACE FUNCTION create_order(
   p_order JSONB,
   p_deductions JSONB DEFAULT '[]'::jsonb,
@@ -871,7 +882,7 @@ BEGIN
   INSERT INTO orders (
     id, order_number, customer_id, customer_name, pricing_mode, subtotal, wholesale_savings, bill_discount,
     tax_amount, grand_total, total_cost, payment_method, payments, cash_received, change_amount, status,
-    note, items, credit_due_date, created_by_name, created_at
+    note, items, credit_due_date, created_by_name, created_at, branch_code
   ) VALUES (
     v_id, v_number, v_customer, COALESCE(p_order->>'customer_name', 'ลูกค้าทั่วไป'),
     COALESCE(p_order->>'pricing_mode', 'auto'),
@@ -882,7 +893,8 @@ BEGIN
     COALESCE((p_order->>'cash_received')::numeric, 0), COALESCE((p_order->>'change_amount')::numeric, 0),
     'completed', p_order->>'note', COALESCE(p_order->'items', '[]'::jsonb),
     NULLIF(p_order->>'credit_due_date', '')::timestamptz, p_order->>'created_by_name',
-    COALESCE((p_order->>'created_at')::timestamptz, NOW())
+    COALESCE((p_order->>'created_at')::timestamptz, NOW()),
+    NULLIF(p_order->>'branch_code', '')
   )
   ON CONFLICT (id) DO NOTHING
   RETURNING id INTO v_inserted;

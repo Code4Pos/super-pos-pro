@@ -48,6 +48,7 @@ export default function DocumentNumberingSettings() {
   useEffect(() => setDraft(buildDraft()), [saved]);
 
   const deviceCode = posService.getDeviceSettings?.()?.code || 'POS-01';
+  const branchCode = posService.getDeviceBranchCode?.() || '00000';
   const errors = Object.fromEntries(DOCUMENT_TYPES.map((t) => [t.id, validateDocumentTemplate(draft[t.id], t.id)]));
   const hasError = Object.values(errors).some(Boolean);
   const isDirty = JSON.stringify(normalizeDocumentNumbering(draft)) !== JSON.stringify(saved);
@@ -159,7 +160,7 @@ export default function DocumentNumberingSettings() {
                   <span className="font-bold text-rose-600">{error}</span>
                 ) : (
                   <span className="text-slate-500">
-                    ตัวอย่าง: <span className="font-mono font-bold text-slate-800">{previewDocumentNumber(template, { deviceCode })}</span>
+                    ตัวอย่าง: <span className="font-mono font-bold text-slate-800">{previewDocumentNumber(template, { deviceCode, branchCode })}</span>
                     {' • '}
                     {describeResetPeriod(template)}
                   </span>
@@ -171,7 +172,7 @@ export default function DocumentNumberingSettings() {
       </div>
 
       <p className="text-[11px] text-slate-500 leading-relaxed">
-        บิลขายต้องมี {'{DEVICE}'} เพื่อให้เลขไม่ชนกันระหว่างเครื่องแม้ขายตอนออฟไลน์ / ใบกำกับภาษี ใบลดหนี้ ใบเพิ่มหนี้
+        บิลขายต้องมี {'{DEVICE}'} เพื่อให้เลขไม่ชนกันระหว่างเครื่องแม้ขายตอนออฟไลน์ / หลายสาขาใส่ {'{BRANCH}'} (รหัสสาขาของเครื่อง ตั้งในการ์ด "เครื่องนี้") เพื่อให้ใบกำกับภาษีนับเลขแยกตามสาขา / ใบกำกับภาษี ใบลดหนี้ ใบเพิ่มหนี้
         ใบรับชำระ และใบวางบิล ระบบตรวจเลขซ้ำกับฐานข้อมูลก่อนออกเลข / เปลี่ยนรูปแบบกลางรอบ เลขรันจะเริ่มที่ 1 ของรูปแบบใหม่
       </p>
     </SettingsCard>

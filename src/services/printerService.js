@@ -330,7 +330,8 @@ function renderSlipToCanvas(order, settings, mode = 'receipt') {
     // ร้านจดทะเบียน VAT: ใบเสร็จนี้เป็นใบกำกับภาษีอย่างย่อ ต้องแสดงเลขผู้เสียภาษีของร้าน
     if (settings.vatRegistered) {
       drawCentered(
-        `เลขประจำตัวผู้เสียภาษี ${settings.shopTaxId} (${formatBranch(settings.shopBranch)})`,
+        // สาขาที่ออกบิล (หลายสาขาใช้ฐานข้อมูลเดียวกัน) ไม่มี = สาขาของร้าน
+        `เลขประจำตัวผู้เสียภาษี ${settings.shopTaxId} (${formatBranch(order.branch_code || settings.shopBranch)})`,
         `${smallFontSize - 2}px Prompt, sans-serif`
       );
       drawCentered('ใบเสร็จรับเงิน/ใบกำกับภาษีอย่างย่อ', `bold ${smallFontSize}px Prompt, sans-serif`);
@@ -586,7 +587,7 @@ function buildThermalReceiptHtml(order, settings, paperSize) {
     <div style="font-size:${px(is58 ? 14 : 16)};font-weight:700;">${escapeHtml(settings.shopName)}</div>
     ${settings.receiptHeaderText ? `<div style="font-size:${px(10.5)};">${escapeHtml(settings.receiptHeaderText)}</div>` : ''}
     ${settings.receiptShowPhone !== false && settings.shopPhone ? `<div style="font-size:${px(10.5)};">โทร. ${escapeHtml(settings.shopPhone)}</div>` : ''}
-    ${settings.vatRegistered ? `<div style="font-size:10px;">เลขประจำตัวผู้เสียภาษี ${escapeHtml(settings.shopTaxId)} (${formatBranch(settings.shopBranch)})</div><div style="font-size:11px;font-weight:700;">ใบเสร็จรับเงิน/ใบกำกับภาษีอย่างย่อ</div>` : ''}
+    ${settings.vatRegistered ? `<div style="font-size:10px;">เลขประจำตัวผู้เสียภาษี ${escapeHtml(settings.shopTaxId)} (${formatBranch(order.branch_code || settings.shopBranch)})</div><div style="font-size:11px;font-weight:700;">ใบเสร็จรับเงิน/ใบกำกับภาษีอย่างย่อ</div>` : ''}
   </div>
   <div class="divider"></div>
   <div class="row"><span>เลขที่:</span><strong>${order.order_number}</strong></div>
@@ -1176,7 +1177,7 @@ function buildTaxInvoiceHtml(invoice, settings, copyLabel) {
       <div style="font-size:18px;font-weight:700;">${escapeHtml(settings.shopName)}</div>
       <div>${escapeHtml(settings.shopAddress)}</div>
       <div>โทร. ${escapeHtml(settings.shopPhone)}</div>
-      <div><strong>เลขประจำตัวผู้เสียภาษี:</strong> ${escapeHtml(settings.shopTaxId)} (${formatBranch(settings.shopBranch)})</div>
+      <div><strong>เลขประจำตัวผู้เสียภาษี:</strong> ${escapeHtml(settings.shopTaxId)} (${formatBranch(invoice.seller_branch || settings.shopBranch)})</div>
     </div>
     <div style="text-align:right;">
       <div class="title">ใบกำกับภาษี / ใบเสร็จรับเงิน</div>
@@ -1279,7 +1280,7 @@ function buildTaxNoteHtml(note, settings, copyLabel) {
       <div style="font-size:18px;font-weight:700;">${escapeHtml(settings.shopName)}</div>
       <div>${escapeHtml(settings.shopAddress)}</div>
       <div>โทร. ${escapeHtml(settings.shopPhone)}</div>
-      <div><strong>เลขประจำตัวผู้เสียภาษี:</strong> ${escapeHtml(settings.shopTaxId)} (${formatBranch(settings.shopBranch)})</div>
+      <div><strong>เลขประจำตัวผู้เสียภาษี:</strong> ${escapeHtml(settings.shopTaxId)} (${formatBranch(note.seller_branch || settings.shopBranch)})</div>
     </div>
     <div style="text-align:right;">
       <div class="title">${isCredit ? 'ใบลดหนี้' : 'ใบเพิ่มหนี้'}</div>
