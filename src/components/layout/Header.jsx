@@ -16,12 +16,13 @@ import {
   WifiOff,
   ClipboardList,
   CloudUpload,
+  ServerCrash,
 } from 'lucide-react';
 import { usePOS } from '../../context/POSContext';
 import { AppUpdateHeaderButton } from '../common/AppUpdate';
 import PosQuickMenu from '../pos/PosQuickMenu';
 import { formatCurrency } from '../../utils/formatters';
-import { countLowStock } from '../../utils/stockAlerts';
+import { countLowStock, getNegativeStockProducts } from '../../utils/stockAlerts';
 import { ROLES, canAccessAnyAdminTab } from '../../utils/rbac';
 
 const ACTIVE_TAB_STORAGE_KEY = 'siampos_active_tab_v1';
@@ -40,6 +41,8 @@ export default function Header({
     dbMode,
     isOffline,
     pendingSyncCount,
+    failedSyncCount,
+    retryFailedSyncs,
     syncing,
     syncNow,
     activeSalesOrder,
@@ -124,6 +127,8 @@ export default function Header({
   // นับสินค้าใกล้หมดตามจุดเตือนของร้าน (ปิดป้ายได้ที่ ตั้งค่า › การแจ้งเตือน & ค่าเริ่มต้น)
   const lowStockCount =
     printerSettings?.showLowStockBadge === false ? 0 : countLowStock(products, printerSettings?.defaultMinStock);
+  // สินค้าหลักที่สต็อกติดลบ (แสดงเสมอ เพราะตัวเลขสต็อกผิดจากของจริง)
+  const negativeStockCount = getNegativeStockProducts(products).length;
 
   return (
     <header className="h-13 sm:h-14 bg-white border-b border-slate-200 px-2.5 sm:px-4 flex items-center justify-between gap-2 shrink-0 z-20 select-none">
@@ -309,8 +314,36 @@ export default function Header({
           </button>
         )}
 
+        {/* รายการที่ส่งขึ้นฐานข้อมูลไม่สำเร็จ (ไม่ใช่เพราะเน็ต) กดเพื่อส่งใหม่ */}
+        {failedSyncCount > 0 && (
+          <button
+            type="button"
+            onClick={() => retryFailedSyncs()}
+            disabled={syncing}
+            className="flex items-center gap-1 px-2 sm:px-2.5 h-8 sm:h-9 rounded-xl border border-rose-300 bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold disabled:opacity-60"
+            title="มีรายการที่ส่งขึ้นฐานข้อมูลไม่สำเร็จ เก็บไว้ในเครื่องนี้ กดเพื่อส่งใหม่"
+          >
+            <ServerCrash className="w-3.5 h-3.5 shrink-0" />
+            <span className="hidden sm:inline">ส่งไม่สำเร็จ</span>
+            <span className="px-1.5 bg-white/20 rounded font-bold">{failedSyncCount}</span>
+          </button>
+        )}
+
         {/* อัปเดตแอป Android พร้อมใช้ (OTA) หรือมี APK ใหม่ แสดงเฉพาะในแอป */}
         <AppUpdateHeaderButton onError={(message) => showToast(message, 'warning')} />
+
+        {negativeStockCount > 0 && canTab('inventory') && !isPosPage && (
+          <button
+            type="button"
+            onClick={() => navigateToAdminTab('inventory')}
+            className="flex items-center gap-1 px-2 sm:px-2.5 h-8 sm:h-9 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-xs font-semibold"
+            title="สินค้าสต็อกติดลบ (ขายเกินสต็อกในระบบ) ควรตรวจนับหรือรับสินค้าเข้า"
+          >
+            <AlertTriangle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+            <span className="hidden xl:inline">ติดลบ</span>
+            <span className="px-1 bg-rose-200/80 text-rose-900 rounded font-bold text-[11px]">{negativeStockCount}</span>
+          </button>
+        )}
 
         {lowStockCount > 0 && canTab('inventory') && (
           <button

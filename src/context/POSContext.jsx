@@ -14,7 +14,7 @@ import {
 
 const SESSION_STORAGE_KEY = 'siampos_session_v1';
 
-export const APP_VERSION = 'version beta 0.3.19';
+export const APP_VERSION = 'version beta 0.3.20';
 const HELD_BILLS_STORAGE_KEY = 'siampos_held_bills_v1';
 
 const POSContext = createContext(null);
@@ -31,6 +31,8 @@ export function POSProvider({ children, scope = 'all' }) {
   // โหมดออฟไลน์: เน็ตหลุด หรือเปิดแอปด้วยแคชเพราะเชื่อม Supabase ไม่ได้
   const [isOffline, setIsOffline] = useState(() => typeof navigator !== 'undefined' && navigator.onLine === false);
   const [pendingSyncCount, setPendingSyncCount] = useState(() => posService.getOfflineQueue().length);
+  // รายการที่ส่งขึ้นฐานข้อมูลไม่สำเร็จ (ไม่ใช่เพราะเน็ต) เก็บไว้ในเครื่อง ให้กดส่งใหม่ได้
+  const [failedSyncCount, setFailedSyncCount] = useState(() => posService.getFailedSyncs().length);
   const [syncing, setSyncing] = useState(false);
 
   const [categories, setCategories] = useState([]);
@@ -183,6 +185,7 @@ export function POSProvider({ children, scope = 'all' }) {
       setDbMode(data.mode);
       setIsOffline(Boolean(data.offline) || (typeof navigator !== 'undefined' && navigator.onLine === false));
       setPendingSyncCount(posService.getOfflineQueue().length);
+      setFailedSyncCount(posService.getFailedSyncs().length);
       setCategories(data.categories);
       setUnits(data.units || []);
       setProducts(data.products);
@@ -742,6 +745,10 @@ export function POSProvider({ children, scope = 'all' }) {
       }
 
       const orderPayload = {
+        // ใบสั่งขายที่เปิดเข้าตะกร้า: ส่งไปปิดพร้อมบิลบนฐานข้อมูล
+        sales_order: activeSalesOrderRef.current
+          ? { id: activeSalesOrderRef.current.id, fulfilled_by_name: currentUser?.name || '' }
+          : null,
         credit_due_date: creditDueDate,
         created_by_name: currentUser?.name || '',
         customer: selectedCustomer,
@@ -770,6 +777,7 @@ export function POSProvider({ children, scope = 'all' }) {
       );
       // บิลที่บันทึกตอนออฟไลน์จะเข้าคิวรอซิงค์
       setPendingSyncCount(posService.getOfflineQueue().length);
+      setFailedSyncCount(posService.getFailedSyncs().length);
       const enrichedSavedOrder = {
         ...savedOrder,
         vat_mode: vatMode,
@@ -796,7 +804,8 @@ export function POSProvider({ children, scope = 'all' }) {
         );
       }
 
-      // ปิดใบสั่งขายที่เปิดเข้าตะกร้า (ยอดจองหายไป เพราะสต็อกถูกตัดจากบิลนี้แล้ว)
+      // ปิดใบสั่งขายในเครื่อง (ฐานข้อมูลปิดไปแล้วพร้อมบิลใน create_order ส่วนนี้อัปเดตในเครื่อง
+      // และเป็นทางสำรองเมื่อฐานข้อมูลยังไม่ได้รัน Migration beta 0.3.20)
       const linkedSalesOrder = activeSalesOrderRef.current;
       if (linkedSalesOrder) {
         try {
@@ -1706,6 +1715,7 @@ export function POSProvider({ children, scope = 'all' }) {
       }
       // ยกเลิกบิลตอนออฟไลน์ (หรือบิลยังรอซิงค์) จะเข้าคิว
       setPendingSyncCount(posService.getOfflineQueue().length);
+      setFailedSyncCount(posService.getFailedSyncs().length);
       showToast(`ยกเลิกบิล ${order.order_number} และคืนสต็อกสินค้าแล้ว`, 'warning');
       return updatedOrder;
     },
@@ -1720,6 +1730,7 @@ export function POSProvider({ children, scope = 'all' }) {
       try {
         const result = await posService.flushOfflineQueue();
         setPendingSyncCount(result.remaining);
+        setFailedSyncCount(posService.getFailedSyncs().length);
         if (result.synced > 0 || result.failed > 0 || dbMode !== 'supabase' || isOffline) {
           await refreshData();
         }
@@ -1740,6 +1751,29 @@ export function POSProvider({ children, scope = 'all' }) {
     },
     [syncing, dbMode, isOffline, refreshData, showToast]
   );
+
+  // ส่งรายการที่ซิงค์ไม่สำเร็จอีกครั้ง (เช่น หลังแก้ฐานข้อมูลแล้ว)
+  const retryFailedSyncs = useCallback(async () => {
+    if (syncing) return;
+    setSyncing(true);
+    try {
+      const result = await posService.retryFailedSyncs();
+      setPendingSyncCount(result.remaining);
+      const stillFailed = posService.getFailedSyncs().length;
+      setFailedSyncCount(stillFailed);
+      await refreshData();
+      if (stillFailed > 0) {
+        const lastError = posService.getFailedSyncs().slice(-1)[0]?.error || '';
+        showToast(`ยังส่งไม่สำเร็จ ${stillFailed} รายการ: ${lastError}`, 'error');
+      } else if (result.remaining > 0) {
+        showToast(`ยังเชื่อมต่อไม่ได้ ค้างซิงค์ ${result.remaining} รายการ`, 'warning');
+      } else {
+        showToast(`ส่งรายการที่ค้างขึ้นระบบแล้ว ${result.synced} รายการ`, 'success');
+      }
+    } finally {
+      setSyncing(false);
+    }
+  }, [syncing, refreshData, showToast]);
 
   // ติดตามสถานะเน็ต: กลับมาออนไลน์ให้ซิงค์อัตโนมัติ
   const syncNowRef = useRef(syncNow);
@@ -1956,6 +1990,8 @@ export function POSProvider({ children, scope = 'all' }) {
     appVersion: APP_VERSION,
     isOffline,
     pendingSyncCount,
+    failedSyncCount,
+    retryFailedSyncs,
     syncing,
     syncNow,
     users,

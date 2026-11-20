@@ -25,7 +25,7 @@ import {
   Check,
 } from 'lucide-react';
 import { usePOS } from '../context/POSContext';
-import { getMinStock } from '../utils/stockAlerts';
+import { getMinStock, getNegativeStockProducts } from '../utils/stockAlerts';
 import ProductModal from '../components/inventory/ProductModal';
 import StockModal from '../components/inventory/StockModal';
 import CategoryUnitModal from '../components/inventory/CategoryUnitModal';
@@ -230,7 +230,9 @@ export default function InventoryPage() {
 
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('all');
-  const [stockFilter, setStockFilter] = useState('all'); // 'all' | 'low' | 'out'
+  const [stockFilter, setStockFilter] = useState('all'); // 'all' | 'low' | 'out' | 'negative'
+  // สินค้าหลักที่สต็อกติดลบ (ขายเกินสต็อก)
+  const negativeStockCount = useMemo(() => getNegativeStockProducts(products).length, [products]);
   const [isTrashModalOpen, setIsTrashModalOpen] = useState(false);
 
   // ระบบแบ่งหน้าตาราง (Pagination) และขนาดหน้า (10, 20, 50, 100)
@@ -344,6 +346,7 @@ export default function InventoryPage() {
       const minStock = getMinStock(p, defaultMinStock);
       if (stockFilter === 'low' && (stock > minStock || stock <= 0)) return false;
       if (stockFilter === 'out' && stock > 0) return false;
+      if (stockFilter === 'negative' && (stock >= 0 || p.linked_product_id)) return false;
 
       if (!q) return true;
       const matchMultiUnit =
@@ -673,6 +676,9 @@ export default function InventoryPage() {
               { id: 'all', label: 'สินค้าทั้งหมด' },
               { id: 'low', label: 'ใกล้หมดสต็อก' },
               { id: 'out', label: 'สินค้าหมด' },
+              ...(negativeStockCount > 0 || stockFilter === 'negative'
+                ? [{ id: 'negative', label: `สต็อกติดลบ (${negativeStockCount})`, danger: true }]
+                : []),
             ].map((st) => (
               <button
                 key={st.id}
@@ -680,7 +686,9 @@ export default function InventoryPage() {
                 onClick={() => setStockFilter(st.id)}
                 className={`px-3 py-1 rounded-lg text-xs font-semibold transition-colors ${
                   stockFilter === st.id
-                    ? 'bg-white text-slate-900 shadow-2xs'
+                    ? `bg-white shadow-2xs ${st.danger ? 'text-rose-700' : 'text-slate-900'}`
+                    : st.danger
+                    ? 'text-rose-600 hover:text-rose-800'
                     : 'text-slate-600 hover:text-slate-900'
                 }`}
               >

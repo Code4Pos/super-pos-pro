@@ -21,3 +21,12 @@ export function isLowStock(product, defaultMinStock = 10) {
 export function countLowStock(products = [], defaultMinStock = 10) {
   return products.reduce((count, p) => count + (isLowStock(p, defaultMinStock) ? 1 : 0), 0);
 }
+
+/**
+ * สินค้าหลักที่สต็อกติดลบ (ขายเกินสต็อก ต้องตรวจนับหรือรับสินค้าเข้า) — ไม่นับสินค้ารองที่ตัดสต็อกจากสินค้าหลัก
+ */
+export function getNegativeStockProducts(products = []) {
+  return products
+    .filter((p) => !p.linked_product_id && (Number(p.stock) || 0) < 0)
+    .sort((a, b) => (Number(a.stock) || 0) - (Number(b.stock) || 0));
+}

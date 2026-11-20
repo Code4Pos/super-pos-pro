@@ -1008,6 +1008,24 @@ function recordFailedSync(item, message) {
   ]);
 }
 
+/**
+ * ย้ายรายการที่ซิงค์ไม่สำเร็จกลับเข้าคิวเพื่อส่งใหม่ (บิลส่งซ้ำได้ เพราะฐานข้อมูลเช็ค id ไม่บันทึกซ้ำ)
+ * match(item) = เลือกเฉพาะบางรายการ (ไม่ระบุ = ทั้งหมด) คืนจำนวนที่ย้าย
+ */
+function requeueFailedSyncs(match = null) {
+  const failed = getLocal(STORAGE_KEYS.OFFLINE_FAILED, []);
+  const moving = failed.filter((item) => !match || match(item));
+  if (moving.length === 0) return 0;
+  const staying = failed.filter((item) => !moving.includes(item));
+  const cleaned = moving.map(({ error, failed_at, ...item }) => item);
+  setLocal(STORAGE_KEYS.OFFLINE_QUEUE, [...cleaned, ...getLocal(STORAGE_KEYS.OFFLINE_QUEUE, [])]);
+  setLocal(STORAGE_KEYS.OFFLINE_FAILED, staying);
+  return moving.length;
+}
+
+// บิลที่ล้มเหลวเพราะบั๊ก siampos_apply_lot_deltas (beta 0.3.7) — ส่งใหม่อัตโนมัติหลังรัน Migration beta 0.3.20
+const isLotDeltaBugFailure = (item) => /is ambiguous/i.test(String(item?.error || ''));
+
 // ปรับสต็อกในเครื่องให้ตรงกับยอดล่าสุดที่ฐานข้อมูลคืนมา ({ [productId]: stock })
 function applyRemoteBalances(products, balances) {
   if (!balances || typeof balances !== 'object' || Object.keys(balances).length === 0) return products;
@@ -1398,6 +1416,7 @@ export const posService = {
       try {
         // ร้านถูกรีเซ็ตจากเครื่องอื่น = ล้างแคชและคิวของเครื่องนี้ก่อนส่งคิวขึ้นฐานข้อมูล
         await syncShopResetMarker();
+        requeueFailedSyncs(isLotDeltaBugFailure);
         await this.flushOfflineQueue();
         const [catRes, prodRes, cusRes, ordRes] = await Promise.all([
           supabase.from('categories').select('*').order('created_at', { ascending: true }),
@@ -1778,6 +1797,7 @@ export const posService = {
         // ซิงค์บิลที่ค้างจากตอนออฟไลน์ก่อน เพื่อให้ข้อมูลที่โหลดมาเป็นยอดล่าสุด
         // ร้านถูกรีเซ็ตจากเครื่องอื่น = ล้างแคชและคิวของเครื่องนี้ก่อนส่งคิวขึ้นฐานข้อมูล
         await syncShopResetMarker();
+        requeueFailedSyncs(isLotDeltaBugFailure);
         await this.flushOfflineQueue();
         const [catRes, prodRes, cusRes, ordRes] = await Promise.all([
           supabase.from('categories').select('*').order('created_at', { ascending: true }),
@@ -2713,6 +2733,22 @@ export const posService = {
   },
 
   /**
+   * รายการที่ส่งขึ้นฐานข้อมูลไม่สำเร็จเพราะข้อมูลหรือฐานข้อมูลผิดพลาด (ไม่ใช่เน็ต) เก็บไว้ในเครื่อง
+   */
+  getFailedSyncs() {
+    return getLocal(STORAGE_KEYS.OFFLINE_FAILED, []);
+  },
+
+  /**
+   * ย้ายรายการที่ส่งไม่สำเร็จทั้งหมดกลับเข้าคิว แล้วลองส่งใหม่
+   */
+  async retryFailedSyncs() {
+    const moved = requeueFailedSyncs();
+    const result = await this.flushOfflineQueue();
+    return { moved, ...result };
+  },
+
+  /**
    * ค่าตั้งของเครื่องนี้ (เก็บเฉพาะในเครื่อง ไม่ซิงค์):
    * - code: รหัสเครื่องที่ใช้ขึ้นต้นเลขที่บิล (ถ้ายังไม่เคยตั้ง จะสุ่มรหัสให้ เช่น POS-K7Q)
    * - defaultMode: โหมดเริ่มต้นเมื่อเปิดแอปในเครื่องนี้ ('ask' = ถามทุกครั้ง, 'pos' = หน้าร้านทันที, 'admin' = หลังร้านทันที)
@@ -3610,6 +3646,8 @@ export const posService = {
         p_order: {
           ...fullOrder,
           customer_id: isUuid(fullOrder.customer_id) ? fullOrder.customer_id : null,
+          // บิลที่เปิดจากใบสั่งขาย: ฐานข้อมูลปิดใบสั่งขายใน transaction เดียวกับบิล (Migration beta 0.3.20)
+          ...(orderPayload.sales_order?.id ? { sales_order: orderPayload.sales_order } : {}),
         },
         p_deductions: [...deductionByProductId.entries()]
           .filter(([targetId]) => isRemoteProductId(targetId))

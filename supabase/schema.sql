@@ -484,51 +484,7 @@ ON CONFLICT (code) DO NOTHING;
 -- - p_lots: [{ row: {...product_lots}, delta }] บวก/ลบยอดคงเหลือของล็อตบนฐานข้อมูล (ไม่เขียนทับยอดของเครื่องอื่น)
 -- =================================================================================
 
-CREATE OR REPLACE FUNCTION siampos_apply_lot_deltas(p_lots JSONB)
-RETURNS VOID LANGUAGE plpgsql AS $$
-DECLARE
-  l JSONB;
-  r JSONB;
-BEGIN
-  FOR l IN SELECT * FROM jsonb_array_elements(COALESCE(p_lots, '[]'::jsonb)) LOOP
-    r := l->'row';
-    UPDATE product_lots
-      SET remaining_qty = remaining_qty + COALESCE((l->>'delta')::numeric, 0),
-          lot_number = COALESCE(r->>'lot_number', lot_number),
-          expiry_date = COALESCE(NULLIF(r->>'expiry_date', '')::date, expiry_date),
-          updated_at = NOW()
-      WHERE id = r->>'id';
-    IF NOT FOUND THEN
-      INSERT INTO product_lots (id, product_id, product_name, lot_number, expiry_date, received_qty, remaining_qty, cost_price, received_at, reference_doc, updated_at)
-      VALUES (
-        r->>'id', r->>'product_id', r->>'product_name', COALESCE(r->>'lot_number', '-'),
-        NULLIF(r->>'expiry_date', '')::date,
-        COALESCE((r->>'received_qty')::numeric, 0), COALESCE((r->>'remaining_qty')::numeric, 0),
-        COALESCE((r->>'cost_price')::numeric, 0), COALESCE((r->>'received_at')::timestamptz, NOW()),
-        r->>'reference_doc', NOW()
-      )
-      ON CONFLICT (id) DO NOTHING;
-    END IF;
-  END LOOP;
-
-  -- beta 0.3.7: บันทึกประวัติการตัดล็อตลง lot_consumptions เพื่อให้ยกเลิกบิลข้ามเครื่องแล้วคืนเข้าล็อตเดิมได้
-  INSERT INTO lot_consumptions (id, reference_doc, product_id, consumed, created_at, updated_at)
-  SELECT
-    (COALESCE(NULLIF(l->>'reference_doc', ''), l->'row'->>'reference_doc')) || ':' || (l->'row'->>'product_id'),
-    COALESCE(NULLIF(l->>'reference_doc', ''), l->'row'->>'reference_doc'),
-    l->'row'->>'product_id',
-    jsonb_agg(jsonb_build_object('lot_id', l->'row'->>'id', 'qty', -((l->>'delta')::numeric))),
-    NOW(),
-    NOW()
-  FROM jsonb_array_elements(COALESCE(p_lots, '[]'::jsonb)) l
-  WHERE COALESCE((l->>'delta')::numeric, 0) < 0
-    AND COALESCE(NULLIF(l->>'reference_doc', ''), NULLIF(l->'row'->>'reference_doc', '')) IS NOT NULL
-  GROUP BY COALESCE(NULLIF(l->>'reference_doc', ''), l->'row'->>'reference_doc'), l->'row'->>'product_id'
-  ON CONFLICT (id) DO UPDATE
-    SET consumed = EXCLUDED.consumed,
-        updated_at = NOW();
-END;
-$$;
+-- siampos_apply_lot_deltas: ย้ายไปไว้ท้ายไฟล์ (Migration beta 0.3.20 — แก้ชื่อตัวแปรชนกับ alias)
 
 -- บันทึก Ledger โดยใช้ยอดคงเหลือจริงหลังตัด/คืนสต็อกบนฐานข้อมูล (p_balances: { product_id: stock })
 CREATE OR REPLACE FUNCTION siampos_insert_ledger(p_ledger JSONB, p_balances JSONB, p_reference TEXT)
@@ -546,83 +502,7 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION create_order(
-  p_order JSONB,
-  p_deductions JSONB DEFAULT '[]'::jsonb,
-  p_ledger JSONB DEFAULT '[]'::jsonb,
-  p_lots JSONB DEFAULT '[]'::jsonb
-)
-RETURNS JSONB LANGUAGE plpgsql AS $$
-DECLARE
-  v_id UUID := (p_order->>'id')::uuid;
-  v_number TEXT := p_order->>'order_number';
-  v_customer UUID;
-  v_inserted UUID;
-  v_existing TEXT;
-  v_stock NUMERIC;
-  v_balances JSONB := '{}'::jsonb;
-  d JSONB;
-BEGIN
-  -- ส่งซ้ำ (ซิงค์คิวซ้ำ): ไม่ทำอะไรเพิ่ม
-  SELECT order_number INTO v_existing FROM orders WHERE id = v_id;
-  IF FOUND THEN
-    RETURN jsonb_build_object('status', 'duplicate', 'order_number', v_existing);
-  END IF;
-
-  -- เลขที่บิลชนกับบิลอื่น (เช่น ล้างข้อมูลเครื่องแล้วเลขรันเริ่มใหม่): ต่อท้ายด้วยส่วนหนึ่งของ id
-  IF EXISTS (SELECT 1 FROM orders WHERE order_number = v_number) THEN
-    v_number := v_number || '-' || UPPER(SUBSTR(REPLACE(v_id::text, '-', ''), 1, 4));
-  END IF;
-
-  SELECT id INTO v_customer FROM customers WHERE id::text = p_order->>'customer_id';
-
-  INSERT INTO orders (
-    id, order_number, customer_id, customer_name, pricing_mode, subtotal, wholesale_savings, bill_discount,
-    tax_amount, grand_total, total_cost, payment_method, payments, cash_received, change_amount, status,
-    note, items, credit_due_date, created_by_name, created_at
-  ) VALUES (
-    v_id, v_number, v_customer, COALESCE(p_order->>'customer_name', 'ลูกค้าทั่วไป'),
-    COALESCE(p_order->>'pricing_mode', 'auto'),
-    COALESCE((p_order->>'subtotal')::numeric, 0), COALESCE((p_order->>'wholesale_savings')::numeric, 0),
-    COALESCE((p_order->>'bill_discount')::numeric, 0), COALESCE((p_order->>'tax_amount')::numeric, 0),
-    COALESCE((p_order->>'grand_total')::numeric, 0), COALESCE((p_order->>'total_cost')::numeric, 0),
-    COALESCE(p_order->>'payment_method', 'cash'), COALESCE(p_order->'payments', '[]'::jsonb),
-    COALESCE((p_order->>'cash_received')::numeric, 0), COALESCE((p_order->>'change_amount')::numeric, 0),
-    'completed', p_order->>'note', COALESCE(p_order->'items', '[]'::jsonb),
-    NULLIF(p_order->>'credit_due_date', '')::timestamptz, p_order->>'created_by_name',
-    COALESCE((p_order->>'created_at')::timestamptz, NOW())
-  )
-  ON CONFLICT (id) DO NOTHING
-  RETURNING id INTO v_inserted;
-
-  IF v_inserted IS NULL THEN
-    RETURN jsonb_build_object('status', 'duplicate', 'order_number', v_number);
-  END IF;
-
-  -- ตัดสต็อกจากยอดบนฐานข้อมูล (ไม่ใช้ยอดที่แคชในเครื่อง) ยอมให้ติดลบ
-  FOR d IN SELECT * FROM jsonb_array_elements(COALESCE(p_deductions, '[]'::jsonb)) LOOP
-    UPDATE products
-      SET stock = stock - COALESCE((d->>'qty')::numeric, 0), updated_at = NOW()
-      WHERE id::text = d->>'product_id'
-      RETURNING stock INTO v_stock;
-    IF FOUND THEN
-      v_balances := v_balances || jsonb_build_object(d->>'product_id', v_stock);
-    END IF;
-  END LOOP;
-
-  PERFORM siampos_insert_ledger(p_ledger, v_balances, v_number);
-  PERFORM siampos_apply_lot_deltas(p_lots);
-  IF v_number <> (p_order->>'order_number') THEN
-    UPDATE lot_consumptions
-      SET id = v_number || ':' || product_id,
-          reference_doc = v_number,
-          updated_at = NOW()
-      WHERE reference_doc = (p_order->>'order_number');
-  END IF;
-
-  RETURN jsonb_build_object('status', 'created', 'order_number', v_number, 'balances', v_balances);
-END;
-$$;
+-- create_order: ย้ายไปไว้ท้ายไฟล์ (Migration beta 0.3.20 — ปิดใบสั่งขายในบิลเดียวกัน)
 
 CREATE OR REPLACE FUNCTION void_order(
   p_order_id UUID DEFAULT NULL,
@@ -899,4 +779,152 @@ $$;
 
 REVOKE ALL ON FUNCTION siampos_reset_shop(INTEGER, TEXT) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION siampos_reset_shop(INTEGER, TEXT) TO authenticated;
+NOTIFY pgrst, 'reload schema';
+
+
+-- =====================================================================
+-- Migration beta 0.3.20 (ส่วนที่ 1): แก้ siampos_apply_lot_deltas
+-- เวอร์ชัน beta 0.3.7 ใช้ตัวแปรชื่อ l ซ้ำกับ alias l ในคำสั่ง INSERT ... SELECT ของ lot_consumptions
+-- PostgreSQL จะแจ้ง "column reference l is ambiguous" ทุกครั้ง ทำให้ create_order / void_order ล้มเหลว
+-- =====================================================================
+CREATE OR REPLACE FUNCTION siampos_apply_lot_deltas(p_lots JSONB)
+RETURNS VOID LANGUAGE plpgsql AS $$
+DECLARE
+  v_lot JSONB;
+  r JSONB;
+BEGIN
+  FOR v_lot IN SELECT * FROM jsonb_array_elements(COALESCE(p_lots, '[]'::jsonb)) LOOP
+    r := v_lot->'row';
+    UPDATE product_lots
+      SET remaining_qty = remaining_qty + COALESCE((v_lot->>'delta')::numeric, 0),
+          lot_number = COALESCE(r->>'lot_number', lot_number),
+          expiry_date = COALESCE(NULLIF(r->>'expiry_date', '')::date, expiry_date),
+          updated_at = NOW()
+      WHERE id = r->>'id';
+    IF NOT FOUND THEN
+      INSERT INTO product_lots (id, product_id, product_name, lot_number, expiry_date, received_qty, remaining_qty, cost_price, received_at, reference_doc, updated_at)
+      VALUES (
+        r->>'id', r->>'product_id', r->>'product_name', COALESCE(r->>'lot_number', '-'),
+        NULLIF(r->>'expiry_date', '')::date,
+        COALESCE((r->>'received_qty')::numeric, 0), COALESCE((r->>'remaining_qty')::numeric, 0),
+        COALESCE((r->>'cost_price')::numeric, 0), COALESCE((r->>'received_at')::timestamptz, NOW()),
+        r->>'reference_doc', NOW()
+      )
+      ON CONFLICT (id) DO NOTHING;
+    END IF;
+  END LOOP;
+
+  -- beta 0.3.7: บันทึกประวัติการตัดล็อตลง lot_consumptions เพื่อให้ยกเลิกบิลข้ามเครื่องแล้วคืนเข้าล็อตเดิมได้
+  INSERT INTO lot_consumptions (id, reference_doc, product_id, consumed, created_at, updated_at)
+  SELECT
+    (COALESCE(NULLIF(l->>'reference_doc', ''), l->'row'->>'reference_doc')) || ':' || (l->'row'->>'product_id'),
+    COALESCE(NULLIF(l->>'reference_doc', ''), l->'row'->>'reference_doc'),
+    l->'row'->>'product_id',
+    jsonb_agg(jsonb_build_object('lot_id', l->'row'->>'id', 'qty', -((l->>'delta')::numeric))),
+    NOW(),
+    NOW()
+  FROM jsonb_array_elements(COALESCE(p_lots, '[]'::jsonb)) l
+  WHERE COALESCE((l->>'delta')::numeric, 0) < 0
+    AND COALESCE(NULLIF(l->>'reference_doc', ''), NULLIF(l->'row'->>'reference_doc', '')) IS NOT NULL
+  GROUP BY COALESCE(NULLIF(l->>'reference_doc', ''), l->'row'->>'reference_doc'), l->'row'->>'product_id'
+  ON CONFLICT (id) DO UPDATE
+    SET consumed = EXCLUDED.consumed,
+        updated_at = NOW();
+END;
+$$;
+
+-- =====================================================================
+-- Migration beta 0.3.20 (ส่วนที่ 2): create_order ปิดใบสั่งขายในบิลเดียวกัน
+-- รันทั้งฟังก์ชันด้านล่าง (ลายเซ็นเดิม สิทธิ์ที่ตั้งไว้ใน lockdown-rls.sql ยังอยู่)
+-- p_order.sales_order = { id, fulfilled_by_name } เมื่อบิลนี้เปิดมาจากใบสั่งขาย
+-- =====================================================================
+CREATE OR REPLACE FUNCTION create_order(
+  p_order JSONB,
+  p_deductions JSONB DEFAULT '[]'::jsonb,
+  p_ledger JSONB DEFAULT '[]'::jsonb,
+  p_lots JSONB DEFAULT '[]'::jsonb
+)
+RETURNS JSONB LANGUAGE plpgsql AS $$
+DECLARE
+  v_id UUID := (p_order->>'id')::uuid;
+  v_number TEXT := p_order->>'order_number';
+  v_customer UUID;
+  v_inserted UUID;
+  v_existing TEXT;
+  v_stock NUMERIC;
+  v_balances JSONB := '{}'::jsonb;
+  d JSONB;
+BEGIN
+  -- ส่งซ้ำ (ซิงค์คิวซ้ำ): ไม่ทำอะไรเพิ่ม
+  SELECT order_number INTO v_existing FROM orders WHERE id = v_id;
+  IF FOUND THEN
+    RETURN jsonb_build_object('status', 'duplicate', 'order_number', v_existing);
+  END IF;
+
+  -- เลขที่บิลชนกับบิลอื่น (เช่น ล้างข้อมูลเครื่องแล้วเลขรันเริ่มใหม่): ต่อท้ายด้วยส่วนหนึ่งของ id
+  IF EXISTS (SELECT 1 FROM orders WHERE order_number = v_number) THEN
+    v_number := v_number || '-' || UPPER(SUBSTR(REPLACE(v_id::text, '-', ''), 1, 4));
+  END IF;
+
+  SELECT id INTO v_customer FROM customers WHERE id::text = p_order->>'customer_id';
+
+  INSERT INTO orders (
+    id, order_number, customer_id, customer_name, pricing_mode, subtotal, wholesale_savings, bill_discount,
+    tax_amount, grand_total, total_cost, payment_method, payments, cash_received, change_amount, status,
+    note, items, credit_due_date, created_by_name, created_at
+  ) VALUES (
+    v_id, v_number, v_customer, COALESCE(p_order->>'customer_name', 'ลูกค้าทั่วไป'),
+    COALESCE(p_order->>'pricing_mode', 'auto'),
+    COALESCE((p_order->>'subtotal')::numeric, 0), COALESCE((p_order->>'wholesale_savings')::numeric, 0),
+    COALESCE((p_order->>'bill_discount')::numeric, 0), COALESCE((p_order->>'tax_amount')::numeric, 0),
+    COALESCE((p_order->>'grand_total')::numeric, 0), COALESCE((p_order->>'total_cost')::numeric, 0),
+    COALESCE(p_order->>'payment_method', 'cash'), COALESCE(p_order->'payments', '[]'::jsonb),
+    COALESCE((p_order->>'cash_received')::numeric, 0), COALESCE((p_order->>'change_amount')::numeric, 0),
+    'completed', p_order->>'note', COALESCE(p_order->'items', '[]'::jsonb),
+    NULLIF(p_order->>'credit_due_date', '')::timestamptz, p_order->>'created_by_name',
+    COALESCE((p_order->>'created_at')::timestamptz, NOW())
+  )
+  ON CONFLICT (id) DO NOTHING
+  RETURNING id INTO v_inserted;
+
+  IF v_inserted IS NULL THEN
+    RETURN jsonb_build_object('status', 'duplicate', 'order_number', v_number);
+  END IF;
+
+  -- ตัดสต็อกจากยอดบนฐานข้อมูล (ไม่ใช้ยอดที่แคชในเครื่อง) ยอมให้ติดลบ
+  FOR d IN SELECT * FROM jsonb_array_elements(COALESCE(p_deductions, '[]'::jsonb)) LOOP
+    UPDATE products
+      SET stock = stock - COALESCE((d->>'qty')::numeric, 0), updated_at = NOW()
+      WHERE id::text = d->>'product_id'
+      RETURNING stock INTO v_stock;
+    IF FOUND THEN
+      v_balances := v_balances || jsonb_build_object(d->>'product_id', v_stock);
+    END IF;
+  END LOOP;
+
+  PERFORM siampos_insert_ledger(p_ledger, v_balances, v_number);
+  PERFORM siampos_apply_lot_deltas(p_lots);
+  IF v_number <> (p_order->>'order_number') THEN
+    UPDATE lot_consumptions
+      SET id = v_number || ':' || product_id,
+          reference_doc = v_number,
+          updated_at = NOW()
+      WHERE reference_doc = (p_order->>'order_number');
+  END IF;
+
+  -- beta 0.3.20: ปิดใบสั่งขาย (จองสินค้า) ที่เปิดเข้าตะกร้าใน transaction เดียวกับบิล
+  -- (เดิมแอปปิดแยกหลังบันทึกบิล ถ้าเน็ตหลุดตรงกลาง ใบสั่งขายจะค้างสถานะจองทั้งที่ขายไปแล้ว)
+  IF COALESCE(p_order->'sales_order'->>'id', '') <> '' THEN
+    UPDATE sales_orders
+      SET status = 'fulfilled',
+          order_number = v_number,
+          fulfilled_by_name = COALESCE(p_order->'sales_order'->>'fulfilled_by_name', p_order->>'created_by_name'),
+          fulfilled_at = COALESCE((p_order->>'created_at')::timestamptz, NOW()),
+          updated_at = NOW()
+      WHERE id = p_order->'sales_order'->>'id' AND status = 'reserved';
+  END IF;
+
+  RETURN jsonb_build_object('status', 'created', 'order_number', v_number, 'balances', v_balances);
+END;
+$$;
 NOTIFY pgrst, 'reload schema';

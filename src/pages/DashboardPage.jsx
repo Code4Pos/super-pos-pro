@@ -13,7 +13,7 @@ import {
   WifiOff,
 } from 'lucide-react';
 import { usePOS } from '../context/POSContext';
-import { getMinStock, isLowStock } from '../utils/stockAlerts';
+import { getMinStock, isLowStock, getNegativeStockProducts } from '../utils/stockAlerts';
 import { formatCurrency, formatNumber } from '../utils/formatters';
 import { getOrderPayments } from '../utils/payments';
 
@@ -152,6 +152,7 @@ export default function DashboardPage({ onNavigate }) {
       .slice(0, 5);
 
     const lowStockProducts = products.filter((p) => isLowStock(p, defaultMinStock));
+    const negativeStockProducts = getNegativeStockProducts(products);
 
     return {
       orderCount: validOrders.length,
@@ -163,6 +164,7 @@ export default function DashboardPage({ onNavigate }) {
       paymentMap,
       topProducts,
       lowStockProducts,
+      negativeStockProducts,
     };
   }, [rangeOrders, products, defaultMinStock]);
 
@@ -372,6 +374,54 @@ export default function DashboardPage({ onNavigate }) {
           </div>
         </div>
       </div>
+
+      {/* สินค้าสต็อกติดลบ: ขายเกินสต็อกที่มีในระบบ ต้องตรวจนับหรือรับสินค้าเข้า */}
+      {analytics.negativeStockProducts.length > 0 && (
+        <div className="bg-rose-50 p-4 sm:p-5 rounded-2xl border border-rose-200 space-y-3">
+          <div className="flex items-start justify-between gap-2">
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+              <div>
+                <h3 className="font-bold text-rose-800 text-sm sm:text-base">
+                  สินค้าสต็อกติดลบ {analytics.negativeStockProducts.length} รายการ
+                </h3>
+                <p className="text-[11px] text-rose-700">
+                  ขายไปมากกว่าที่มีในระบบ ควรตรวจนับสต็อกจริง หรือบันทึกรับสินค้าเข้าที่ยังไม่ได้ลง
+                </p>
+              </div>
+            </div>
+            {onNavigate && (
+              <button
+                type="button"
+                onClick={() => onNavigate('inventory')}
+                className="text-xs font-bold text-rose-700 hover:text-rose-900 flex items-center gap-1 shrink-0"
+              >
+                <span>ไปหน้าคลังสินค้า</span>
+                <ArrowRight className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+            {analytics.negativeStockProducts.slice(0, 12).map((p) => (
+              <div
+                key={p.id}
+                className="p-2.5 rounded-xl bg-white border border-rose-200 flex items-center justify-between gap-2"
+              >
+                <div className="min-w-0">
+                  <div className="text-xs font-bold text-slate-900 truncate">{p.name}</div>
+                  <div className="text-[11px] text-slate-500">รหัส {p.sku}</div>
+                </div>
+                <span className="px-2 py-1 rounded-lg bg-rose-600 text-white font-extrabold text-xs shrink-0">
+                  {formatNumber(p.stock)} {p.unit}
+                </span>
+              </div>
+            ))}
+          </div>
+          {analytics.negativeStockProducts.length > 12 && (
+            <div className="text-[11px] text-rose-700">และอีก {analytics.negativeStockProducts.length - 12} รายการ (ดูทั้งหมดที่หน้าคลังสินค้า ตัวกรอง "สต็อกติดลบ")</div>
+          )}
+        </div>
+      )}
 
       {/* รายการแจ้งเตือนสินค้าใกล้หมดสต็อก */}
       <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs space-y-3">
