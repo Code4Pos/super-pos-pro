@@ -991,3 +991,59 @@ $$;
 REVOKE EXECUTE ON FUNCTION siampos_adjust_stock(TEXT, JSONB) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION siampos_adjust_stock(TEXT, JSONB) TO authenticated;
 NOTIFY pgrst, 'reload schema';
+
+-- =====================================================================
+-- Migration beta 0.3.27: ล็อตแยกตามคลัง
+-- product_lots.warehouse_id (ล็อตเดิม = หน้าร้าน 'wh-front') และ siampos_apply_lot_deltas บันทึกคลังของล็อตใหม่
+-- ยังไม่รัน: แอปส่งล็อตโดยตัดคอลัมน์ warehouse_id ออก (ล็อตบนฐานข้อมูลถือว่าอยู่หน้าร้านทั้งหมด)
+-- =====================================================================
+ALTER TABLE product_lots ADD COLUMN IF NOT EXISTS warehouse_id TEXT NOT NULL DEFAULT 'wh-front';
+CREATE INDEX IF NOT EXISTS idx_product_lots_warehouse ON product_lots (product_id, warehouse_id);
+
+CREATE OR REPLACE FUNCTION siampos_apply_lot_deltas(p_lots JSONB)
+RETURNS VOID LANGUAGE plpgsql AS $$
+DECLARE
+  v_lot JSONB;
+  r JSONB;
+BEGIN
+  FOR v_lot IN SELECT * FROM jsonb_array_elements(COALESCE(p_lots, '[]'::jsonb)) LOOP
+    r := v_lot->'row';
+    UPDATE product_lots
+      SET remaining_qty = remaining_qty + COALESCE((v_lot->>'delta')::numeric, 0),
+          lot_number = COALESCE(r->>'lot_number', lot_number),
+          expiry_date = COALESCE(NULLIF(r->>'expiry_date', '')::date, expiry_date),
+          updated_at = NOW()
+      WHERE id = r->>'id';
+    IF NOT FOUND THEN
+      INSERT INTO product_lots (id, product_id, product_name, lot_number, expiry_date, received_qty, remaining_qty, cost_price, received_at, reference_doc, warehouse_id, updated_at)
+      VALUES (
+        r->>'id', r->>'product_id', r->>'product_name', COALESCE(r->>'lot_number', '-'),
+        NULLIF(r->>'expiry_date', '')::date,
+        COALESCE((r->>'received_qty')::numeric, 0), COALESCE((r->>'remaining_qty')::numeric, 0),
+        COALESCE((r->>'cost_price')::numeric, 0), COALESCE((r->>'received_at')::timestamptz, NOW()),
+        r->>'reference_doc', COALESCE(NULLIF(r->>'warehouse_id', ''), 'wh-front'), NOW()
+      )
+      ON CONFLICT (id) DO NOTHING;
+    END IF;
+  END LOOP;
+
+  -- beta 0.3.7: บันทึกประวัติการตัดล็อตลง lot_consumptions เพื่อให้ยกเลิกบิลข้ามเครื่องแล้วคืนเข้าล็อตเดิมได้
+  INSERT INTO lot_consumptions (id, reference_doc, product_id, consumed, created_at, updated_at)
+  SELECT
+    (COALESCE(NULLIF(l->>'reference_doc', ''), l->'row'->>'reference_doc')) || ':' || (l->'row'->>'product_id'),
+    COALESCE(NULLIF(l->>'reference_doc', ''), l->'row'->>'reference_doc'),
+    l->'row'->>'product_id',
+    jsonb_agg(jsonb_build_object('lot_id', l->'row'->>'id', 'qty', -((l->>'delta')::numeric))),
+    NOW(),
+    NOW()
+  FROM jsonb_array_elements(COALESCE(p_lots, '[]'::jsonb)) l
+  WHERE COALESCE((l->>'delta')::numeric, 0) < 0
+    AND COALESCE(NULLIF(l->>'reference_doc', ''), NULLIF(l->'row'->>'reference_doc', '')) IS NOT NULL
+  GROUP BY COALESCE(NULLIF(l->>'reference_doc', ''), l->'row'->>'reference_doc'), l->'row'->>'product_id'
+  ON CONFLICT (id) DO UPDATE
+    SET consumed = EXCLUDED.consumed,
+        updated_at = NOW();
+END;
+$$;
+
+NOTIFY pgrst, 'reload schema';

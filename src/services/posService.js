@@ -3,8 +3,25 @@ import { B2B_CUSTOMER_DEFAULTS, normalizeB2BFields } from '../utils/credit';
 import { calculateOrderVat } from '../utils/tax';
 import { getDocumentTemplate, nextDocumentNumber, resolveDocumentTemplate, normalizeBranchCode } from '../utils/docNumbers';
 import { hashPin, generateSalt } from '../utils/rbac';
-import { consumeLots, addToLots, restoreToLots, summarizeLotsByProduct } from '../utils/lots';
-import { normalizeWarehouses, applyBalanceDelta, TRANSIT_WAREHOUSE_ID, SALES_WAREHOUSE_ID } from '../utils/warehouses';
+import {
+  consumeLots,
+  addToLots,
+  restoreToLots,
+  summarizeLotsByProduct,
+  consumeLotsWithShortage,
+  moveLots,
+  returnMovedLots,
+  suggestTransferLots,
+  lotWarehouseId,
+  adjustUnassignedLot,
+} from '../utils/lots';
+import {
+  normalizeWarehouses,
+  applyBalanceDelta,
+  getProductWarehouseQty,
+  TRANSIT_WAREHOUSE_ID,
+  SALES_WAREHOUSE_ID,
+} from '../utils/warehouses';
 import { generateDeviceCode, generateUuid, isUuid, nextOrderNumber, sanitizeDeviceCode } from '../utils/device';
 import { printerService } from './printerService';
 import { getOrderPayments } from '../utils/payments';
@@ -769,7 +786,8 @@ function planLotChanges(entries, afterProducts, meta = {}) {
     const delta = Number(entry.change_qty) || 0;
 
     if (delta < 0) {
-      const result = consumeLots(lots, product.id, -delta, strategy, nowIso);
+      // ขาย/ปรับลด = ล็อตหน้าร้าน (beta 0.3.27) ล็อตไม่พอ = "ไม่ระบุล็อต" ติดลบ (ยอดล็อตหน้าร้านยังเท่ายอดหน้าร้าน)
+      const result = consumeLotsWithShortage(lots, product, -delta, strategy, nowIso, SALES_WAREHOUSE_ID, meta);
       lots = result.lots;
       if (meta.reference_doc && result.consumed.length > 0) {
         const record = {
@@ -849,13 +867,32 @@ function enqueueOffline(item) {
 /**
  * upsert ข้อมูลที่ใช้ id ฝั่งแอป (ไม่ซ้ำเมื่อส่งซ้ำ) ถ้าเชื่อมต่อไม่ได้ให้เก็บเข้าคิว
  */
+// คอลัมน์ที่เพิ่มทีหลัง: ฐานข้อมูลที่ยังไม่รัน Migration จะส่งโดยตัดคอลัมน์เหล่านี้ออก
+const OPTIONAL_UPSERT_COLUMNS = {
+  product_lots: ['warehouse_id'], // Migration beta 0.3.27
+};
+
+async function upsertWithOptionalColumns(table, rows) {
+  let { error } = await supabase.from(table).upsert(rows);
+  const optional = OPTIONAL_UPSERT_COLUMNS[table];
+  if (error && optional && isMissingColumnError(error)) {
+    const stripped = rows.map((row) => {
+      const copy = { ...row };
+      optional.forEach((col) => delete copy[col]);
+      return copy;
+    });
+    ({ error } = await supabase.from(table).upsert(stripped));
+  }
+  return { error };
+}
+
 async function upsertOrQueue(table, rows) {
   if (!isOnline()) {
     enqueueOffline({ kind: 'upsert', table, rows });
     return false;
   }
   try {
-    const { error } = await supabase.from(table).upsert(rows);
+    const { error } = await upsertWithOptionalColumns(table, rows);
     if (!error) return true;
     if (isNetworkError(error)) enqueueOffline({ kind: 'upsert', table, rows });
     else console.warn(`Supabase ${table} error:`, error.message);
@@ -1382,7 +1419,7 @@ async function applyImportItemsToStock(
   await recordStockMovements(
     baseProducts,
     syncedProducts,
-    { movement_type: 'IMPORT', reference_doc: referenceDoc, lotInfos },
+    { movement_type: 'IMPORT', reference_doc: referenceDoc, lotInfos, warehouse_id: warehouseId || SALES_WAREHOUSE_ID },
     isSupabaseActive
   );
   // รับเข้าคลังที่เลือก (คลังหน้าร้านไม่ต้องบันทึก เพราะคำนวณจากสต็อกรวม)
@@ -2844,7 +2881,8 @@ export const posService = {
    * - ยกเลิก (cancelled): คืนยอดระหว่างโอนกลับคลังต้นทาง
    * สต็อกรวม (products.stock) ไม่เปลี่ยน จึงไม่บันทึก Stock Ledger
    */
-  async saveStockTransfer(record, isSupabaseActive) {
+  async saveStockTransfer(inputRecord, isSupabaseActive) {
+    let record = inputRecord;
     const nowIso = new Date().toISOString();
     const transfers = getLocal(STORAGE_KEYS.STOCK_TRANSFERS, []);
     const previous = transfers.find((t) => t.id === record.id) || null;
@@ -2857,6 +2895,50 @@ export const posService = {
 
     const beforeBalances = getLocal(STORAGE_KEYS.INVENTORY_BALANCES, []);
     let balances = beforeBalances;
+
+    // beta 0.3.27: ย้ายล็อตของสินค้าที่ติดตาม Lot (ส่งออก: ต้นทาง → ระหว่างโอน, รับ: ระหว่างโอน → ปลายทาง, ยกเลิก: คืนล็อตเดิม)
+    const productMap = new Map(getLocal(STORAGE_KEYS.PRODUCTS, INITIAL_PRODUCTS).map((p) => [p.id, p]));
+    const beforeLots = getLocal(STORAGE_KEYS.PRODUCT_LOTS, []);
+    let lots = beforeLots;
+    const lotMeta = { reference_doc: record.transfer_number || '' };
+    const items = (record.items || []).map((item) => {
+      const product = productMap.get(item.product_id);
+      const qty = Number(item.qty) || 0;
+      if (!product?.track_lots || qty <= 0) return item;
+      if (nextStatus === 'in_transit') {
+        const picks = Array.isArray(item.lots) && item.lots.length > 0
+          ? item.lots
+          : suggestTransferLots(lots, product, qty, record.from_warehouse_id);
+        const result = moveLots(lots, product, picks, qty, record.from_warehouse_id, TRANSIT_WAREHOUSE_ID, lotMeta, nowIso);
+        lots = result.lots;
+        return { ...item, lots: picks, lot_moves: result.moved };
+      }
+      const sent = Array.isArray(item.lot_moves) ? item.lot_moves : [];
+      if (nextStatus === 'received') {
+        const picks = sent.map((m) => ({ lot_id: m.to_lot_id, qty: m.qty }));
+        const result = moveLots(lots, product, picks, qty, TRANSIT_WAREHOUSE_ID, record.to_warehouse_id, lotMeta, nowIso);
+        lots = result.lots;
+        return { ...item, lot_receipts: result.moved };
+      }
+      // ยกเลิก: คืนเข้าล็อตเดิมของคลังต้นทาง (ใบโอนเก่าที่ไม่มีประวัติ = ย้ายตามลำดับล็อตในระหว่างโอน)
+      if (sent.length > 0) {
+        lots = returnMovedLots(lots, product, sent, TRANSIT_WAREHOUSE_ID, record.from_warehouse_id, lotMeta, nowIso);
+      } else {
+        lots = moveLots(
+          lots,
+          product,
+          suggestTransferLots(lots, product, qty, TRANSIT_WAREHOUSE_ID),
+          qty,
+          TRANSIT_WAREHOUSE_ID,
+          record.from_warehouse_id,
+          lotMeta,
+          nowIso
+        ).lots;
+      }
+      return item;
+    });
+    record = { ...record, items };
+
     (record.items || []).forEach((item) => {
       const qty = Number(item.qty) || 0;
       if (qty <= 0) return;
@@ -2876,6 +2958,7 @@ export const posService = {
       : [saved, ...transfers];
     setLocal(STORAGE_KEYS.INVENTORY_BALANCES, balances);
     setLocal(STORAGE_KEYS.STOCK_TRANSFERS, updatedTransfers);
+    if (lots !== beforeLots) setLocal(STORAGE_KEYS.PRODUCT_LOTS, lots);
 
     if (isSupabaseActive && supabase) {
       // applyBalanceDelta สร้าง object ใหม่เฉพาะแถวที่เปลี่ยน (เทียบ object แทนเวลา กันกรณีทำรายการในมิลลิวินาทีเดียวกัน)
@@ -2883,8 +2966,9 @@ export const posService = {
       const changed = balances.filter((b) => !unchanged.has(b));
       await upsertOrQueue('stock_transfers', [saved]);
       if (changed.length > 0) await upsertOrQueue('inventory_balances', changed);
+      if (lots !== beforeLots) await upsertChangedLots(beforeLots, lots, isSupabaseActive);
     }
-    return { saved, transfers: updatedTransfers, balances };
+    return { saved, transfers: updatedTransfers, balances, lots };
   },
 
   /**
@@ -3015,7 +3099,7 @@ export const posService = {
         }
       } else {
         try {
-          let { error } = await supabase.from(item.table).upsert(item.rows);
+          let { error } = await upsertWithOptionalColumns(item.table, item.rows);
           // shop_settings บนฐานข้อมูลที่ยังไม่มีคอลัมน์ config: ส่งเฉพาะคอลัมน์เดิม
           if (error && item.table === 'shop_settings' && isMissingConfigColumn(error)) {
             ({ error } = await supabase
@@ -3103,14 +3187,27 @@ export const posService = {
     const product = products.find((p) => p.id === productId);
     const beforeLots = this.getProductLots();
     if (!product) return beforeLots;
-    const lotTotal = summarizeLotsByProduct(beforeLots).get(productId) || 0;
-    const diff = Math.round(((Number(product.stock) || 0) - lotTotal) * 10000) / 10000;
+    // beta 0.3.27: เทียบยอดล็อตกับยอดของแต่ละคลัง (รวมระหว่างโอน) ขาด = เพิ่ม "ไม่ระบุล็อต", เกิน = ตัดล็อตในคลังนั้น
+    const warehouses = normalizeWarehouses(getLocal(STORAGE_KEYS.WAREHOUSES, []));
+    const balances = getLocal(STORAGE_KEYS.INVENTORY_BALANCES, []);
+    const targets = getProductWarehouseQty(product, balances, warehouses);
+    const lotWarehouses = new Set(beforeLots.filter((l) => l.product_id === productId).map(lotWarehouseId));
+    lotWarehouses.forEach((wh) => {
+      if (!(wh in targets)) targets[wh] = 0; // ล็อตในคลังที่ถูกลบไปแล้ว
+    });
     let lots = beforeLots;
-    if (diff > 0) {
-      lots = addToLots(lots, product, diff, null, { reference_doc: 'ปรับยอดล็อตให้ตรงสต็อก' });
-    } else if (diff < 0) {
-      lots = consumeLots(lots, productId, -diff, product.lot_strategy || 'FEFO').lots;
-    }
+    Object.entries(targets).forEach(([wh, target]) => {
+      const lotTotal = summarizeLotsByProduct(lots, wh).get(productId) || 0;
+      const diff = Math.round(((Number(target) || 0) - lotTotal) * 10000) / 10000;
+      if (diff > 0) {
+        lots = addToLots(lots, product, diff, null, { reference_doc: 'ปรับยอดล็อตให้ตรงสต็อก', warehouse_id: wh });
+      } else if (diff < 0) {
+        const result = consumeLots(lots, productId, -diff, product.lot_strategy || 'FEFO', undefined, wh);
+        lots = result.lots;
+        // ล็อตบวกไม่พอให้ตัด (มีล็อตติดลบ) = ปรับ "ไม่ระบุล็อต" ให้ยอดรวมตรง
+        if (result.shortage > 0) lots = adjustUnassignedLot(lots, product, -result.shortage, wh).lots;
+      }
+    });
     setLocal(STORAGE_KEYS.PRODUCT_LOTS, lots);
     await upsertChangedLots(beforeLots, lots, isSupabaseActive);
     return lots;

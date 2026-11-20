@@ -7,7 +7,10 @@ import {
   getExpiryStatus,
   daysUntilExpiry,
   summarizeLotsByProduct,
+  summarizeProductLotsByWarehouse,
+  lotWarehouseId,
 } from '../utils/lots';
+import { getProductWarehouseQty, TRANSIT_WAREHOUSE_ID } from '../utils/warehouses';
 import { formatCurrency, formatDateTime, formatNumber } from '../utils/formatters';
 
 const EXPIRY_META = {
@@ -28,8 +31,25 @@ function formatExpiry(dateStr) {
  * - ตั้งค่าสินค้าที่ติดตาม Lot และกลยุทธ์ตัดสต็อก FEFO/FIFO
  */
 export default function LotsPage() {
-  const { products, productLots = [], updateLotSettings, reconcileProductLots, updateLotDetails, can, printerSettings } =
-    usePOS();
+  const {
+    products,
+    productLots = [],
+    updateLotSettings,
+    reconcileProductLots,
+    updateLotDetails,
+    can,
+    printerSettings,
+    warehouses = [],
+    inventoryBalances = [],
+  } = usePOS();
+  const [warehouseFilter, setWarehouseFilter] = useState('all');
+  // ชื่อคลังของล็อต (รวม "ระหว่างโอน")
+  const warehouseName = (id) =>
+    id === TRANSIT_WAREHOUSE_ID ? 'ระหว่างโอน' : warehouses.find((w) => w.id === id)?.name || id;
+  const warehouseOptions = [
+    ...warehouses.filter((w) => w.is_active !== false).map((w) => ({ id: w.id, name: w.name })),
+    { id: TRANSIT_WAREHOUSE_ID, name: 'ระหว่างโอน' },
+  ];
   // จำนวนวันที่ถือว่าใกล้หมดอายุ (ค่าตั้งร้าน nearExpiryDays)
   const nearDays = Number(printerSettings?.nearExpiryDays) || NEAR_EXPIRY_DAYS;
   const [viewMode, setViewMode] = useState('lots'); // 'lots' | 'settings'
@@ -51,7 +71,9 @@ export default function LotsPage() {
     [productLots, productById, nearDays]
   );
 
-  const activeLots = lotsWithStatus.filter((l) => l.remaining_qty > 0);
+  const activeLots = lotsWithStatus.filter(
+    (l) => l.remaining_qty > 0 && (warehouseFilter === 'all' || lotWarehouseId(l) === warehouseFilter)
+  );
   const summary = {
     expired: activeLots.filter((l) => l.status === 'expired'),
     near: activeLots.filter((l) => l.status === 'near'),
@@ -62,6 +84,7 @@ export default function LotsPage() {
     const q = search.trim().toLowerCase();
     return lotsWithStatus
       .filter((l) => showEmpty || l.remaining_qty > 0)
+      .filter((l) => warehouseFilter === 'all' || lotWarehouseId(l) === warehouseFilter)
       .filter((l) => statusFilter === 'all' || l.status === statusFilter)
       .filter((l) => !q || `${l.product_name} ${l.lot_number}`.toLowerCase().includes(q))
       .sort((a, b) => {
@@ -69,7 +92,7 @@ export default function LotsPage() {
         const eb = b.expiry_date ? new Date(b.expiry_date).getTime() : Infinity;
         return ea - eb;
       });
-  }, [lotsWithStatus, showEmpty, statusFilter, search]);
+  }, [lotsWithStatus, showEmpty, statusFilter, search, warehouseFilter]);
 
   const settingsRows = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -153,6 +176,17 @@ export default function LotsPage() {
                 {key === 'all' ? 'ทั้งหมด' : key === 'near' ? `ใกล้หมดอายุ (≤${nearDays} วัน)` : EXPIRY_META[key].label}
               </button>
             ))}
+            <select
+              value={warehouseFilter}
+              onChange={(e) => setWarehouseFilter(e.target.value)}
+              className="px-2.5 py-1.5 rounded-xl border border-slate-200 bg-white text-xs font-bold text-slate-700"
+              title="กรองตามคลัง"
+            >
+              <option value="all">ทุกคลัง</option>
+              {warehouseOptions.map((w) => (
+                <option key={w.id} value={w.id}>{w.name}</option>
+              ))}
+            </select>
             <label className="ml-auto flex items-center gap-1.5 text-xs font-bold text-slate-600 cursor-pointer">
               <input
                 type="checkbox"
@@ -164,10 +198,11 @@ export default function LotsPage() {
             </label>
           </div>
           <div className="flex-1 overflow-auto">
-            <table className="w-full text-left border-collapse min-w-[860px] text-xs">
+            <table className="w-full text-left border-collapse min-w-[940px] text-xs">
               <thead className="sticky top-0 bg-slate-100 border-b border-slate-200 text-[11px] font-extrabold text-slate-600">
                 <tr>
                   <th className="py-2.5 px-3">สินค้า</th>
+                  <th className="py-2.5 px-3">คลัง</th>
                   <th className="py-2.5 px-3">เลขล็อต</th>
                   <th className="py-2.5 px-3">วันหมดอายุ</th>
                   <th className="py-2.5 px-3 text-right">คงเหลือ / รับเข้า</th>
@@ -179,7 +214,7 @@ export default function LotsPage() {
               <tbody className="divide-y divide-slate-200/70">
                 {visibleLots.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="py-14 text-center text-slate-400">
+                    <td colSpan={8} className="py-14 text-center text-slate-400">
                       {summary.tracked === 0
                         ? 'ยังไม่มีสินค้าที่ติดตาม Lot (เปิดได้ที่แท็บ "ตั้งค่าสินค้า")'
                         : 'ไม่มีล็อตในกลุ่มนี้'}
@@ -190,8 +225,9 @@ export default function LotsPage() {
                     const unit = productById.get(l.product_id)?.unit || '';
                     const isEditing = editing?.id === l.id;
                     return (
-                      <tr key={l.id} className={l.remaining_qty <= 0 ? 'opacity-50' : 'hover:bg-indigo-50/30'}>
+                      <tr key={l.id} className={l.remaining_qty === 0 ? 'opacity-50' : 'hover:bg-indigo-50/30'}>
                         <td className="py-2 px-3 font-bold text-slate-900">{l.product_name}</td>
+                        <td className="py-2 px-3 text-slate-600 whitespace-nowrap">{warehouseName(lotWarehouseId(l))}</td>
                         <td className="py-2 px-3 font-mono">
                           {isEditing ? (
                             <input
@@ -227,7 +263,8 @@ export default function LotsPage() {
                           )}
                         </td>
                         <td className="py-2 px-3 text-right whitespace-nowrap">
-                          <strong>{formatNumber(l.remaining_qty)}</strong> / {formatNumber(l.received_qty)} {unit}
+                          <strong className={l.remaining_qty < 0 ? 'text-rose-600' : ''}>{formatNumber(l.remaining_qty)}</strong> /{' '}
+                          {formatNumber(l.received_qty)} {unit}
                         </td>
                         <td className="py-2 px-3 text-right">{formatCurrency(l.remaining_qty * (Number(l.cost_price) || 0))}</td>
                         <td className="py-2 px-3 text-slate-600">
@@ -291,7 +328,17 @@ export default function LotsPage() {
             <tbody className="divide-y divide-slate-200/70">
               {settingsRows.map((p) => {
                 const lotTotal = lotTotals.get(p.id) || 0;
-                const mismatch = p.track_lots && Math.abs(lotTotal - (Number(p.stock) || 0)) > 0.0001;
+                // beta 0.3.27: ยอดล็อตของแต่ละคลังต้องเท่ายอดคลังนั้น (ไม่ใช่แค่ยอดรวม)
+                const mismatchWarehouses = p.track_lots
+                  ? (() => {
+                      const target = getProductWarehouseQty(p, inventoryBalances, warehouses);
+                      const byLot = summarizeProductLotsByWarehouse(productLots, p.id);
+                      return [...new Set([...Object.keys(target), ...Object.keys(byLot)])].filter(
+                        (wh) => Math.abs((Number(target[wh]) || 0) - (Number(byLot[wh]) || 0)) > 0.0001
+                      );
+                    })()
+                  : [];
+                const mismatch = mismatchWarehouses.length > 0;
                 return (
                   <tr key={p.id} className="hover:bg-indigo-50/30">
                     <td className="py-2 px-3">
@@ -327,12 +374,15 @@ export default function LotsPage() {
                         <div className={mismatch ? 'text-rose-600 font-bold flex items-center justify-end gap-1' : 'text-slate-400'}>
                           {mismatch && <AlertTriangle className="w-3 h-3" />}
                           ล็อตรวม {formatNumber(lotTotal)}
+                          {mismatch && (
+                            <span className="font-normal">(ไม่ตรง: {mismatchWarehouses.map(warehouseName).join(', ')})</span>
+                          )}
                           {mismatch && canEdit && (
                             <button
                               type="button"
                               onClick={() => reconcileProductLots(p.id)}
                               className="ml-1 px-1.5 py-0.5 rounded border border-rose-300 bg-white text-rose-600 flex items-center gap-0.5"
-                              title="ปรับยอดล็อตให้เท่าสต็อก"
+                              title="ปรับยอดล็อตของแต่ละคลังให้เท่ายอดคลัง"
                             >
                               <RefreshCw className="w-3 h-3" />
                               ปรับให้ตรง

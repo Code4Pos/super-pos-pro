@@ -15,7 +15,7 @@ import {
 
 const SESSION_STORAGE_KEY = 'siampos_session_v1';
 
-export const APP_VERSION = 'version beta 0.3.26';
+export const APP_VERSION = 'version beta 0.3.27';
 const HELD_BILLS_STORAGE_KEY = 'siampos_held_bills_v1';
 
 const POSContext = createContext(null);
@@ -1315,6 +1315,8 @@ export function POSProvider({ children, scope = 'all' }) {
   const applyTransferResult = useCallback((result) => {
     setStockTransfers(result.transfers);
     setInventoryBalances(result.balances);
+    // ใบโอนย้ายล็อตด้วย (beta 0.3.27)
+    if (Array.isArray(result.lots)) setProductLots(result.lots);
     return result.saved;
   }, []);
 
@@ -1343,7 +1345,15 @@ export function POSProvider({ children, scope = 'all' }) {
           .filter((i) => Number(i.qty) > 0)
           .map((i) => {
             const p = products.find((x) => x.id === i.product_id);
-            return { product_id: i.product_id, product_name: p?.name || '', sku: p?.sku || '', unit: p?.unit || 'ชิ้น', qty: Number(i.qty) };
+            return {
+              product_id: i.product_id,
+              product_name: p?.name || '',
+              sku: p?.sku || '',
+              unit: p?.unit || 'ชิ้น',
+              qty: Number(i.qty),
+              // ล็อตที่เลือกโอน (สินค้าติดตาม Lot) ไม่ระบุ = ระบบเลือกตามกลยุทธ์ FEFO/FIFO
+              ...(Array.isArray(i.lots) && i.lots.length > 0 ? { lots: i.lots } : {}),
+            };
           }),
         note,
         status: 'in_transit',
