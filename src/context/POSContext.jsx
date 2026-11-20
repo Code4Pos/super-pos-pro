@@ -14,7 +14,7 @@ import {
 
 const SESSION_STORAGE_KEY = 'siampos_session_v1';
 
-export const APP_VERSION = 'version beta 0.3.20';
+export const APP_VERSION = 'version beta 0.3.21';
 const HELD_BILLS_STORAGE_KEY = 'siampos_held_bills_v1';
 
 const POSContext = createContext(null);
@@ -436,6 +436,8 @@ export function POSProvider({ children, scope = 'all' }) {
         unit_price: effectiveUnitPrice,
         custom_price: hasCustomPrice ? Number(customPrice) : null,
         is_custom_price: hasCustomPrice,
+        // ราคาที่ระบบคิดให้ (ก่อนแก้ราคาเอง) ใช้ตรวจเพดานส่วนลดเมื่อพนักงานลดราคาต่อหน่วย
+        system_unit_price: priceCalc.unitPrice,
         original_retail_price: Number(latestProd.retail_price) || 0,
         cost_price: Number(latestProd.cost_price) || 0,
         is_wholesale_applied: isWholesaleApplied,

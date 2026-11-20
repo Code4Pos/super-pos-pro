@@ -53,6 +53,9 @@ export default function CartPanel({ onOpenCheckout, onCloseMobileDrawer }) {
 
   // ส่วนลดที่เกินเพดาน (ค่าตั้ง maxCashierDiscountPercent) รอผู้จัดการอนุมัติด้วย PIN
   const [pendingDiscount, setPendingDiscount] = useState(null);
+  // ราคาต่อหน่วยที่ลดเกินเพดาน รอผู้จัดการอนุมัติ { item, price, cutPercent }
+  const [pendingPrice, setPendingPrice] = useState(null);
+  const discountLimitPercent = Number(printerSettings?.maxCashierDiscountPercent ?? 100);
 
   const [isHoldModalOpen, setIsHoldModalOpen] = useState(false);
 
@@ -141,6 +144,20 @@ export default function CartPanel({ onOpenCheckout, onCloseMobileDrawer }) {
         },
       ],
       onConfirm: (val) => {
+        // ลดราคาต่อหน่วยต่ำกว่าราคาที่ระบบคิด เกินเพดานส่วนลดของร้าน = ต้องให้ผู้จัดการอนุมัติ
+        const basePrice = Number(item.system_unit_price ?? item.unit_price) || 0;
+        const price = Number(val) || 0;
+        const cutPercent = basePrice > 0 ? ((basePrice - price) / basePrice) * 100 : 0;
+        const needsApproval =
+          discountLimitPercent < 100 &&
+          price < basePrice &&
+          cutPercent > discountLimitPercent + 0.001 &&
+          authEnabled &&
+          !can('approve_discount');
+        if (needsApproval) {
+          setPendingPrice({ item, price, cutPercent });
+          return;
+        }
         updateCartItemPrice(item.product_id, val);
       },
     });
@@ -579,6 +596,24 @@ export default function CartPanel({ onOpenCheckout, onCloseMobileDrawer }) {
           setPendingDiscount(null);
         }}
         onClose={() => setPendingDiscount(null)}
+      />
+
+      {/* อนุมัติการลดราคาต่อหน่วยที่เกินเพดานส่วนลดของร้าน */}
+      <ApproverPinModal
+        isOpen={pendingPrice !== null}
+        title="อนุมัติลดราคาสินค้า"
+        description={
+          pendingPrice
+            ? `${pendingPrice.item.product_name}: ลดเหลือ ${formatCurrency(pendingPrice.price)} (ลด ${pendingPrice.cutPercent.toFixed(1)}% จาก ${formatCurrency(pendingPrice.item.system_unit_price)}) เกินเพดาน ${discountLimitPercent}% ต้องใช้ PIN ผู้จัดการหรือผู้ดูแลระบบ`
+            : ''
+        }
+        permission="approve_discount"
+        confirmLabel="อนุมัติราคา"
+        onApproved={() => {
+          updateCartItemPrice(pendingPrice.item.product_id, pendingPrice.price);
+          setPendingPrice(null);
+        }}
+        onClose={() => setPendingPrice(null)}
       />
 
       {/* Modal ยืนยันการลบสินค้า / ล้างบิล */}
