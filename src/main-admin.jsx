@@ -2,6 +2,7 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import AdminApp from './AdminApp.jsx';
 import ShopAuthGate from './components/auth/ShopAuthGate.jsx';
+import BranchGate from './components/branch/BranchGate.jsx';
 import { initAppUpdater } from './services/appUpdater';
 import './index.css';
 
@@ -11,7 +12,9 @@ initAppUpdater();
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <ShopAuthGate>
-      <AdminApp />
+      <BranchGate>
+        <AdminApp />
+      </BranchGate>
     </ShopAuthGate>
   </React.StrictMode>
 );

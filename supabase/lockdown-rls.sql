@@ -14,7 +14,8 @@ DO $$
 DECLARE
   t RECORD;
 BEGIN
-  FOR t IN SELECT tablename FROM pg_tables WHERE schemaname = 'public' LOOP
+  -- ตารางบัญชีและสาขา (beta 0.5.0) ใช้ policy เฉพาะของตัวเอง ห้ามเปิดให้เขียนตรง (กันพนักงานตั้งตัวเองเป็น Owner)
+  FOR t IN SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename NOT IN ('branches', 'staff_profiles', 'branch_members') LOOP
     EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', t.tablename);
     EXECUTE format('DROP POLICY IF EXISTS %I ON public.%I', 'Allow public access to ' || t.tablename, t.tablename);
     EXECUTE format('DROP POLICY IF EXISTS %I ON public.%I', 'Authenticated access to ' || t.tablename, t.tablename);

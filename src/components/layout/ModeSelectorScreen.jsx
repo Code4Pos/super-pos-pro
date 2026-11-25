@@ -12,7 +12,9 @@ import {
   Server,
   X,
   RotateCcw,
+  Building2,
 } from 'lucide-react';
+import { useBranch } from '../../context/BranchContext';
 import { usePOS } from '../../context/POSContext';
 import { posService } from '../../services/posService';
 import { getServerConfig, saveServerConfig, resetServerConfig } from '../../lib/supabase';
@@ -38,6 +40,7 @@ export default function ModeSelectorScreen({ onSelectPOS, onSelectAdmin }) {
     canTab,
     showToast,
   } = usePOS();
+  const branchCtx = useBranch();
 
   const [device, setDevice] = useState(() => posService.getDeviceSettings());
   const [showServerModal, setShowServerModal] = useState(false);
@@ -98,6 +101,19 @@ export default function ModeSelectorScreen({ onSelectPOS, onSelectAdmin }) {
             <p className="text-[11px] text-slate-500 truncate">
               ระบบขายหน้าร้านปลีก-ส่ง และบริหารคลังสินค้า • เครื่อง {device.code}
             </p>
+            {branchCtx.enabled && (
+              <button
+                type="button"
+                onClick={branchCtx.openPicker}
+                className="mt-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 max-w-full"
+                title="เปลี่ยนสาขา"
+              >
+                <Building2 className="w-3 h-3 shrink-0" />
+                <span className="truncate">{branchCtx.branch.name || branchCtx.branch.code}</span>
+                <span className="font-mono text-indigo-400 shrink-0">{branchCtx.branch.code}</span>
+                <span className="text-indigo-500 shrink-0">· เปลี่ยน</span>
+              </button>
+            )}
           </div>
         </div>
 

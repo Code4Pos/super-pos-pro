@@ -232,6 +232,7 @@ export const SIDEBAR_MENU_GROUPS = [
       { id: 'settings-payment', label: 'การชำระเงิน', description: 'พร้อมเพย์ และลิ้นชักเก็บเงิน', icon: Wallet },
       { id: 'settings-printer', label: 'เครื่องพิมพ์', description: 'กระดาษ การเชื่อมต่อ พิมพ์อัตโนมัติ', icon: Printer },
       { id: 'settings-users', label: 'ผู้ใช้งาน & สิทธิ์', description: 'พนักงาน PIN และบทบาท', icon: UserCog },
+      { id: 'settings-branches', label: 'สาขาและบัญชี', description: 'สาขา บัญชีอีเมล และผู้ดูแลสาขา', icon: Building2 },
     ],
   },
 ];

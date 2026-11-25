@@ -15,6 +15,7 @@ const SETTINGS_TABS = [
   'settings-payment',
   'settings-printer',
   'settings-users',
+  'settings-branches',
 ];
 
 export const ADMIN_TABS = [

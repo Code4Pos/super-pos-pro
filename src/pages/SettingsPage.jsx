@@ -11,6 +11,7 @@ import PaymentSettings from '../components/settings/PaymentSettings';
 import PrinterSettings from '../components/settings/PrinterSettings';
 import UsersSettings from '../components/settings/UsersSettings';
 import DeviceSettings from '../components/settings/DeviceSettings';
+import BranchesSettings from '../components/settings/BranchesSettings';
 
 const SECTIONS = {
   'settings-shop': ShopSettings,
@@ -24,6 +25,7 @@ const SECTIONS = {
   'settings-payment': PaymentSettings,
   'settings-printer': PrinterSettings,
   'settings-users': UsersSettings,
+  'settings-branches': BranchesSettings,
 };
 
 /**

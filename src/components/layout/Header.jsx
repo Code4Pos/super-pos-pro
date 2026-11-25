@@ -17,7 +17,9 @@ import {
   ClipboardList,
   CloudUpload,
   ServerCrash,
+  Building2,
 } from 'lucide-react';
+import { useBranch } from '../../context/BranchContext';
 import { usePOS } from '../../context/POSContext';
 import { AppUpdateHeaderButton } from '../common/AppUpdate';
 import PosQuickMenu from '../pos/PosQuickMenu';
@@ -55,6 +57,9 @@ export default function Header({
     showToast,
     printerSettings,
   } = usePOS();
+  const branchCtx = useBranch();
+  const canSwitchBranch =
+    branchCtx.enabled && (branchCtx.isOwner || branchCtx.branches.filter((b) => b.is_active).length > 1);
 
   const isPosPage = mode === 'pos';
   const canEnterPOS = canTab('pos');
@@ -218,11 +223,27 @@ export default function Header({
               {!isPosPage && activeTab === 'settings-payment' && 'ตั้งค่า › การชำระเงิน'}
               {!isPosPage && activeTab === 'settings-printer' && 'ตั้งค่า › เครื่องพิมพ์'}
               {!isPosPage && activeTab === 'settings-users' && 'ตั้งค่า › ผู้ใช้งาน & สิทธิ์'}
+              {!isPosPage && activeTab === 'settings-branches' && 'ตั้งค่า › สาขาและบัญชี'}
               {!isPosPage && activeTab === 'customers' && 'จัดการลูกค้า'}
               {!isPosPage && activeTab === 'suppliers' && 'จัดการผู้ผลิต'}
               {!isPosPage && activeTab === 'receivables' && 'ลูกหนี้ & วางบิล'}
               {!isPosPage && activeTab === 'sales-orders' && 'ใบสั่งขายส่ง / จอง'}
             </h2>
+
+            {/* สาขาที่ใช้อยู่ (beta 0.5.0) กดเพื่อเปลี่ยนสาขา */}
+            {branchCtx.enabled && (
+              <button
+                type="button"
+                onClick={canSwitchBranch ? branchCtx.openPicker : undefined}
+                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold border shrink min-w-0 max-w-[9rem] sm:max-w-[14rem] ${
+                  canSwitchBranch ? 'bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border-indigo-200' : 'bg-slate-50 text-slate-600 border-slate-200 cursor-default'
+                }`}
+                title={canSwitchBranch ? 'เปลี่ยนสาขา' : 'สาขาที่ใช้อยู่'}
+              >
+                <Building2 className="w-3 h-3 shrink-0" />
+                <span className="truncate">{branchCtx.branch.name || branchCtx.branch.code}</span>
+              </button>
+            )}
 
             <span className="hidden md:inline-block px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold bg-slate-100 text-slate-600 shrink-0">
               {appVersion}

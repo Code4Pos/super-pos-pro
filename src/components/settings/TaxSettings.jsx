@@ -3,6 +3,7 @@ import { Percent, Check, Plus, Trash2, Store } from 'lucide-react';
 import SettingsCard, { useSettingsForm, FieldLabel, inputClass } from './SettingsCard';
 import { isValidThaiTaxId } from '../../utils/credit';
 import { MAX_BRANCHES, formatBranchLabel } from '../../utils/branches';
+import { useBranch } from '../../context/BranchContext';
 
 // ตรวจรายการสาขา: รหัส 5 หลัก ไม่ซ้ำ และไม่ใช่ 00000 (สำนักงานใหญ่ใช้ข้อมูลร้าน)
 function validateBranches(list = []) {
@@ -39,6 +40,7 @@ const VAT_MODE_OPTIONS = [
  * ตั้งค่าภาษี: รูปแบบการคิด VAT ของหน้าขาย และข้อมูลผู้จดทะเบียนภาษีมูลค่าเพิ่ม
  */
 export default function TaxSettings() {
+  const branchCtx = useBranch();
   const { form, setForm, isDirty, save, error } = useSettingsForm((f) =>
     f.vatRegistered && !isValidThaiTaxId(f.shopTaxId)
       ? 'ร้านที่จด VAT ต้องระบุเลขผู้เสียภาษี 13 หลักที่ถูกต้อง'
@@ -135,7 +137,14 @@ export default function TaxSettings() {
         )}
       </div>
 
-      {/* ข้อมูลสาขา: พิมพ์บนใบเสร็จ/ใบกำกับภาษีที่ออกจากเครื่องของสาขานั้น (รหัสสาขาของเครื่องตั้งในการ์ด "เครื่องนี้") */}
+      {/* ระบบสาขาเปิดแล้ว (beta 0.5.0): จัดการสาขาที่หน้าสาขาและบัญชี (คัดลอกชื่อ/ที่อยู่มาไว้ในค่าตั้งนี้ให้อัตโนมัติ) */}
+      {branchCtx.enabled ? (
+        <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200 text-[11px] text-slate-600 flex items-center gap-2">
+          <Store className="w-4 h-4 text-indigo-600 shrink-0" />
+          ชื่อ ที่อยู่ และเบอร์โทรของสาขา แก้ที่ ตั้งค่า › สาขาและบัญชี • สำนักงานใหญ่ใช้ข้อมูลในหน้าข้อมูลร้าน
+        </div>
+      ) : (
+      // ข้อมูลสาขา: พิมพ์บนใบเสร็จ/ใบกำกับภาษีที่ออกจากเครื่องของสาขานั้น (รหัสสาขาของเครื่องตั้งในการ์ด "เครื่องนี้")
       <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200 space-y-2">
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2 min-w-0">
@@ -226,6 +235,7 @@ export default function TaxSettings() {
           รหัสสาขาของแต่ละเครื่องตั้งในการ์ด "เครื่องนี้" (หน้าตั้งค่าเครื่องพิมพ์) • สำนักงานใหญ่ (00000) ใช้ข้อมูลในหน้าข้อมูลร้าน
         </p>
       </div>
+      )}
     </SettingsCard>
   );
 }

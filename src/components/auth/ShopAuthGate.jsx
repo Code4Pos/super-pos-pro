@@ -95,7 +95,7 @@ function ShopLoginForm() {
         <div className="px-6 py-5 bg-indigo-600 text-white text-center">
           <Store className="w-8 h-8 mx-auto mb-1.5" />
           <h1 className="text-lg font-extrabold">SiamPOS Pro</h1>
-          <p className="text-xs text-indigo-100">เข้าสู่ระบบบัญชีร้าน (ครั้งแรกของเครื่องนี้)</p>
+          <p className="text-xs text-indigo-100">เข้าสู่ระบบด้วยบัญชีของคุณ</p>
         </div>
         <div className="p-5 space-y-3">
           {offline && (
@@ -104,7 +104,7 @@ function ShopLoginForm() {
             </div>
           )}
           <label className="block space-y-1">
-            <span className="text-[11px] font-bold text-slate-600">อีเมลบัญชีร้าน</span>
+            <span className="text-[11px] font-bold text-slate-600">อีเมล</span>
             <input
               type="email"
               autoComplete="username"
@@ -135,8 +135,8 @@ function ShopLoginForm() {
             เข้าสู่ระบบ
           </button>
           <p className="text-[11px] text-slate-500 leading-relaxed">
-            บัญชีร้านสร้างโดยเจ้าของร้านที่ Supabase &gt; Authentication &gt; Users ล็อกอินครั้งเดียวต่อเครื่อง
-            จากนั้นพนักงานเข้าใช้งานด้วย PIN ตามปกติ
+            บัญชีสร้างโดยเจ้าของร้านหรือผู้ดูแลสาขาที่ ตั้งค่า › สาขาและบัญชี ล็อกอินครั้งเดียวต่อเครื่อง
+            แล้วเลือกสาขา จากนั้นพนักงานเข้าใช้งานด้วย PIN ตามปกติ
           </p>
 
           <div className="pt-2 border-t border-slate-100">

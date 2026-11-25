@@ -71,6 +71,16 @@ const STORAGE_KEYS = {
   SERVER_CONFIG: 'siampos_server_config_v1',
   // รหัสการรีเซ็ตร้านล่าสุดที่เครื่องนี้รับรู้แล้ว (เทียบกับ shop_settings.config.shopResetId)
   RESET_SEEN: 'siampos_shop_reset_seen_v1',
+  // ระบบสาขา (beta 0.5.0): สาขาที่เลือกอยู่ในเครื่องนี้ / สิทธิ์ล่าสุดของบัญชี (ใช้ตอนออฟไลน์) / สาขาจำลองในโหมดสาธิต
+  CURRENT_BRANCH: 'siampos_current_branch_v1',
+  BRANCH_ACCESS: 'siampos_branch_access_v1',
+  DEMO_BRANCHES: 'siampos_demo_branches_v1',
+};
+
+export const BRANCH_STORAGE_KEYS = {
+  CURRENT_BRANCH: STORAGE_KEYS.CURRENT_BRANCH,
+  BRANCH_ACCESS: STORAGE_KEYS.BRANCH_ACCESS,
+  DEMO_BRANCHES: STORAGE_KEYS.DEMO_BRANCHES,
 };
 
 // ตะกร้าที่พักไว้ (เก็บโดย POSContext) ต้องล้างเมื่อร้านถูกรีเซ็ต
@@ -516,10 +526,12 @@ async function loadRemoteWithLocal(table, storageKey, limit = 1000, orderField =
  * คืนค่าเอกสารที่บันทึก และรายการทั้งหมดในเครื่อง
  */
 /**
- * รหัสสาขาของเครื่องนี้ (ตั้งในการ์ด "เครื่องนี้") ไม่ได้ตั้ง = รหัสสาขาของร้าน (หน้าภาษี)
+ * รหัสสาขาของเครื่องนี้: สาขาที่เลือกจากหน้าเลือกสาขา (beta 0.5.0) > ตั้งในการ์ด "เครื่องนี้" > รหัสสาขาของร้าน (หน้าภาษี)
  * ใช้ในเลขที่เอกสาร {BRANCH} และบันทึกเป็นสาขาที่ออกบิล/ใบกำกับภาษี
  */
 function getDeviceBranchCode() {
+  const current = getLocal(STORAGE_KEYS.CURRENT_BRANCH, null);
+  if (current?.code) return normalizeBranchCode(current.code);
   const device = getLocal(STORAGE_KEYS.DEVICE, {});
   if (device?.branchCode) return normalizeBranchCode(device.branchCode);
   return normalizeBranchCode(printerService.getSettings().shopBranch);

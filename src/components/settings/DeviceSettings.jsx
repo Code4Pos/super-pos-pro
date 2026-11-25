@@ -7,6 +7,7 @@ import { getDocumentTemplate, previewDocumentNumber } from '../../utils/docNumbe
 import { signOutShop, getShopAccountEmail } from '../auth/ShopAuthGate';
 import { getServerConfig, saveServerConfig, resetServerConfig } from '../../lib/supabase';
 import { AppUpdatePanel } from '../common/AppUpdate';
+import { useBranch } from '../../context/BranchContext';
 
 const DEFAULT_MODE_OPTIONS = [
   { id: 'ask', label: 'ถามทุกครั้ง (แสดงหน้าเลือกโหมด)' },
@@ -20,6 +21,8 @@ const DEFAULT_MODE_OPTIONS = [
 export default function DeviceSettings() {
   const { showToast, dbMode, isOffline, uploadLocalData, printerSettings } = usePOS();
   const [device, setDevice] = useState(() => posService.getDeviceSettings());
+  // ระบบสาขาเปิดแล้ว: สาขาของเครื่อง = สาขาที่เลือกจากหน้าเลือกสาขา
+  const branchCtx = useBranch();
   const [code, setCode] = useState(device.code);
   // รหัสสาขาของเครื่อง (หลายสาขาใช้ฐานข้อมูลเดียวกัน) ว่าง = ใช้รหัสสาขาของร้าน
   const [branch, setBranch] = useState(device.branchCode || '');
@@ -142,6 +145,19 @@ export default function DeviceSettings() {
                 className="mt-1 block w-40 px-3 py-2 rounded-xl border border-slate-300 text-sm font-mono font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500"
               />
             </label>
+            {branchCtx.enabled ? (
+              <div className="block">
+                <span className="text-[11px] font-bold text-slate-600">สาขาของเครื่อง</span>
+                <button
+                  type="button"
+                  onClick={branchCtx.openPicker}
+                  className="mt-1 block px-3 py-2 rounded-xl border border-indigo-200 bg-indigo-50 text-indigo-700 text-sm font-bold text-left"
+                  title="เปลี่ยนสาขา"
+                >
+                  {branchCtx.branch.name || branchCtx.branch.code} <span className="font-mono text-xs">{branchCtx.branch.code}</span>
+                </button>
+              </div>
+            ) : (
             <label className="block">
               <span className="text-[11px] font-bold text-slate-600">รหัสสาขาของเครื่อง</span>
               <input
@@ -167,6 +183,7 @@ export default function DeviceSettings() {
                 return found?.name ? <span className="block mt-0.5 text-[10px] font-bold text-indigo-600">{found.name}</span> : null;
               })()}
             </label>
+            )}
             <button
               type="button"
               disabled={!isDirty || !clean}
@@ -181,7 +198,7 @@ export default function DeviceSettings() {
             <span className="font-mono font-bold text-slate-700">
               {previewDocumentNumber(getDocumentTemplate(printerSettings.documentNumbering, 'order'), {
                 deviceCode: clean || '???',
-                branchCode: branch || printerSettings.shopBranch,
+                branchCode: branchCtx.enabled ? branchCtx.branch.code : branch || printerSettings.shopBranch,
               })}
             </span>
             {' '}ตั้งรหัสไม่ซ้ำกันในแต่ละเครื่อง (เช่น POS1, POS2) เพื่อให้เลขที่บิลไม่ชนกันแม้ขายตอนออฟไลน์

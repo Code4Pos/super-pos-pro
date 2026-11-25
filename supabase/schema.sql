@@ -1047,3 +1047,257 @@ END;
 $$;
 
 NOTIFY pgrst, 'reload schema';
+
+
+-- =====================================================================
+-- Migration beta 0.5.0: ระบบสาขา รอบ 1 (บัญชีรายคน + Owner + เลือกสาขา)
+-- - branches        = รายชื่อสาขา (code 5 หลักเป็นรหัสหลัก แก้ไม่ได้) สำนักงานใหญ่มี is_headquarters
+-- - staff_profiles  = โปรไฟล์ของบัญชี Supabase Auth แต่ละคน (is_owner = เจ้าของร้าน เห็น/จัดการทุกสาขา)
+-- - branch_members  = บัญชี × สาขา × บทบาท ('admin' = ผู้ดูแลสาขา, 'staff' = พนักงาน)
+-- แอปอ่านผ่านฟังก์ชัน SECURITY DEFINER / สร้างบัญชี-ตั้งรหัสผ่าน-ปิดบัญชีผ่าน Edge Function staff-admin
+-- รอบ 1 ข้อมูลร้านทั้งหมดยังเป็นของสำนักงานใหญ่ (แยกข้อมูลตามสาขาในรอบ 2)
+-- =====================================================================
+CREATE TABLE IF NOT EXISTS branches (
+  code TEXT PRIMARY KEY CHECK (code ~ '^[0-9]{5}$'),
+  name TEXT NOT NULL DEFAULT '',
+  address TEXT NOT NULL DEFAULT '',
+  phone TEXT NOT NULL DEFAULT '',
+  is_headquarters BOOLEAN NOT NULL DEFAULT FALSE,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_branches_one_hq ON branches (is_headquarters) WHERE is_headquarters;
+
+CREATE TABLE IF NOT EXISTS staff_profiles (
+  user_id UUID PRIMARY KEY REFERENCES auth.users (id) ON DELETE CASCADE,
+  email TEXT NOT NULL DEFAULT '',
+  display_name TEXT NOT NULL DEFAULT '',
+  is_owner BOOLEAN NOT NULL DEFAULT FALSE,
+  disabled BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_staff_profiles_email ON staff_profiles (lower(email));
+
+CREATE TABLE IF NOT EXISTS branch_members (
+  user_id UUID NOT NULL REFERENCES staff_profiles (user_id) ON DELETE CASCADE,
+  branch_code TEXT NOT NULL REFERENCES branches (code) ON DELETE CASCADE,
+  role TEXT NOT NULL DEFAULT 'staff' CHECK (role IN ('admin', 'staff')),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  PRIMARY KEY (user_id, branch_code)
+);
+CREATE INDEX IF NOT EXISTS idx_branch_members_branch ON branch_members (branch_code);
+
+-- RLS: อ่านรายชื่อสาขาได้เมื่อล็อกอิน / โปรไฟล์และสมาชิกอ่านได้เฉพาะของตัวเอง / เขียนผ่านฟังก์ชันหรือ service role เท่านั้น
+ALTER TABLE branches ENABLE ROW LEVEL SECURITY;
+ALTER TABLE staff_profiles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE branch_members ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Authenticated read branches" ON branches;
+CREATE POLICY "Authenticated read branches" ON branches FOR SELECT TO authenticated USING (true);
+DROP POLICY IF EXISTS "Read own staff profile" ON staff_profiles;
+CREATE POLICY "Read own staff profile" ON staff_profiles FOR SELECT TO authenticated USING (user_id = auth.uid());
+DROP POLICY IF EXISTS "Read own branch memberships" ON branch_members;
+CREATE POLICY "Read own branch memberships" ON branch_members FOR SELECT TO authenticated USING (user_id = auth.uid());
+
+-- สร้างสำนักงานใหญ่จากค่าตั้งร้าน (ครั้งแรกเท่านั้น)
+INSERT INTO branches (code, name, address, phone, is_headquarters)
+SELECT
+  CASE WHEN COALESCE(s.shop_branch, '') ~ '^[0-9]{5}$' THEN s.shop_branch ELSE '00000' END,
+  COALESCE(NULLIF(s.shop_name, ''), 'สำนักงานใหญ่'),
+  COALESCE(s.shop_address, ''),
+  COALESCE(s.shop_phone, ''),
+  TRUE
+FROM shop_settings s
+WHERE s.id = 'default' AND NOT EXISTS (SELECT 1 FROM branches WHERE is_headquarters)
+ON CONFLICT (code) DO NOTHING;
+INSERT INTO branches (code, name, is_headquarters)
+SELECT '00000', 'สำนักงานใหญ่', TRUE
+WHERE NOT EXISTS (SELECT 1 FROM branches WHERE is_headquarters)
+ON CONFLICT (code) DO NOTHING;
+
+-- สาขาที่เคยตั้งไว้ในค่าตั้งร้าน (beta 0.3.26, shop_settings.config.branches)
+DO $mig$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'shop_settings' AND column_name = 'config') THEN
+    EXECUTE $q$
+      INSERT INTO branches (code, name, address, phone)
+      SELECT lpad(regexp_replace(b->>'code', '\D', '', 'g'), 5, '0'),
+             COALESCE(NULLIF(b->>'name', ''), 'สาขา ' || lpad(regexp_replace(b->>'code', '\D', '', 'g'), 5, '0')),
+             COALESCE(b->>'address', ''), COALESCE(b->>'phone', '')
+      FROM shop_settings s,
+           jsonb_array_elements(CASE WHEN jsonb_typeof(s.config->'branches') = 'array' THEN s.config->'branches' ELSE '[]'::jsonb END) b
+      WHERE s.id = 'default' AND regexp_replace(COALESCE(b->>'code', ''), '\D', '', 'g') ~ '^[0-9]{1,5}$'
+      ON CONFLICT (code) DO NOTHING
+    $q$;
+  END IF;
+END
+$mig$;
+
+-- ตัวช่วยตรวจสิทธิ์ (ใช้ซ้ำในรอบ 3 ทำ RLS ตามสาขา)
+CREATE OR REPLACE FUNCTION siampos_is_owner()
+RETURNS BOOLEAN LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT EXISTS (SELECT 1 FROM staff_profiles WHERE user_id = auth.uid() AND is_owner AND NOT disabled);
+$$;
+
+-- บทบาทของบัญชีที่ล็อกอินในสาขา: 'owner' | 'admin' | 'staff' | NULL (ไม่มีสิทธิ์)
+CREATE OR REPLACE FUNCTION siampos_branch_role(p_branch_code TEXT)
+RETURNS TEXT LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT CASE
+    WHEN siampos_is_owner() THEN 'owner'
+    ELSE (
+      SELECT m.role FROM branch_members m
+      JOIN staff_profiles p ON p.user_id = m.user_id AND NOT p.disabled
+      JOIN branches b ON b.code = m.branch_code AND b.is_active
+      WHERE m.user_id = auth.uid() AND m.branch_code = p_branch_code
+    )
+  END;
+$$;
+
+-- สิทธิ์ของบัญชีที่ล็อกอินอยู่: โปรไฟล์ + สาขาที่เข้าได้ (Owner = ทุกสาขา) + ร้านมี Owner แล้วหรือยัง
+CREATE OR REPLACE FUNCTION siampos_my_access()
+RETURNS JSONB LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  v_uid UUID := auth.uid();
+  v_profile staff_profiles;
+  v_branches JSONB;
+BEGIN
+  IF v_uid IS NULL THEN
+    RAISE EXCEPTION 'ต้องล็อกอินก่อน';
+  END IF;
+  SELECT * INTO v_profile FROM staff_profiles WHERE user_id = v_uid;
+  IF v_profile.user_id IS NOT NULL AND v_profile.is_owner AND NOT v_profile.disabled THEN
+    SELECT COALESCE(jsonb_agg(to_jsonb(b) || jsonb_build_object('role', 'owner') ORDER BY b.is_headquarters DESC, b.code), '[]'::jsonb)
+      INTO v_branches FROM branches b;
+  ELSIF v_profile.user_id IS NOT NULL AND NOT v_profile.disabled THEN
+    SELECT COALESCE(jsonb_agg(to_jsonb(b) || jsonb_build_object('role', m.role) ORDER BY b.is_headquarters DESC, b.code), '[]'::jsonb)
+      INTO v_branches
+      FROM branch_members m JOIN branches b ON b.code = m.branch_code AND b.is_active
+      WHERE m.user_id = v_uid;
+  ELSE
+    v_branches := '[]'::jsonb;
+  END IF;
+  RETURN jsonb_build_object(
+    'user_id', v_uid,
+    'email', COALESCE(v_profile.email, ''),
+    'display_name', COALESCE(v_profile.display_name, ''),
+    'has_profile', v_profile.user_id IS NOT NULL,
+    'is_owner', COALESCE(v_profile.is_owner AND NOT v_profile.disabled, FALSE),
+    'disabled', COALESCE(v_profile.disabled, FALSE),
+    'owner_exists', EXISTS (SELECT 1 FROM staff_profiles WHERE is_owner),
+    'branches', v_branches
+  );
+END;
+$$;
+
+-- ตั้งบัญชีที่ล็อกอินอยู่เป็น Owner (ได้ครั้งเดียว ตอนร้านยังไม่มี Owner — บัญชีร้านเดิมกดยืนยันหลังอัปเดต)
+CREATE OR REPLACE FUNCTION siampos_claim_owner(p_display_name TEXT DEFAULT '')
+RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  v_uid UUID := auth.uid();
+  v_email TEXT;
+BEGIN
+  IF v_uid IS NULL THEN
+    RAISE EXCEPTION 'ต้องล็อกอินก่อน';
+  END IF;
+  PERFORM pg_advisory_xact_lock(hashtext('siampos_claim_owner'));
+  IF EXISTS (SELECT 1 FROM staff_profiles WHERE is_owner) THEN
+    RAISE EXCEPTION 'ร้านนี้มีเจ้าของร้าน (Owner) แล้ว';
+  END IF;
+  SELECT email INTO v_email FROM auth.users WHERE id = v_uid;
+  INSERT INTO staff_profiles (user_id, email, display_name, is_owner)
+  VALUES (v_uid, COALESCE(v_email, ''), COALESCE(NULLIF(trim(p_display_name), ''), 'เจ้าของร้าน'), TRUE)
+  ON CONFLICT (user_id) DO UPDATE SET is_owner = TRUE, disabled = FALSE, updated_at = NOW();
+  RETURN siampos_my_access();
+END;
+$$;
+
+-- เพิ่ม/แก้สาขา (Owner เท่านั้น) — รหัสสาขาแก้ไม่ได้ / ปิดสำนักงานใหญ่ไม่ได้
+CREATE OR REPLACE FUNCTION siampos_save_branch(p_branch JSONB)
+RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  v_code TEXT := COALESCE(p_branch->>'code', '');
+  v_row branches;
+BEGIN
+  IF NOT siampos_is_owner() THEN
+    RAISE EXCEPTION 'เฉพาะเจ้าของร้าน (Owner) เท่านั้นที่จัดการสาขาได้';
+  END IF;
+  IF v_code !~ '^[0-9]{5}$' THEN
+    RAISE EXCEPTION 'รหัสสาขาต้องเป็นตัวเลข 5 หลัก';
+  END IF;
+  IF COALESCE(trim(p_branch->>'name'), '') = '' THEN
+    RAISE EXCEPTION 'กรุณาระบุชื่อสาขา';
+  END IF;
+  IF (p_branch->>'is_active') = 'false' AND EXISTS (SELECT 1 FROM branches WHERE code = v_code AND is_headquarters) THEN
+    RAISE EXCEPTION 'ปิดใช้สำนักงานใหญ่ไม่ได้';
+  END IF;
+  IF COALESCE((p_branch->>'is_new')::boolean, FALSE) AND EXISTS (SELECT 1 FROM branches WHERE code = v_code) THEN
+    RAISE EXCEPTION 'รหัสสาขา % มีอยู่แล้ว', v_code;
+  END IF;
+  INSERT INTO branches (code, name, address, phone, is_active)
+  VALUES (
+    v_code,
+    trim(p_branch->>'name'),
+    COALESCE(trim(p_branch->>'address'), ''),
+    COALESCE(trim(p_branch->>'phone'), ''),
+    COALESCE((p_branch->>'is_active')::boolean, TRUE)
+  )
+  ON CONFLICT (code) DO UPDATE SET
+    name = EXCLUDED.name,
+    address = EXCLUDED.address,
+    phone = EXCLUDED.phone,
+    is_active = EXCLUDED.is_active,
+    updated_at = NOW()
+  RETURNING * INTO v_row;
+  RETURN to_jsonb(v_row);
+END;
+$$;
+
+-- รายชื่อบัญชี (Owner + p_branch_code ว่าง = ทุกบัญชี / ระบุสาขา = บัญชีของสาขานั้น ต้องเป็น Owner หรือผู้ดูแลสาขา)
+-- คืนหนึ่งแถวต่อบัญชี พร้อมสาขาที่สังกัดทั้งหมด (memberships)
+CREATE OR REPLACE FUNCTION siampos_list_members(p_branch_code TEXT DEFAULT NULL)
+RETURNS JSONB LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  v_owner BOOLEAN := siampos_is_owner();
+BEGIN
+  IF auth.uid() IS NULL THEN
+    RAISE EXCEPTION 'ต้องล็อกอินก่อน';
+  END IF;
+  IF NOT v_owner AND (p_branch_code IS NULL OR siampos_branch_role(p_branch_code) IS DISTINCT FROM 'admin') THEN
+    RAISE EXCEPTION 'ไม่มีสิทธิ์ดูบัญชีของสาขานี้';
+  END IF;
+  RETURN COALESCE((
+    SELECT jsonb_agg(jsonb_build_object(
+      'user_id', p.user_id,
+      'email', p.email,
+      'display_name', p.display_name,
+      'is_owner', p.is_owner,
+      'disabled', p.disabled,
+      'created_at', p.created_at,
+      'memberships', COALESCE((
+        SELECT jsonb_agg(jsonb_build_object('branch_code', m.branch_code, 'role', m.role) ORDER BY m.branch_code)
+        FROM branch_members m WHERE m.user_id = p.user_id
+      ), '[]'::jsonb)
+    ) ORDER BY p.is_owner DESC, p.display_name, p.email)
+    FROM staff_profiles p
+    WHERE (p_branch_code IS NULL AND v_owner)
+       OR EXISTS (SELECT 1 FROM branch_members m WHERE m.user_id = p.user_id AND m.branch_code = p_branch_code)
+  ), '[]'::jsonb);
+END;
+$$;
+
+REVOKE ALL ON FUNCTION siampos_is_owner() FROM PUBLIC;
+REVOKE ALL ON FUNCTION siampos_branch_role(TEXT) FROM PUBLIC;
+REVOKE ALL ON FUNCTION siampos_my_access() FROM PUBLIC;
+REVOKE ALL ON FUNCTION siampos_claim_owner(TEXT) FROM PUBLIC;
+REVOKE ALL ON FUNCTION siampos_save_branch(JSONB) FROM PUBLIC;
+REVOKE ALL ON FUNCTION siampos_list_members(TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION siampos_is_owner() TO authenticated;
+GRANT EXECUTE ON FUNCTION siampos_branch_role(TEXT) TO authenticated;
+GRANT EXECUTE ON FUNCTION siampos_my_access() TO authenticated;
+GRANT EXECUTE ON FUNCTION siampos_claim_owner(TEXT) TO authenticated;
+GRANT EXECUTE ON FUNCTION siampos_save_branch(JSONB) TO authenticated;
+GRANT EXECUTE ON FUNCTION siampos_list_members(TEXT) TO authenticated;
+
+NOTIFY pgrst, 'reload schema';
