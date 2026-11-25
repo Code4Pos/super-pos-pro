@@ -15,7 +15,7 @@ import {
 
 const SESSION_STORAGE_KEY = 'siampos_session_v1';
 
-export const APP_VERSION = 'version beta 0.3.28';
+export const APP_VERSION = 'version beta 0.4.1';
 const HELD_BILLS_STORAGE_KEY = 'siampos_held_bills_v1';
 
 const POSContext = createContext(null);
@@ -882,6 +882,29 @@ export function POSProvider({ children, scope = 'all' }) {
       salesOrders,
       products,
     ]
+  );
+
+  // นำเข้าสินค้าจาก CSV (beta 0.4.1) ตามแผนที่ตรวจแล้ว (utils/productCsv.js)
+  const importProductsCsv = useCallback(
+    async (plan, { approvedBy = '', onProgress } = {}) => {
+      const result = await posService.importProductsBulk(
+        plan,
+        { approvedBy: approvedBy || currentUser?.name || '', onProgress },
+        dbMode === 'supabase',
+        products
+      );
+      setProducts(result.products);
+      setCategories(result.categories);
+      setUnits(result.units);
+      setWholesaleRules(posService.getWholesaleRulesLocal());
+      const failedText = result.failed.length ? ` ไม่สำเร็จ ${result.failed.length}` : '';
+      showToast(
+        `นำเข้าสินค้าแล้ว: เพิ่มใหม่ ${result.created} อัปเดต ${result.updated}${failedText}`,
+        result.failed.length ? 'warning' : 'success'
+      );
+      return result;
+    },
+    [dbMode, products, currentUser, showToast]
   );
 
   // เพิ่ม/แก้ไขสินค้า (ซิงค์สต็อกสินค้าสัมพันธ์อัตโนมัติ)
@@ -2108,6 +2131,7 @@ export function POSProvider({ children, scope = 'all' }) {
     deleteHeldBill,
     checkoutOrder,
     saveProduct,
+    importProductsCsv,
     deleteProduct,
     restoreProductFromTrash,
     permanentDeleteProduct,

@@ -11,6 +11,7 @@ import {
   ArrowUp,
   ArrowDown,
   FolderKanban,
+  FileSpreadsheet,
   Scale,
   Smartphone,
   Camera,
@@ -30,6 +31,7 @@ import ProductModal from '../components/inventory/ProductModal';
 import StockModal from '../components/inventory/StockModal';
 import CategoryUnitModal from '../components/inventory/CategoryUnitModal';
 import TrashModal from '../components/inventory/TrashModal';
+import ProductCsvModal from '../components/inventory/ProductCsvModal';
 import SearchableDropdown from '../components/common/SearchableDropdown';
 import MobileBarcodeModal from '../components/common/MobileBarcodeModal';
 import ConfirmModal from '../components/common/ConfirmModal';
@@ -254,6 +256,8 @@ export default function InventoryPage() {
 
   // ระบบปุ่ม Icon Grid 9 ช่อง เปิดเมนู Dropdown (เพิ่มหมวดหมู่ / เพิ่มหน่วยนับ)
   const [isGridMenuOpen, setIsGridMenuOpen] = useState(false);
+  // นำเข้า/ส่งออกสินค้าด้วย CSV (beta 0.4.1)
+  const [isCsvModalOpen, setIsCsvModalOpen] = useState(false);
   const gridMenuRef = useRef(null);
 
   // Modal จัดการหมวดหมู่และหน่วยนับ
@@ -630,6 +634,18 @@ export default function InventoryPage() {
                   >
                     <Scale className="w-4 h-4 text-emerald-600 shrink-0" />
                     <span>เพิ่มหน่วยนับ</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsGridMenuOpen(false);
+                      setIsCsvModalOpen(true);
+                    }}
+                    className="w-full px-4 py-2.5 text-left text-xs sm:text-sm font-bold text-slate-800 hover:bg-sky-50 hover:text-sky-700 flex items-center gap-2.5 transition-colors"
+                  >
+                    <FileSpreadsheet className="w-4 h-4 text-sky-600 shrink-0" />
+                    <span>นำเข้า / ส่งออก CSV</span>
                   </button>
 
                   <button
@@ -1369,6 +1385,13 @@ export default function InventoryPage() {
           setCatUnitModalConfig((prev) => ({ ...prev, isOpen: false }))
         }
       />
+
+      {isCsvModalOpen && (
+        <ProductCsvModal
+          onClose={() => setIsCsvModalOpen(false)}
+          filteredProducts={filteredAndSortedProducts}
+        />
+      )}
 
       {/* Modal ถังขยะสินค้า */}
       <TrashModal
